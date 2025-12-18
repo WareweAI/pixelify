@@ -1,0 +1,211 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  storeUrl  String   @unique
+  password  String
+  createdAt DateTime @default(now())
+  apps      App[]
+}
+
+model App {
+  id                String             @id @default(uuid())
+  appId             String             @unique
+  appToken          String
+  name              String
+  createdAt         DateTime           @default(now())
+  userId            String
+  analyticsSessions AnalyticsSession[]
+  user              User               @relation(fields: [userId], references: [id])
+  settings          AppSettings?
+  customEvents      CustomEvent[]
+  dailyStats        DailyStats[]
+  errorLogs         ErrorLog[]
+  events            Event[]
+}
+
+model Event {
+  id             String   @id @default(uuid())
+  appId          String
+  eventName      String
+  url            String?
+  referrer       String?
+  userAgent      String?
+  ipAddress      String?
+  country        String?
+  countryCode    String?
+  region         String?
+  city           String?
+  zip            String?
+  lat            Float?
+  lon            Float?
+  timezone       String?
+  isp            String?
+  browser        String?
+  browserVersion String?
+  os             String?
+  osVersion      String?
+  device         String?
+  deviceType     String?
+  deviceVendor   String?
+  fingerprint    String?
+  sessionId      String?
+  utmSource      String?
+  utmMedium      String?
+  utmCampaign    String?
+  utmTerm        String?
+  utmContent     String?
+  pageTitle      String?
+  screenWidth    Int?
+  screenHeight   Int?
+  scrollDepth    Int?
+  clickX         Int?
+  clickY         Int?
+  value          Float?
+  currency       String?
+  productId      String?
+  productName    String?
+  quantity       Int?
+  customData     Json?
+  createdAt      DateTime @default(now())
+  app            App      @relation(fields: [appId], references: [id])
+
+  @@index([appId, createdAt])
+  @@index([eventName])
+  @@index([country])
+  @@index([deviceType])
+}
+
+model CustomEvent {
+  id            String   @id @default(uuid())
+  appId         String
+  name          String
+  displayName   String
+  description   String?
+  metaEventName String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Event triggering configuration
+  pageType      String   @default("all")  // all, index, product, collection, cart, checkout, search, custom
+  pageUrl       String?  // For custom page type - e.g., /pages/about-us
+  eventType     String   @default("click") // click, submit, change, focus, scroll, load
+  selector      String?  // CSS selector to trigger event - e.g., .add-to-cart, #wishlist-btn
+  
+  // Event data to send when triggered
+  eventData     String?  // JSON data to send with event
+  
+  app           App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@unique([appId, name])
+  @@index([appId])
+  @@index([pageType])
+  @@index([isActive])
+}
+
+model DailyStats {
+  id          String   @id @default(uuid())
+  appId       String
+  date        DateTime
+  pageviews   Int      @default(0)
+  uniqueUsers Int      @default(0)
+  sessions    Int      @default(0)
+  purchases   Int      @default(0)
+  revenue     Float    @default(0)
+  updatedAt   DateTime @default(now())
+  app         App      @relation(fields: [appId], references: [id])
+
+  @@unique([appId, date])
+}
+
+model AnalyticsSession {
+  id          String   @id @default(uuid())
+  appId       String
+  sessionId   String   @unique
+  fingerprint String?
+  ipAddress   String?
+  userAgent   String?
+  browser     String?
+  os          String?
+  deviceType  String?
+  country     String?
+  pageviews   Int      @default(0)
+  duration    Int      @default(0)
+  startTime   DateTime @default(now())
+  lastSeen    DateTime @default(now())
+  app         App      @relation(fields: [appId], references: [id])
+
+  @@index([appId, startTime])
+}
+
+model ErrorLog {
+  id        String   @id @default(uuid())
+  appId     String
+  message   String?
+  stack     String?
+  createdAt DateTime @default(now())
+  app       App      @relation(fields: [appId], references: [id])
+}
+
+model AppSettings {
+  id                 String  @id @default(uuid())
+  appId              String  @unique
+  autoTrackPageviews Boolean @default(true)
+  autoTrackClicks    Boolean @default(true)
+  autoTrackScroll    Boolean @default(true)
+  recordIp           Boolean @default(true)
+  recordLocation     Boolean @default(true)
+  recordSession      Boolean @default(true)
+  metaPixelId        String?
+  metaAccessToken    String?
+  metaPixelEnabled   Boolean @default(false)
+  metaTestEventCode  String?
+  metaVerified       Boolean @default(false)
+  app                App     @relation(fields: [appId], references: [id])
+}
+
+model ScriptInjection {
+  id          String   @id @default(uuid())
+  appId       String
+  shop        String
+  scriptTagId String?
+  scriptUrl   String
+  enabled     Boolean  @default(true)
+  config      Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([appId, shop])
+  @@index([shop])
+}
+
+model Session {
+  id                 String    @id
+  shop               String
+  state              String
+  isOnline           Boolean   @default(false)
+  scope              String?
+  expires            DateTime?
+  accessToken        String
+  userId             BigInt?
+  firstName          String?
+  lastName           String?
+  email              String?
+  accountOwner       Boolean   @default(false)
+  locale             String?
+  collaborator       Boolean?  @default(false)
+  emailVerified      Boolean?  @default(false)
+  refreshToken       String?
+  refreshTokenExpires DateTime?
+
+  @@map("session")
+}
