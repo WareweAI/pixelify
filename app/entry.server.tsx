@@ -22,29 +22,16 @@ export default async function handleRequest(
 ) {
   const url = new URL(request.url);
   
-  // CRITICAL: Detect resource routes early - these should return JSON/JS, not HTML
-  // React Router v7 should use the Response body directly for these routes
   const isResourceRoute = url.pathname.startsWith("/apps/proxy/") ||
                          url.pathname.startsWith("/apps/pixel-api/") ||
                          url.pathname.startsWith("/api/");
   
-  // Add Shopify headers if available (skip for resource routes to avoid conflicts)
   if (!isResourceRoute) {
     try {
       addDocumentResponseHeaders(request, responseHeaders);
     } catch (error) {
-      // Shopify not configured - this is fine for landing page on Vercel
       console.log("Shopify headers not added - running in standalone mode");
     }
-  }
-
-  // Ensure proper headers for Shopify embedding (only for non-resource routes)
-  if (!isResourceRoute) {
-    // Note: This CSP allows our app to be embedded in Shopify admin
-    // The shop.app CSP error is a client-side issue (browser extension/theme code trying to embed shop.app)
-    // and cannot be fixed server-side. shop.app explicitly blocks all framing with frame-ancestors 'none'
-    responseHeaders.delete("X-Frame-Options"); // Remove any existing X-Frame-Options
-    responseHeaders.set("Content-Security-Policy", "frame-ancestors https://*.myshopify.com https://admin.shopify.com;");
   }
   
   const userAgent = request.headers.get("user-agent");
