@@ -25,9 +25,9 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       const shopDomain = url.searchParams.get("shop");
     
       if (!shopDomain) {
-        return Response.json({ error: "Missing shop parameter" }, { 
+        throw new Response(JSON.stringify({ error: "Missing shop parameter" }), {
           status: 400,
-          headers: { 
+          headers: {
             "Content-Type": "application/json; charset=utf-8",
             "X-Content-Type-Options": "nosniff"
           }
@@ -50,12 +50,12 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
           dbError?.name === 'PrismaClientInitializationError' ||
           dbError?.message?.includes("Can't reach database") ||
           dbError?.message?.includes("connection timeout")) {
-        return Response.json({ 
+        throw new Response(JSON.stringify({
           error: "Database temporarily unavailable",
-          shop: shopDomain 
-        }, { 
+          shop: shopDomain
+        }), {
           status: 503,
-          headers: { 
+          headers: {
             "Content-Type": "application/json; charset=utf-8",
             "X-Content-Type-Options": "nosniff"
           }
@@ -71,9 +71,9 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       });
 
       if (!user) {
-        return Response.json({ error: "Shop not found", shop: shopDomain }, { 
+        throw new Response(JSON.stringify({ error: "Shop not found", shop: shopDomain }), {
           status: 404,
-          headers: { 
+          headers: {
             "Content-Type": "application/json; charset=utf-8",
             "X-Content-Type-Options": "nosniff"
           }
@@ -87,9 +87,9 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       });
 
       if (!app) {
-        return Response.json({ error: "No pixel configured", shop: shopDomain }, { 
+        throw new Response(JSON.stringify({ error: "No pixel configured", shop: shopDomain }), {
           status: 404,
-          headers: { 
+          headers: {
             "Content-Type": "application/json; charset=utf-8",
             "X-Content-Type-Options": "nosniff"
           }
@@ -102,7 +102,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
         select: { name: true, selector: true, eventType: true, metaEventName: true },
       });
 
-      return Response.json({
+      return {
         pixelId: app.appId,
         appName: app.name,
         metaPixelId: app.settings?.metaPixelId || null,
@@ -113,25 +113,20 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
           autoScroll: app.settings?.autoTrackScroll ?? false,
         },
         customEvents,
-      }, {
-        headers: { 
-          "Content-Type": "application/json; charset=utf-8",
-          "X-Content-Type-Options": "nosniff"
-        }
-      });
+      };
     } catch (error: any) {
       console.error("[App Proxy] Error:", error);
       // Check if it's a database error
       if (error?.code === 'P1001' || error?.message?.includes('Can\'t reach database')) {
-        return Response.json({ 
+        throw new Response(JSON.stringify({
           error: "Database temporarily unavailable",
-          shop: shopDomain 
-        }, { 
+          shop: shopDomain
+        }), {
           status: 503,
           headers: { "Content-Type": "application/json" }
         });
       }
-      return Response.json({ error: "Internal error" }, { 
+      throw new Response(JSON.stringify({ error: "Internal error" }), {
         status: 500,
         headers: { "Content-Type": "application/json" }
       });
@@ -304,17 +299,17 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       }
     }
 
-    return Response.json({ error: "Unknown endpoint", path }, { 
+    throw new Response(JSON.stringify({ error: "Unknown endpoint", path }), {
       status: 404,
       headers: { "Content-Type": "application/json" }
     });
   } catch (error: any) {
     // Catch any unhandled errors and return JSON (never HTML)
     console.error("[App Proxy loader] Unhandled error:", error);
-    return Response.json({ 
+    throw new Response(JSON.stringify({
       error: "Internal server error",
       message: error?.message || "An unexpected error occurred"
-    }, { 
+    }), {
       status: 500,
       headers: { "Content-Type": "application/json" }
     });
