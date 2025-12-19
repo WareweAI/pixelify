@@ -1,4 +1,4 @@
-api_version = "2024-01"
+api_version = "2025-01"
 
 [[extensions]]
 
@@ -15,6 +15,7 @@ network_access = true
 type = "pixelify-tracker"
 name = "Pixelify Tracker"
 target = "@app"
+
 
 
 
