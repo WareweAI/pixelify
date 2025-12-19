@@ -28,7 +28,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   try {
     // Find user by shop domain
     const user = await prisma.user.findUnique({
-      where: { storeUrl: shop },
+      where: { email: shop },
       include: {
         apps: {
           where: {
@@ -49,7 +49,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       // Try to find any app for this shop
       const anyApp = await prisma.app.findFirst({
         where: {
-          user: { storeUrl: shop },
+          user: { email: shop },
         },
         include: { settings: true },
         orderBy: { createdAt: "desc" },

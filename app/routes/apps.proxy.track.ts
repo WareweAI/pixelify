@@ -10,6 +10,20 @@ export async function action({ request }: ActionFunctionArgs) {
 
   console.log(`[App Proxy] POST track, shop: ${shop}`);
 
+  // Check database connection first
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+  } catch (dbError: any) {
+    console.error("[App Proxy track] Database connection error:", dbError);
+    return Response.json({ 
+      success: false,
+      error: "Database temporarily unavailable"
+    }, { 
+      status: 503,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
   try {
     const body = await request.json();
     const { appId, eventName } = body;
@@ -17,7 +31,10 @@ export async function action({ request }: ActionFunctionArgs) {
     console.log(`[App Proxy track] appId: ${appId}, eventName: ${eventName}`);
 
     if (!appId || !eventName) {
-      return Response.json({ error: "Missing required fields" }, { status: 400 });
+      return Response.json({ error: "Missing required fields" }, { 
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
     }
 
     const app = await prisma.app.findUnique({
@@ -27,7 +44,10 @@ export async function action({ request }: ActionFunctionArgs) {
 
     if (!app) {
       console.log(`[App Proxy track] App not found: ${appId}`);
-      return Response.json({ error: "App not found" }, { status: 404 });
+      return Response.json({ error: "App not found" }, { 
+        status: 404,
+        headers: { "Content-Type": "application/json" }
+      });
     }
 
     const userAgent = request.headers.get("user-agent") || "";
@@ -120,10 +140,25 @@ export async function action({ request }: ActionFunctionArgs) {
       },
     });
 
-    return Response.json({ success: true, eventId: event.id });
-  } catch (error) {
+    return Response.json({ success: true, eventId: event.id }, {
+      headers: { "Content-Type": "application/json" }
+    });
+  } catch (error: any) {
     console.error("[App Proxy track] Error:", error);
-    return Response.json({ error: "Failed to track event" }, { status: 500 });
+    // Check if it's a database error
+    if (error?.code === 'P1001' || error?.message?.includes('Can\'t reach database')) {
+      return Response.json({ 
+        success: false,
+        error: "Database temporarily unavailable"
+      }, { 
+        status: 503,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    return Response.json({ error: "Failed to track event" }, { 
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
   }
 }
 

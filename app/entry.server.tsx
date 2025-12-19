@@ -29,27 +29,8 @@ export default async function handleRequest(
   }
 
   // Ensure proper headers for Shopify embedding
-  // Set CSP AFTER Shopify headers to override any conflicting directives
   responseHeaders.delete("X-Frame-Options"); // Remove any existing X-Frame-Options
-  
-  // Merge CSP to ensure shop.app is allowed
-  const existingCSP = responseHeaders.get("Content-Security-Policy");
-  let cspValue = "frame-ancestors https://*.myshopify.com https://admin.shopify.com https://shop.app https://*.shop.app;";
-  
-  if (existingCSP) {
-    // Remove any existing frame-ancestors directive (including 'none')
-    const cspParts = existingCSP.split(";").filter(part => {
-      const trimmed = part.trim();
-      return trimmed && !trimmed.toLowerCase().startsWith("frame-ancestors");
-    });
-    
-    // Merge with our frame-ancestors directive
-    if (cspParts.length > 0) {
-      cspValue = `${cspParts.join("; ")}; ${cspValue}`;
-    }
-  }
-  
-  responseHeaders.set("Content-Security-Policy", cspValue);
+  responseHeaders.set("Content-Security-Policy", "frame-ancestors https://*.myshopify.com https://admin.shopify.com;");
   const userAgent = request.headers.get("user-agent");
   const callbackName = isbot(userAgent ?? '')
     ? "onAllReady"
