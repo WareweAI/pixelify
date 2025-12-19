@@ -1,4 +1,4 @@
-// App Proxy handler - receives requests from /apps/proxy/* on the shop domain
+// App Proxy handler - receives requests from /apps/pixel-api/* on the shop domain
 // This avoids CORS issues because requests come from the same origin (shop domain)
 import type { LoaderFunctionArgs, ActionFunctionArgs, HeadersFunction } from "react-router";
 import prisma from "../db.server";
@@ -14,31 +14,28 @@ export const headers: HeadersFunction = () => {
 
 // Handle GET requests (e.g., get-pixel-id)
 export async function loader({ request, params }: LoaderFunctionArgs) {
-  const startTime = Date.now();
   try {
     const url = new URL(request.url);
     const path = params["*"] || "";
     const shop = url.searchParams.get("shop") || url.searchParams.get("logged_in_customer_id")?.split("/")[0];
     
-    console.log(`[App Proxy Loader] GET ${path}, shop: ${shop}, url: ${url.pathname}`);
+    console.log(`[App Proxy] GET ${path}, shop: ${shop}`);
 
     if (path === "get-pixel-id" || path.startsWith("get-pixel-id")) {
       const shopDomain = url.searchParams.get("shop");
     
       if (!shopDomain) {
-        console.error(`[App Proxy Loader] Missing shop parameter for path: ${path}`);
-        return {
-          error: "Missing shop parameter",
-          path,
-          url: url.pathname
-        };
-      }
-      
-      console.log(`[App Proxy Loader] Processing get-pixel-id for shop: ${shopDomain}`);
+      return Response.json({ error: "Missing shop parameter" }, { 
+        status: 400,
+        headers: { 
+          "Content-Type": "application/json; charset=utf-8",
+          "X-Content-Type-Options": "nosniff"
+        }
+      });
+    }
 
     // Check database connection first and wrap all DB operations
     try {
-      console.log(`[App Proxy Loader] Testing database connection for shop: ${shopDomain}`);
       // Test connection with timeout
       await Promise.race([
         prisma.$queryRaw`SELECT 1`,
@@ -46,46 +43,43 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
           setTimeout(() => reject(new Error('Database connection timeout')), 5000)
         )
       ]);
-      console.log(`[App Proxy Loader] Database connection successful for shop: ${shopDomain}`);
     } catch (dbError: any) {
-      console.error(`[App Proxy Loader] Database connection error for shop ${shopDomain}:`, {
-        code: dbError?.code,
-        name: dbError?.name,
-        message: dbError?.message,
-        stack: dbError?.stack
-      });
+      console.error("[App Proxy] Database connection error:", dbError);
       // Check for PrismaClientInitializationError or connection errors
       if (dbError?.code === 'P1001' || 
           dbError?.name === 'PrismaClientInitializationError' ||
           dbError?.message?.includes("Can't reach database") ||
           dbError?.message?.includes("connection timeout")) {
-        console.log(`[App Proxy Loader] Returning 503 database error response for shop: ${shopDomain}`);
-        return {
+        return Response.json({ 
           error: "Database temporarily unavailable",
-          shop: shopDomain,
-          code: dbError?.code,
-          message: process.env.NODE_ENV === 'development' ? dbError?.message : undefined
-        };
+          shop: shopDomain 
+        }, { 
+          status: 503,
+          headers: { 
+            "Content-Type": "application/json; charset=utf-8",
+            "X-Content-Type-Options": "nosniff"
+          }
+        });
       }
       // Re-throw if it's not a connection error
       throw dbError;
     }
 
     try {
-      console.log(`[App Proxy Loader] Fetching user for shop: ${shopDomain}`);
       const user = await prisma.user.findUnique({
         where: { storeUrl: shopDomain },
       });
 
       if (!user) {
-        console.error(`[App Proxy Loader] Shop not found: ${shopDomain}`);
-        return {
-          error: "Shop not found",
-          shop: shopDomain
-        };
+        return Response.json({ error: "Shop not found", shop: shopDomain }, { 
+          status: 404,
+          headers: { 
+            "Content-Type": "application/json; charset=utf-8",
+            "X-Content-Type-Options": "nosniff"
+          }
+        });
       }
 
-      console.log(`[App Proxy Loader] User found: ${user.id}, fetching app for shop: ${shopDomain}`);
       const app = await prisma.app.findFirst({
         where: { userId: user.id },
         include: { settings: true },
@@ -93,21 +87,22 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       });
 
       if (!app) {
-        console.error(`[App Proxy Loader] No pixel configured for shop: ${shopDomain}`);
-        return {
-          error: "No pixel configured",
-          shop: shopDomain
-        };
+        return Response.json({ error: "No pixel configured", shop: shopDomain }, { 
+          status: 404,
+          headers: { 
+            "Content-Type": "application/json; charset=utf-8",
+            "X-Content-Type-Options": "nosniff"
+          }
+        });
       }
 
-      console.log(`[App Proxy Loader] App found: ${app.appId}, fetching custom events for shop: ${shopDomain}`);
       // Get custom events
       const customEvents = await prisma.customEvent.findMany({
         where: { appId: app.id, isActive: true },
         select: { name: true, selector: true, eventType: true, metaEventName: true },
       });
 
-      const responseData = {
+      return Response.json({
         pixelId: app.appId,
         appName: app.name,
         metaPixelId: app.settings?.metaPixelId || null,
@@ -118,37 +113,28 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
           autoScroll: app.settings?.autoTrackScroll ?? false,
         },
         customEvents,
-      };
-
-      const duration = Date.now() - startTime;
-      console.log(`[App Proxy Loader] Successfully returned pixel data for shop: ${shopDomain}, duration: ${duration}ms`);
-
-      // Return plain object - React Router will automatically serialize to JSON
-      return responseData;
-    } catch (error: any) {
-      console.error(`[App Proxy Loader] Error processing get-pixel-id for shop ${shopDomain}:`, {
-        error: error?.message,
-        code: error?.code,
-        name: error?.name,
-        stack: error?.stack
+      }, {
+        headers: { 
+          "Content-Type": "application/json; charset=utf-8",
+          "X-Content-Type-Options": "nosniff"
+        }
       });
+    } catch (error: any) {
+      console.error("[App Proxy] Error:", error);
       // Check if it's a database error
-      if (error?.code === 'P1001' || 
-          error?.name === 'PrismaClientInitializationError' ||
-          error?.message?.includes('Can\'t reach database') ||
-          error?.message?.includes("connection timeout")) {
-        return {
+      if (error?.code === 'P1001' || error?.message?.includes('Can\'t reach database')) {
+        return Response.json({ 
           error: "Database temporarily unavailable",
-          shop: shopDomain,
-          code: error?.code,
-          message: process.env.NODE_ENV === 'development' ? error?.message : undefined
-        };
+          shop: shopDomain 
+        }, { 
+          status: 503,
+          headers: { "Content-Type": "application/json" }
+        });
       }
-      return {
-        error: "Internal error",
-        shop: shopDomain,
-        message: process.env.NODE_ENV === 'development' ? error?.message : undefined
-      };
+      return Response.json({ error: "Internal error" }, { 
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
     }
     }
 
@@ -318,22 +304,20 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       }
     }
 
-    return { error: "Unknown endpoint", path };
+    return Response.json({ error: "Unknown endpoint", path }, { 
+      status: 404,
+      headers: { "Content-Type": "application/json" }
+    });
   } catch (error: any) {
     // Catch any unhandled errors and return JSON (never HTML)
-    console.error("[App Proxy Loader] Unhandled error:", {
-      error: error?.message,
-      code: error?.code,
-      name: error?.name,
-      stack: error?.stack,
-      url: request.url
-    });
-    return {
+    console.error("[App Proxy loader] Unhandled error:", error);
+    return Response.json({ 
       error: "Internal server error",
-      message: process.env.NODE_ENV === 'development' ? error?.message : "An unexpected error occurred",
-      code: error?.code,
-      path: params["*"] || ""
-    };
+      message: error?.message || "An unexpected error occurred"
+    }, { 
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
   }
 }
 
@@ -353,10 +337,13 @@ export async function action({ request, params }: ActionFunctionArgs) {
         await prisma.$queryRaw`SELECT 1`;
       } catch (dbError: any) {
         console.error("[App Proxy track] Database connection error:", dbError);
-        return {
+        return Response.json({ 
           success: false,
           error: "Database temporarily unavailable"
-        };
+        }, { 
+          status: 503,
+          headers: { "Content-Type": "application/json" }
+        });
       }
 
       try {
@@ -364,7 +351,10 @@ export async function action({ request, params }: ActionFunctionArgs) {
       const { appId, eventName } = body;
 
       if (!appId || !eventName) {
-        return { error: "Missing required fields" };
+        return Response.json({ error: "Missing required fields" }, { 
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
       }
 
       const app = await prisma.app.findUnique({
@@ -373,7 +363,10 @@ export async function action({ request, params }: ActionFunctionArgs) {
       });
 
       if (!app) {
-        return { error: "App not found" };
+        return Response.json({ error: "App not found" }, { 
+          status: 404,
+          headers: { "Content-Type": "application/json" }
+        });
       }
 
       const userAgent = request.headers.get("user-agent") || "";
@@ -409,46 +402,47 @@ export async function action({ request, params }: ActionFunctionArgs) {
         },
       });
 
-        return { success: true, eventId: event.id };
+        return Response.json({ success: true, eventId: event.id }, {
+          headers: { "Content-Type": "application/json" }
+        });
       } catch (error: any) {
         console.error("[App Proxy track] Error:", error);
         // Check if it's a database error
         if (error?.code === 'P1001' || error?.message?.includes('Can\'t reach database')) {
-          return {
+          return Response.json({ 
             success: false,
             error: "Database temporarily unavailable"
-          };
+          }, { 
+            status: 503,
+            headers: { "Content-Type": "application/json" }
+          });
         }
-        return { error: "Failed to track event" };
+        return Response.json({ error: "Failed to track event" }, { 
+          status: 500,
+          headers: { "Content-Type": "application/json" }
+        });
       }
     }
 
-    return { error: "Unknown endpoint", path };
+    return Response.json({ error: "Unknown endpoint", path }, { 
+      status: 404,
+      headers: { "Content-Type": "application/json" }
+    });
   } catch (error: any) {
     // Catch any unhandled errors and return JSON (never HTML)
     console.error("[App Proxy action] Unhandled error:", error);
-    return {
+    return Response.json({ 
       error: "Internal server error",
       message: error?.message || "An unexpected error occurred"
-    };
+    }, { 
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
   }
 }
 
 // Resource route - must return null to prevent HTML rendering
 export default function AppProxyRoute() {
   return null;
-}
-
-// ErrorBoundary to ensure JSON error responses (never HTML)
-export function ErrorBoundary({ error }: { error: unknown }) {
-  console.error("[App Proxy ErrorBoundary] Error occurred:", {
-    error: error instanceof Error ? error.message : String(error),
-    stack: error instanceof Error ? error.stack : undefined
-  });
-
-  return {
-    error: "Internal server error",
-    message: error instanceof Error ? error.message : "An error occurred processing the request"
-  };
 }
 
