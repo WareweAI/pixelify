@@ -21,7 +21,6 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     
     console.log(`[App Proxy] GET ${path}, shop: ${shop}`);
 
-    // Route: /apps/pixel-api/get-pixel-id
     if (path === "get-pixel-id" || path.startsWith("get-pixel-id")) {
       const shopDomain = url.searchParams.get("shop");
     

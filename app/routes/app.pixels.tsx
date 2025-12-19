@@ -21,7 +21,7 @@ import {
   Box,
   Divider,
 } from "@shopify/polaris";
-// Icons removed due to build issues - using text labels instead
+import { PlusIcon, DeleteIcon, EditIcon } from "@shopify/polaris-icons";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopify = getShopifyInstance();
@@ -193,9 +193,7 @@ export default function FacebookPixelsPage() {
   }, [fetcher, showDeleteModal]);
 
   const generateInstallCode = (pixel: any) => {
-    const appUrl = typeof window !== "undefined" 
-      ? window.location.origin 
-      : (process.env.SHOPIFY_APP_URL?.replace(/^["']|["']$/g, '').trim() || "https://pixelify-red.vercel.app");
+    const appUrl = typeof window !== "undefined" ? window.location.origin : "https://pixel-warewe.vercel.app";
     return `<!-- Facebook Pixel Code -->
 <script>
   !function(f,b,e,v,n,t,s)
@@ -227,6 +225,7 @@ export default function FacebookPixelsPage() {
       subtitle="Manage your Facebook Pixels for conversion tracking and audience building"
       primaryAction={{
         content: "Add Facebook Pixel",
+        icon: PlusIcon,
         onAction: () => setShowCreateModal(true),
       }}
     >
@@ -344,11 +343,13 @@ export default function FacebookPixelsPage() {
                               {pixel.settings?.metaPixelEnabled ? "Disable" : "Enable"}
                             </Button>
                             <Button
+                              icon={EditIcon}
                               url={`/app/settings`}
                             >
                               Edit
                             </Button>
                             <Button
+                              icon={DeleteIcon}
                               tone="critical"
                               onClick={() => setShowDeleteModal(pixel)}
                             >
