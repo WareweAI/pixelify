@@ -1,16 +1,11 @@
-// App Proxy handler - receives requests from /apps/pixel-api/* on the shop domain
-// This avoids CORS issues because requests come from the same origin (shop domain)
 import type { LoaderFunctionArgs, ActionFunctionArgs, HeadersFunction } from "react-router";
+
+
 import prisma from "../db.server";
 import { parseUserAgent, getDeviceType } from "../services/device.server";
 import { getGeoData } from "../services/geo.server";
 
-// Ensure all responses from this route are JSON (resource route)
-export const headers: HeadersFunction = () => {
-  return {
-    "Content-Type": "application/json; charset=utf-8",
-  };
-};
+
 
 // Handle GET requests (e.g., get-pixel-id)
 export async function loader({ request, params }: LoaderFunctionArgs) {
@@ -25,7 +20,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       const shopDomain = url.searchParams.get("shop");
     
       if (!shopDomain) {
-        throw new Response(JSON.stringify({ error: "Missing shop parameter" }), {
+        return new Response(JSON.stringify({ error: "Missing shop parameter" }), {
           status: 400,
           headers: {
             "Content-Type": "application/json; charset=utf-8",
@@ -50,7 +45,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
           dbError?.name === 'PrismaClientInitializationError' ||
           dbError?.message?.includes("Can't reach database") ||
           dbError?.message?.includes("connection timeout")) {
-        throw new Response(JSON.stringify({
+        return new Response(JSON.stringify({
           error: "Database temporarily unavailable",
           shop: shopDomain
         }), {
@@ -71,7 +66,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       });
 
       if (!user) {
-        throw new Response(JSON.stringify({ error: "Shop not found", shop: shopDomain }), {
+        return new Response(JSON.stringify({ error: "Shop not found", shop: shopDomain }), {
           status: 404,
           headers: {
             "Content-Type": "application/json; charset=utf-8",
@@ -87,7 +82,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       });
 
       if (!app) {
-        throw new Response(JSON.stringify({ error: "No pixel configured", shop: shopDomain }), {
+        return new Response(JSON.stringify({ error: "No pixel configured", shop: shopDomain }), {
           status: 404,
           headers: {
             "Content-Type": "application/json; charset=utf-8",
@@ -102,7 +97,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
         select: { name: true, selector: true, eventType: true, metaEventName: true },
       });
 
-      return {
+      return Response.json({
         pixelId: app.appId,
         appName: app.name,
         metaPixelId: app.settings?.metaPixelId || null,
@@ -113,12 +108,17 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
           autoScroll: app.settings?.autoTrackScroll ?? false,
         },
         customEvents,
-      };
+      }, {
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-Content-Type-Options": "nosniff"
+        }
+      });
     } catch (error: any) {
       console.error("[App Proxy] Error:", error);
       // Check if it's a database error
       if (error?.code === 'P1001' || error?.message?.includes('Can\'t reach database')) {
-        throw new Response(JSON.stringify({
+        return new Response(JSON.stringify({
           error: "Database temporarily unavailable",
           shop: shopDomain
         }), {
@@ -126,7 +126,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
           headers: { "Content-Type": "application/json" }
         });
       }
-      throw new Response(JSON.stringify({ error: "Internal error" }), {
+      return new Response(JSON.stringify({ error: "Internal error" }), {
         status: 500,
         headers: { "Content-Type": "application/json" }
       });
@@ -299,14 +299,14 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       }
     }
 
-    throw new Response(JSON.stringify({ error: "Unknown endpoint", path }), {
+    return new Response(JSON.stringify({ error: "Unknown endpoint", path }), {
       status: 404,
       headers: { "Content-Type": "application/json" }
     });
   } catch (error: any) {
     // Catch any unhandled errors and return JSON (never HTML)
     console.error("[App Proxy loader] Unhandled error:", error);
-    throw new Response(JSON.stringify({
+    return new Response(JSON.stringify({
       error: "Internal server error",
       message: error?.message || "An unexpected error occurred"
     }), {

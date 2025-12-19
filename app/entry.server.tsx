@@ -28,6 +28,19 @@ export default async function handleRequest(
     console.log("Shopify headers not added - running in standalone mode");
   }
 
+  // Handle API routes that return data
+  const url = new URL(request.url);
+  if (url.pathname.startsWith('/apps/proxy')) {
+    const routeId = 'routes/apps.proxy.' + '$';
+    const data = reactRouterContext.staticHandlerContext?.loaderData?.[routeId];
+    if (data) {
+      return new Response(JSON.stringify(data), {
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        status: reactRouterContext.staticHandlerContext?.statusCode || 200,
+      });
+    }
+  }
+
   // Ensure proper headers for Shopify embedding
   responseHeaders.delete("X-Frame-Options"); // Remove any existing X-Frame-Options
   responseHeaders.set("Content-Security-Policy", "frame-ancestors https://*.myshopify.com https://admin.shopify.com https://shop.app;");
