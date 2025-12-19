@@ -30,7 +30,7 @@ export async function injectPixelScript(
   try {
     const { admin, session } = adminContext;
 
-    const baseUrl = process.env.SHOPIFY_APP_URL || "https://pixel-warewe.vercel.app";
+    const baseUrl = process.env.SHOPIFY_APP_URL || "https://pixelify-red.vercel.app";
     const scriptUrl = `${baseUrl}/pixel.js?id=${options.pixelId}&auto_pageview=${options.autoTrackPageviews}&auto_clicks=${options.autoTrackClicks}&auto_scroll=${options.autoTrackScroll}`;
 
     const scriptTagResponse = await fetch(`https://${session.shop}/admin/api/2024-10/script_tags.json`, {

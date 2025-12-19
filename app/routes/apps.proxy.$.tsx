@@ -41,7 +41,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
 
     try {
       const user = await prisma.user.findUnique({
-        where: { email: shopDomain },
+        where: { storeUrl: shopDomain },
       });
 
       if (!user) {

@@ -9,11 +9,11 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  password  String
-  createdAt DateTime @default(now())
-  apps      App[]
+   id        String   @id @default(uuid())
+   storeUrl  String   @unique
+   password  String
+   createdAt DateTime @default(now())
+   apps      App[]
 }
 
 model App {
