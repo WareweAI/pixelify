@@ -39,7 +39,6 @@ export default async function handleRequest(
       if (ctx.matches && Array.isArray(ctx.matches)) {
         const lastMatch = ctx.matches[ctx.matches.length - 1];
         if (lastMatch && lastMatch.Component) {
-          // Replace the component with a null component to prevent HTML rendering
           lastMatch.Component = () => null;
           console.log(`[Entry Server] Replaced component for resource route: ${url.pathname}`);
         }
@@ -64,11 +63,26 @@ export default async function handleRequest(
     : "onShellReady";
 
   return new Promise((resolve, reject) => {
-    const { pipe, abort } = renderToPipeableStream(
+    // For resource routes, render a minimal component that doesn't include HTML structure
+    const isResourceRoute = url.pathname.startsWith("/apps/proxy/") ||
+                           url.pathname.startsWith("/apps/pixel-api/") ||
+                           url.pathname.startsWith("/api/") ||
+                           existingContentType?.includes("application/json") ||
+                           existingContentType?.includes("application/javascript");
+
+    const componentToRender = isResourceRoute ? (
+      // For resource routes, render nothing to prevent HTML output
+      <div></div>
+    ) : (
+      // For normal routes, render the full React tree
       <ServerRouter
         context={reactRouterContext}
         url={request.url}
-      />,
+      />
+    );
+
+    const { pipe, abort } = renderToPipeableStream(
+      componentToRender,
       {
         [callbackName]: () => {
           const body = new PassThrough();
