@@ -16,7 +16,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
 
     // Route: /apps/pixel-api/get-pixel-id
     if (path === "get-pixel-id" || path.startsWith("get-pixel-id")) {
-    const shopDomain = url.searchParams.get("shop");
+      const shopDomain = url.searchParams.get("shop");
     
     if (!shopDomain) {
       return Response.json({ error: "Missing shop parameter" }, { 
