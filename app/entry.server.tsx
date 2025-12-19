@@ -66,8 +66,15 @@ export default async function handleRequest(
                     url.pathname.startsWith("/apps/pixel-api/") ||
                     url.pathname.startsWith("/api/");
 
+  console.log(`[Entry Server] Checking route: ${url.pathname}, isApiRoute: ${isApiRoute}`);
+
   if (isApiRoute) {
-    console.log(`[Entry Server] API route detected: ${url.pathname}`);
+    console.log(`[Entry Server] API route detected, attempting early return: ${url.pathname}`);
+  } else {
+    console.log(`[Entry Server] Not an API route, proceeding with normal render: ${url.pathname}`);
+  }
+
+  if (isApiRoute) {
 
     // Debug: Log the entire EntryContext structure
     try {
@@ -198,7 +205,7 @@ export default async function handleRequest(
           console.log(`[Entry Server] Processing request: ${requestUrl.pathname}, Content-Type: ${responseHeaders.get("Content-Type") || 'not set'}, Status: ${responseStatusCode}, isApiRoute: ${isApiRouteFinal}`);
 
           if (isApiRouteFinal) {
-            console.log(`[Entry Server] Checking context for API route: ${requestUrl.pathname}`);
+            console.log(`[Entry Server] Render callback - Checking context for API route: ${requestUrl.pathname}`);
             try {
               const ctx = reactRouterContext as any;
 

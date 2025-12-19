@@ -27,17 +27,11 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     
       if (!shopDomain) {
         console.error(`[App Proxy Loader] Missing shop parameter for path: ${path}`);
-        return Response.json({ 
+        return {
           error: "Missing shop parameter",
           path,
           url: url.pathname
-        }, { 
-          status: 400,
-          headers: { 
-            "Content-Type": "application/json; charset=utf-8",
-            "X-Content-Type-Options": "nosniff"
-          }
-        });
+        };
       }
       
       console.log(`[App Proxy Loader] Processing get-pixel-id for shop: ${shopDomain}`);
@@ -65,20 +59,13 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
           dbError?.name === 'PrismaClientInitializationError' ||
           dbError?.message?.includes("Can't reach database") ||
           dbError?.message?.includes("connection timeout")) {
-        const errorResponse = Response.json({ 
+        console.log(`[App Proxy Loader] Returning 503 database error response for shop: ${shopDomain}`);
+        return {
           error: "Database temporarily unavailable",
           shop: shopDomain,
           code: dbError?.code,
           message: process.env.NODE_ENV === 'development' ? dbError?.message : undefined
-        }, { 
-          status: 503,
-          headers: { 
-            "Content-Type": "application/json; charset=utf-8",
-            "X-Content-Type-Options": "nosniff"
-          }
-        });
-        console.log(`[App Proxy Loader] Returning 503 database error response for shop: ${shopDomain}`);
-        return errorResponse;
+        };
       }
       // Re-throw if it's not a connection error
       throw dbError;
@@ -92,16 +79,10 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
 
       if (!user) {
         console.error(`[App Proxy Loader] Shop not found: ${shopDomain}`);
-        return Response.json({ 
-          error: "Shop not found", 
-          shop: shopDomain 
-        }, { 
-          status: 404,
-          headers: { 
-            "Content-Type": "application/json; charset=utf-8",
-            "X-Content-Type-Options": "nosniff"
-          }
-        });
+        return {
+          error: "Shop not found",
+          shop: shopDomain
+        };
       }
 
       console.log(`[App Proxy Loader] User found: ${user.id}, fetching app for shop: ${shopDomain}`);
@@ -113,16 +94,10 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
 
       if (!app) {
         console.error(`[App Proxy Loader] No pixel configured for shop: ${shopDomain}`);
-        return Response.json({ 
-          error: "No pixel configured", 
-          shop: shopDomain 
-        }, { 
-          status: 404,
-          headers: { 
-            "Content-Type": "application/json; charset=utf-8",
-            "X-Content-Type-Options": "nosniff"
-          }
-        });
+        return {
+          error: "No pixel configured",
+          shop: shopDomain
+        };
       }
 
       console.log(`[App Proxy Loader] App found: ${app.appId}, fetching custom events for shop: ${shopDomain}`);
@@ -145,16 +120,11 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
         customEvents,
       };
 
-      const response = Response.json(responseData, {
-        headers: { 
-          "Content-Type": "application/json; charset=utf-8",
-          "X-Content-Type-Options": "nosniff"
-        }
-      });
-
       const duration = Date.now() - startTime;
       console.log(`[App Proxy Loader] Successfully returned pixel data for shop: ${shopDomain}, duration: ${duration}ms`);
-      return response;
+
+      // Return plain object - React Router will automatically serialize to JSON
+      return responseData;
     } catch (error: any) {
       console.error(`[App Proxy Loader] Error processing get-pixel-id for shop ${shopDomain}:`, {
         error: error?.message,
@@ -167,30 +137,18 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
           error?.name === 'PrismaClientInitializationError' ||
           error?.message?.includes('Can\'t reach database') ||
           error?.message?.includes("connection timeout")) {
-        return Response.json({ 
+        return {
           error: "Database temporarily unavailable",
           shop: shopDomain,
           code: error?.code,
           message: process.env.NODE_ENV === 'development' ? error?.message : undefined
-        }, { 
-          status: 503,
-          headers: { 
-            "Content-Type": "application/json; charset=utf-8",
-            "X-Content-Type-Options": "nosniff"
-          }
-        });
+        };
       }
-      return Response.json({ 
+      return {
         error: "Internal error",
         shop: shopDomain,
         message: process.env.NODE_ENV === 'development' ? error?.message : undefined
-      }, { 
-        status: 500,
-        headers: { 
-          "Content-Type": "application/json; charset=utf-8",
-          "X-Content-Type-Options": "nosniff"
-        }
-      });
+      };
     }
     }
 
@@ -360,10 +318,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       }
     }
 
-    return Response.json({ error: "Unknown endpoint", path }, { 
-      status: 404,
-      headers: { "Content-Type": "application/json" }
-    });
+    return { error: "Unknown endpoint", path };
   } catch (error: any) {
     // Catch any unhandled errors and return JSON (never HTML)
     console.error("[App Proxy Loader] Unhandled error:", {
@@ -373,18 +328,12 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       stack: error?.stack,
       url: request.url
     });
-    return Response.json({ 
+    return {
       error: "Internal server error",
       message: process.env.NODE_ENV === 'development' ? error?.message : "An unexpected error occurred",
       code: error?.code,
       path: params["*"] || ""
-    }, { 
-      status: 500,
-      headers: { 
-        "Content-Type": "application/json; charset=utf-8",
-        "X-Content-Type-Options": "nosniff"
-      }
-    });
+    };
   }
 }
 
@@ -404,13 +353,10 @@ export async function action({ request, params }: ActionFunctionArgs) {
         await prisma.$queryRaw`SELECT 1`;
       } catch (dbError: any) {
         console.error("[App Proxy track] Database connection error:", dbError);
-        return Response.json({ 
+        return {
           success: false,
           error: "Database temporarily unavailable"
-        }, { 
-          status: 503,
-          headers: { "Content-Type": "application/json" }
-        });
+        };
       }
 
       try {
@@ -418,10 +364,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
       const { appId, eventName } = body;
 
       if (!appId || !eventName) {
-        return Response.json({ error: "Missing required fields" }, { 
-        status: 400,
-        headers: { "Content-Type": "application/json" }
-      });
+        return { error: "Missing required fields" };
       }
 
       const app = await prisma.app.findUnique({
@@ -430,10 +373,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
       });
 
       if (!app) {
-        return Response.json({ error: "App not found" }, { 
-          status: 404,
-          headers: { "Content-Type": "application/json" }
-        });
+        return { error: "App not found" };
       }
 
       const userAgent = request.headers.get("user-agent") || "";
@@ -469,42 +409,28 @@ export async function action({ request, params }: ActionFunctionArgs) {
         },
       });
 
-        return Response.json({ success: true, eventId: event.id }, {
-          headers: { "Content-Type": "application/json" }
-        });
+        return { success: true, eventId: event.id };
       } catch (error: any) {
         console.error("[App Proxy track] Error:", error);
         // Check if it's a database error
         if (error?.code === 'P1001' || error?.message?.includes('Can\'t reach database')) {
-          return Response.json({ 
+          return {
             success: false,
             error: "Database temporarily unavailable"
-          }, { 
-            status: 503,
-            headers: { "Content-Type": "application/json" }
-          });
+          };
         }
-        return Response.json({ error: "Failed to track event" }, { 
-          status: 500,
-          headers: { "Content-Type": "application/json" }
-        });
+        return { error: "Failed to track event" };
       }
     }
 
-    return Response.json({ error: "Unknown endpoint", path }, { 
-      status: 404,
-      headers: { "Content-Type": "application/json" }
-    });
+    return { error: "Unknown endpoint", path };
   } catch (error: any) {
     // Catch any unhandled errors and return JSON (never HTML)
     console.error("[App Proxy action] Unhandled error:", error);
-    return Response.json({ 
+    return {
       error: "Internal server error",
       message: error?.message || "An unexpected error occurred"
-    }, { 
-      status: 500,
-      headers: { "Content-Type": "application/json" }
-    });
+    };
   }
 }
 
@@ -519,19 +445,10 @@ export function ErrorBoundary({ error }: { error: unknown }) {
     error: error instanceof Error ? error.message : String(error),
     stack: error instanceof Error ? error.stack : undefined
   });
-  
-  return new Response(
-    JSON.stringify({ 
-      error: "Internal server error",
-      message: error instanceof Error ? error.message : "An error occurred processing the request"
-    }),
-    {
-      status: 500,
-      headers: {
-        "Content-Type": "application/json; charset=utf-8",
-        "X-Content-Type-Options": "nosniff"
-      }
-    }
-  );
+
+  return {
+    error: "Internal server error",
+    message: error instanceof Error ? error.message : "An error occurred processing the request"
+  };
 }
 
