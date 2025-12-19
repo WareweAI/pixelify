@@ -32,15 +32,19 @@ export default async function handleRequest(
   const isResourceRouteByContentType = existingContentType?.includes("application/json") || 
                                       existingContentType?.includes("application/javascript");
   
-  // CRITICAL FIX: For resource routes, React Router v7 should use the Response body from the loader
-  // directly. However, renderToPipeableStream still renders React HTML. The solution is to ensure
-  // that React Router processes the route and uses the Response body, not React-rendered HTML.
-  // 
-  // React Router v7 should handle this automatically when a loader returns a Response object,
-  // but renderToPipeableStream is still being called. The route's default export returns null
-  // to prevent HTML rendering, and the loader returns Response.json() with proper headers.
-  // 
-  // The Content-Type header is already set by the route's headers function, so we preserve it.
+  // CRITICAL: For resource routes, React Router v7 should use the Response body from the loader
+  // directly. However, renderToPipeableStream still renders React HTML. The issue is that React
+  // Router processes routes BEFORE calling handleRequest, so the Response body should already be
+  // in the stream. But renderToPipeableStream is still rendering React HTML into the stream.
+  //
+  // The solution: For resource routes with JSON/JS Content-Type, we need to ensure React Router
+  // uses the Response body directly. Since we can't access the Response body from EntryContext,
+  // we rely on React Router v7's built-in handling. The route's default export returns null to
+  // prevent HTML rendering, and the loader returns Response.json() with proper headers.
+  //
+  // However, renderToPipeableStream still renders the root HTML structure. The real fix is that
+  // React Router v7 should intercept and use the Response body before calling renderToPipeableStream,
+  // but it seems like it's not doing that.
   
   if (!isResourceRoute && !isResourceRouteByContentType) {
     try {
@@ -74,7 +78,9 @@ export default async function handleRequest(
           const isResourceRouteFinal = isResourceRouteByPath || 
                                       finalContentType?.includes("application/json") || 
                                       finalContentType?.includes("application/javascript");
+          
           console.log(`[Entry Server] Processing request: ${requestUrl.pathname}, Content-Type: ${finalContentType || 'not set'}, Status: ${responseStatusCode}, isResourceRoute: ${isResourceRouteFinal}`);
+          
           if (isResourceRouteFinal) {
             console.log(`[Entry Server] Resource route detected - Content-Type preserved: ${finalContentType} for: ${requestUrl.pathname}`);
           } else if (!finalContentType) {
