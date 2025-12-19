@@ -7,6 +7,7 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "GET, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
   "X-Content-Type-Options": "nosniff",
+  "Content-Type": "application/json",
 };
 
 export async function loader({ request }: LoaderFunctionArgs) {

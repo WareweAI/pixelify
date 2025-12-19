@@ -1,31 +1,38 @@
 import { PrismaClient } from "@prisma/client";
 
 declare global {
-  // eslint-disable-next-line no-var
-  var prismaGlobal: PrismaClient;
+  var prisma: PrismaClient | undefined;
 }
+
+// Create Prisma client with fallback logic
+function createPrismaClient() {
+  // In development, use direct connection for better performance
+  let databaseUrl;
+  
+  if (process.env.NODE_ENV === "production") {
+    // Use pooled connection in production for better reliability
+    databaseUrl = process.env.DATABASE_URL;
+    console.log("[DB] Using pooled connection for production");
+  } else {
+    // Use direct connection in development
+    databaseUrl = process.env.DIRECT_URL || process.env.DATABASE_URL;
+    console.log("[DB] Using direct connection for development");
+  }
+  
+  return new PrismaClient({
+    log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
+    datasources: {
+      db: {
+        url: databaseUrl,
+      },
+    },
+  });
+}
+
+const prisma = global.prisma || createPrismaClient();
 
 if (process.env.NODE_ENV !== "production") {
-  if (!global.prismaGlobal) {
-    global.prismaGlobal = new PrismaClient({
-      log: ['error', 'warn'],
-      errorFormat: 'minimal',
-    });
-  }
+  global.prisma = prisma;
 }
-
-const prisma = global.prismaGlobal ?? new PrismaClient({
-  log: ['error', 'warn'],
-  errorFormat: 'minimal',
-});
-
-// Add connection retry logic with better error handling
-// Don't block on connection - let it fail gracefully per-request
-prisma.$connect().catch((error) => {
-  // Only log if it's not a connection error (those will be handled per-request)
-  if (error?.code !== 'P1001' && !error?.message?.includes("Can't reach database")) {
-    console.error("Database connection failed:", error);
-  }
-});
 
 export default prisma;
