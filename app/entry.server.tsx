@@ -32,6 +32,31 @@ export default async function handleRequest(
   const isResourceRouteByContentType = existingContentType?.includes("application/json") || 
                                       existingContentType?.includes("application/javascript");
   
+  // CRITICAL: For resource routes that return JSON/JS, React Router v7 should use the Response body
+  // directly. However, if we can access the loader Response from EntryContext, we should return it
+  // directly instead of calling renderToPipeableStream.
+  // 
+  // Try to access the loader Response from EntryContext.matches - if it exists and is a Response,
+  // return it directly without rendering React HTML.
+  if (isResourceRoute || isResourceRouteByContentType) {
+    try {
+      // Check if EntryContext has matches with loader Response
+      const matches = (reactRouterContext as any).matches;
+      if (matches && Array.isArray(matches)) {
+        for (const match of matches) {
+          // Check if this match has a loader Response
+          if (match.response && match.response instanceof Response) {
+            console.log(`[Entry Server] Found loader Response in EntryContext, returning directly for: ${url.pathname}`);
+            return match.response;
+          }
+        }
+      }
+    } catch (error) {
+      // EntryContext structure might be different, continue with normal flow
+      console.log(`[Entry Server] Could not access loader Response from EntryContext: ${error}`);
+    }
+  }
+  
   // CRITICAL FIX: For resource routes, React Router v7 should use the Response body from the loader
   // directly. However, renderToPipeableStream still renders React HTML from root.tsx, which overwrites
   // the JSON response. The issue is that React Router processes routes BEFORE calling handleRequest,
@@ -85,20 +110,9 @@ export default async function handleRequest(
                                       finalContentType?.includes("application/javascript");
           
           console.log(`[Entry Server] Processing request: ${requestUrl.pathname}, Content-Type: ${finalContentType || 'not set'}, Status: ${responseStatusCode}, isResourceRoute: ${isResourceRouteFinal}`);
-          
-          // CRITICAL: For resource routes, DO NOT set Content-Type to text/html
-          // The Content-Type is already set by the route's headers function or loader Response
-          // React Router v7 should use the Response body directly, but renderToPipeableStream
-          // still renders the root HTML structure from root.tsx, which overwrites the JSON response.
-          // The route component returns null, so React should not render HTML, but renderToPipeableStream
-          // still renders the root HTML structure.
           if (isResourceRouteFinal) {
-            // Preserve the Content-Type set by the route's headers function or loader Response
-            // DO NOT set Content-Type to text/html for resource routes
-            // React Router should use the Response body, not React-rendered HTML
             console.log(`[Entry Server] Resource route detected - Content-Type preserved: ${finalContentType} for: ${requestUrl.pathname}`);
           } else if (!finalContentType) {
-            // Only set HTML for non-resource routes that don't have Content-Type set
             responseHeaders.set("Content-Type", "text/html");
             console.log(`[Entry Server] Set Content-Type to text/html for: ${requestUrl.pathname}`);
           }
