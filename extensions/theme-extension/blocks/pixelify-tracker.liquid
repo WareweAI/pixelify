@@ -1,0 +1,178 @@
+{% comment %}
+  Pixelify Tracker - Theme App Extension (App Embed)
+  Injects tracking script into storefront
+{% endcomment %}
+
+{% if block.settings.enable_tracking %}
+<script>
+(function() {
+  'use strict';
+  
+  var SHOP = '{{ shop.permanent_domain }}';
+  var DEBUG = {{ block.settings.debug_mode | json }};
+  var TRACK_PAGEVIEWS = {{ block.settings.track_pageviews | json }};
+  var TRACK_CLICKS = {{ block.settings.track_clicks | json }};
+  var TRACK_SCROLL = {{ block.settings.track_scroll | json }};
+  var TRACK_FORMS = {{ block.settings.track_forms | json }};
+  var TRACK_ECOMMERCE = {{ block.settings.track_ecommerce | json }};
+  
+  var PROXY_URL = '/apps/pixel-api';
+  
+  if (DEBUG) console.log('[PixelifyTracker] Starting for shop:', SHOP);
+  
+  window.PIXEL_TRACKER_SETTINGS = {
+    trackPageviews: TRACK_PAGEVIEWS,
+    trackClicks: TRACK_CLICKS,
+    trackScroll: TRACK_SCROLL,
+    trackForms: TRACK_FORMS,
+    trackEcommerce: TRACK_ECOMMERCE,
+    debug: DEBUG
+  };
+  
+  fetch(PROXY_URL + '/get-pixel-id?shop=' + encodeURIComponent(SHOP))
+    .then(function(res) {
+      // Check if response is JSON
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        return res.text().then(function(text) {
+          if (DEBUG) {
+            console.error('[PixelifyTracker] Non-JSON response:', {
+              status: res.status,
+              statusText: res.statusText,
+              contentType: contentType,
+              body: text.substring(0, 200)
+            });
+          }
+          throw new Error('Server returned HTML instead of JSON. Status: ' + res.status);
+        });
+      }
+      if (!res.ok) {
+        return res.json().then(function(data) {
+          throw new Error(data.error || 'Request failed with status ' + res.status);
+        });
+      }
+      return res.json();
+    })
+    .then(function(data) {
+      if (data.error) {
+        console.warn('[PixelifyTracker] Error:', data.error);
+        return;
+      }
+      
+      window.PIXEL_TRACKER_ID = data.pixelId;
+      window.PIXEL_TRACKER_CONFIG = data.config || {};
+      window.PIXEL_TRACKER_CUSTOM_EVENTS = data.customEvents || [];
+      
+      if (DEBUG && data.customEvents) {
+        console.log('[PixelifyTracker] Custom events:', data.customEvents);
+      }
+      
+      var params = new URLSearchParams();
+      params.set('id', data.pixelId);
+      params.set('shop', SHOP);
+      
+      var script = document.createElement('script');
+      script.async = true;
+      script.src = PROXY_URL + '/pixel.js?' + params.toString();
+      script.onload = function() {
+        if (DEBUG) console.log('[PixelifyTracker] Script loaded');
+        
+        // Auto-setup custom events from app
+        if (data.customEvents && data.customEvents.length > 0) {
+          data.customEvents.forEach(function(evt) {
+            if (evt.selector && evt.eventType) {
+              document.querySelectorAll(evt.selector).forEach(function(el) {
+                el.addEventListener(evt.eventType, function() {
+                  if (window.PixelTracker && window.PixelTracker.track) {
+                    window.PixelTracker.track(evt.name, { selector: evt.selector });
+                    if (DEBUG) console.log('[PixelifyTracker] Custom event:', evt.name);
+                  }
+                });
+              });
+            }
+          });
+        }
+      };
+      document.head.appendChild(script);
+      
+      // Load Facebook Pixel if configured
+      if (data.metaPixelId && data.enabled) {
+        !function(f,b,e,v,n,t,s)
+        {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+        n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+        if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+        n.queue=[];t=b.createElement(e);t.async=!0;
+        t.src=v;s=b.getElementsByTagName(e)[0];
+        s.parentNode.insertBefore(t,s)}(window, document,'script',
+        'https://connect.facebook.net/en_US/fbevents.js');
+        fbq('init', data.metaPixelId);
+        fbq('track', 'PageView');
+      }
+    })
+    .catch(function(err) {
+      console.error('[PixelifyTracker] Error:', err);
+    });
+})();
+</script>
+{% endif %}
+
+{% schema %}
+{
+  "name": "Pixelify Tracker",
+  "target": "body",
+  "settings": [
+    {
+      "type": "header",
+      "content": "Tracking Settings"
+    },
+    {
+      "type": "checkbox",
+      "id": "enable_tracking",
+      "label": "Enable Tracking",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "debug_mode",
+      "label": "Debug Mode",
+      "default": false
+    },
+    {
+      "type": "header",
+      "content": "Events"
+    },
+    {
+      "type": "checkbox",
+      "id": "track_pageviews",
+      "label": "Page Views",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "track_clicks",
+      "label": "Clicks",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "track_scroll",
+      "label": "Scroll Depth",
+      "default": false
+    },
+    {
+      "type": "checkbox",
+      "id": "track_forms",
+      "label": "Form Submissions",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "track_ecommerce",
+      "label": "E-commerce Events",
+      "default": true
+    }
+  ]
+}
+{% endschema %}
+
+

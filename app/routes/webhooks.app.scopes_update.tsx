@@ -1,9 +1,13 @@
 import type { ActionFunctionArgs } from "react-router";
-import { authenticate } from "../shopify.server";
+import { getShopifyInstance } from "../shopify.server";
 import db from "../db.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-    const { payload, session, topic, shop } = await authenticate.webhook(request);
+    const shopify = getShopifyInstance();
+    if (!shopify?.authenticate) {
+      throw new Response("Shopify configuration not found", { status: 500 });
+    }
+    const { payload, session, topic, shop } = await shopify.authenticate.webhook(request);
     console.log(`Received ${topic} webhook for ${shop}`);
 
     const current = payload.current as string[];
@@ -20,7 +24,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return new Response();
 };
 
-// Server-only route - no client component needed
 export default function WebhookScopesUpdate() {
     return null;
 }

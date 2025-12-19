@@ -2,12 +2,11 @@
 
 client_id = "c73e202223c791156254879d10871b61"
 name = "pixelify"
-application_url = "https://example.com"
+application_url = "https://pixelify-red.vercel.app"
 embedded = true
 
 [build]
 automatically_update_urls_on_dev = true
-include_config_on_deploy = true
 
 [webhooks]
 api_version = "2026-01"
@@ -20,9 +19,31 @@ api_version = "2026-01"
   topics = [ "app/scopes_update" ]
   uri = "/webhooks/app/scopes_update"
 
+  [[webhooks.subscriptions]]
+  topics = [ "orders/create" ]
+  uri = "/webhooks/orders/create"
+
+  [[webhooks.subscriptions]]
+  topics = [ "checkouts/create" ]
+  uri = "/webhooks/checkouts/create"
+
+  [[webhooks.subscriptions]]
+  topics = [ "carts/create" ]
+  uri = "/webhooks/carts/create"
+
+  [[webhooks.subscriptions]]
+  topics = [ "orders/updated" ]
+  uri = "/webhooks/orders/create"
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "write_products"
+scopes = "read_analytics,read_customers,read_orders,read_products,read_checkouts,read_themes,write_script_tags"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://pixelify-red.vercel.app/auth" ]
+
+# App Proxy - allows theme extensions to call our API without CORS issues
+[app_proxy]
+url = "https://pixelify-red.vercel.app/apps/proxy"
+subpath = "pixel-api"
+prefix = "apps"

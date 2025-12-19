@@ -1,14 +1,16 @@
 import type { ActionFunctionArgs } from "react-router";
-import { authenticate } from "../shopify.server";
+import { getShopifyInstance } from "../shopify.server";
 import db from "../db.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shop, session, topic } = await authenticate.webhook(request);
+  const shopify = getShopifyInstance();
+  if (!shopify?.authenticate) {
+    throw new Response("Shopify configuration not found", { status: 500 });
+  }
+  const { shop, session, topic } = await shopify.authenticate.webhook(request);
 
   console.log(`Received ${topic} webhook for ${shop}`);
 
-  // Webhook requests can trigger multiple times and after an app has already been uninstalled.
-  // If this webhook already ran, the session may have been deleted previously.
   if (session) {
     await db.session.deleteMany({ where: { shop } });
   }
@@ -16,7 +18,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return new Response();
 };
 
-// Server-only route - no client component needed
-export default function WebhookUninstalled() {
+export default function WebhookAppUninstalled() {
     return null;
 }

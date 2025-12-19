@@ -1,0 +1,19 @@
+api_version = "2024-01"
+
+[[extensions]]
+
+uid = "pixelify-theme-extension-2025"
+
+type = "theme"
+name = "Pixelify Tracker"
+handle = "pixelify-tracker"
+
+[extensions.capabilities]
+network_access = true
+
+[[extensions.blocks]]
+type = "pixelify-tracker"
+name = "Pixelify Tracker"
+target = "@app"
+
+

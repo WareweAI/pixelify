@@ -55,8 +55,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 export default function App() {
   const { apiKey, appUrl } = useLoaderData<typeof loader>();
   // Fallback values for client-side
-  const installApiKey = apiKey || (typeof window !== "undefined" ? "" : process.env.SHOPIFY_API_KEY || "360b03eee304490f2fd1986a55ed0dd8");
-  const installAppUrl = appUrl || (typeof window !== "undefined" ? window.location.origin : "https://pixel-warewe.vercel.app");
+  const installApiKey = apiKey || (typeof window !== "undefined" ? "" : process.env.SHOPIFY_API_KEY || "c73e202223c791156254879d10871b61");
+  const installAppUrl = appUrl || (typeof window !== "undefined" ? window.location.origin : "https://pixelify-red.vercel.app");
   
   return (
     <div className={styles.container}>

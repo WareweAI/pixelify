@@ -1,0 +1,31 @@
+{
+  "pixelify_tracker": {
+    "name": "Pixelify Tracker",
+    "settings": {
+      "enable_tracking": {
+        "label": "Enable Pixelify Tracker"
+      },
+      "debug_mode": {
+        "label": "Debug Mode",
+        "info": "Show tracking events in browser console"
+      },
+      "track_pageviews": {
+        "label": "Track Page Views"
+      },
+      "track_clicks": {
+        "label": "Track Clicks"
+      },
+      "track_scroll": {
+        "label": "Track Scroll Depth"
+      },
+      "track_forms": {
+        "label": "Track Form Submissions"
+      },
+      "track_ecommerce": {
+        "label": "Track E-commerce Events"
+      }
+    }
+  }
+}
+
+

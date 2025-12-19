@@ -4,6 +4,12 @@ import { ServerRouter } from "react-router";
 import { createReadableStreamFromReadable } from "@react-router/node";
 import { type EntryContext } from "react-router";
 import { isbot } from "isbot";
+import { loadEnv } from "./lib/env-loader.server";
+
+// Load environment variables FIRST, before importing shopify.server
+loadEnv();
+
+// Now import shopify.server (which depends on env vars being loaded)
 import { addDocumentResponseHeaders } from "./shopify.server";
 
 export const streamTimeout = 5000;
@@ -14,7 +20,31 @@ export default async function handleRequest(
   responseHeaders: Headers,
   reactRouterContext: EntryContext
 ) {
-  addDocumentResponseHeaders(request, responseHeaders);
+  // Add Shopify headers if available
+  try {
+    addDocumentResponseHeaders(request, responseHeaders);
+  } catch (error) {
+    // Shopify not configured - this is fine for landing page on Vercel
+    console.log("Shopify headers not added - running in standalone mode");
+  }
+
+  // Ensure proper headers for Shopify embedding
+  responseHeaders.delete("X-Frame-Options"); // Remove any existing X-Frame-Options
+  
+  // Set CSP to allow embedding in Shopify admin and shop.app
+  // Shopify's addDocumentResponseHeaders may set conflicting headers, so we override after
+  const existingCSP = responseHeaders.get("Content-Security-Policy");
+  if (existingCSP && existingCSP.includes("frame-ancestors")) {
+    // If Shopify already set a CSP, we need to merge or replace it
+    // Remove the old one and set our own
+    responseHeaders.delete("Content-Security-Policy");
+  }
+  
+  // Allow embedding from Shopify admin, shop domains, and shop.app
+  responseHeaders.set(
+    "Content-Security-Policy", 
+    "frame-ancestors https://*.myshopify.com https://admin.shopify.com https://shop.app https://*.shop.app;"
+  );
   const userAgent = request.headers.get("user-agent");
   const callbackName = isbot(userAgent ?? '')
     ? "onAllReady"
