@@ -74,18 +74,10 @@ export default async function handleRequest(
           const isResourceRouteFinal = isResourceRouteByPath || 
                                       finalContentType?.includes("application/json") || 
                                       finalContentType?.includes("application/javascript");
-          
           console.log(`[Entry Server] Processing request: ${requestUrl.pathname}, Content-Type: ${finalContentType || 'not set'}, Status: ${responseStatusCode}, isResourceRoute: ${isResourceRouteFinal}`);
-          
-          // CRITICAL: For resource routes, DO NOT override Content-Type
-          // React Router v7 should use the Response body from the loader directly
-          // The Content-Type is already set by the route's headers function
           if (isResourceRouteFinal) {
-            // Preserve the Content-Type set by the route's headers function or loader Response
-            // React Router should use the Response body, not React-rendered HTML
             console.log(`[Entry Server] Resource route detected - Content-Type preserved: ${finalContentType} for: ${requestUrl.pathname}`);
           } else if (!finalContentType) {
-            // Only set HTML for non-resource routes that don't have Content-Type set
             responseHeaders.set("Content-Type", "text/html");
             console.log(`[Entry Server] Set Content-Type to text/html for: ${requestUrl.pathname}`);
           }
