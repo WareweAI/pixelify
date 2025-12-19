@@ -20,7 +20,18 @@ export default async function handleRequest(
   responseHeaders: Headers,
   reactRouterContext: EntryContext
 ) {
-  // Add Shopify headers if available
+  const url = new URL(request.url);
+  
+  // Skip HTML rendering and CSP for App Proxy/API routes (they return JSON/JS directly)
+  const isAppProxyRoute = url.pathname.startsWith('/apps/proxy/') || 
+                          url.pathname.startsWith('/apps/pixel-api/') ||
+                          url.pathname.startsWith('/api/');
+  
+  // For API routes, React Router will handle the response from loader/action
+  // We still need to render through React Router, but it will use the Response from the route
+  // The key is that the route loader/action returns a Response directly, which React Router will use
+
+  // Add Shopify headers if available (for regular app routes)
   try {
     addDocumentResponseHeaders(request, responseHeaders);
   } catch (error) {
@@ -28,9 +39,15 @@ export default async function handleRequest(
     console.log("Shopify headers not added - running in standalone mode");
   }
 
-  // Ensure proper headers for Shopify embedding
+  // Ensure proper headers for Shopify embedding (only for app routes, not App Proxy)
+  // Set CSP AFTER Shopify headers to override any 'none' policy Shopify might set
   responseHeaders.delete("X-Frame-Options"); // Remove any existing X-Frame-Options
-  responseHeaders.set("Content-Security-Policy", "frame-ancestors https://*.myshopify.com https://admin.shopify.com;");
+  
+  // Only set CSP for non-API routes (API routes don't need CSP)
+  if (!isAppProxyRoute) {
+    // Override any CSP that Shopify might have set
+    responseHeaders.set("Content-Security-Policy", "frame-ancestors https://*.myshopify.com https://admin.shopify.com;");
+  }
   const userAgent = request.headers.get("user-agent");
   const callbackName = isbot(userAgent ?? '')
     ? "onAllReady"
@@ -47,7 +64,14 @@ export default async function handleRequest(
           const body = new PassThrough();
           const stream = createReadableStreamFromReadable(body);
 
-          responseHeaders.set("Content-Type", "text/html");
+          // For API routes, don't set Content-Type to HTML
+          // React Router will use the Response from loader/action which has the correct Content-Type
+          // Only set HTML Content-Type for non-API routes
+          if (!isAppProxyRoute) {
+            responseHeaders.set("Content-Type", "text/html");
+          }
+          // For API routes, the loader/action Response headers will take precedence
+          
           resolve(
             new Response(stream, {
               headers: responseHeaders,
@@ -66,7 +90,6 @@ export default async function handleRequest(
       }
     );
 
-    // Automatically timeout the React renderer after 6 seconds, which ensures
     // React has enough time to flush down the rejected boundary contents
     setTimeout(abort, streamTimeout + 1000);
   });
