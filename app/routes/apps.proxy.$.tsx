@@ -1,4 +1,4 @@
-// App Proxy handler - receives requests from /apps/pixel-api/* on the shop domain
+// App Proxy handler - receives requests from /apps/proxy/* on the shop domain
 // This avoids CORS issues because requests come from the same origin (shop domain)
 import type { LoaderFunctionArgs, ActionFunctionArgs, HeadersFunction } from "react-router";
 import prisma from "../db.server";

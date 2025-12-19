@@ -62,19 +62,121 @@ export default async function handleRequest(
     ? "onAllReady"
     : "onShellReady";
 
-  return new Promise((resolve, reject) => {
-    // For resource routes, render a minimal component that doesn't include HTML structure
-    const isResourceRoute = url.pathname.startsWith("/apps/proxy/") ||
-                           url.pathname.startsWith("/apps/pixel-api/") ||
-                           url.pathname.startsWith("/api/") ||
-                           existingContentType?.includes("application/json") ||
-                           existingContentType?.includes("application/javascript");
+  const isApiRoute = url.pathname.startsWith("/apps/proxy/") ||
+                    url.pathname.startsWith("/apps/pixel-api/") ||
+                    url.pathname.startsWith("/api/");
 
-    const componentToRender = isResourceRoute ? (
-      // For resource routes, render nothing to prevent HTML output
-      <div></div>
-    ) : (
-      // For normal routes, render the full React tree
+  if (isApiRoute) {
+    console.log(`[Entry Server] API route detected: ${url.pathname}`);
+
+    // Debug: Log the entire EntryContext structure
+    try {
+      console.log(`[Entry Server] EntryContext keys:`, Object.keys(reactRouterContext as any));
+      console.log(`[Entry Server] EntryContext structure:`, JSON.stringify(reactRouterContext, null, 2));
+    } catch (e) {
+      console.log(`[Entry Server] Could not stringify EntryContext: ${e}`);
+    }
+
+    // Try to get the Response from React Router's context
+    try {
+      const ctx = reactRouterContext as any;
+
+      // Check all possible locations for the data
+      if (ctx.matches && Array.isArray(ctx.matches)) {
+        console.log(`[Entry Server] Found ${ctx.matches.length} matches`);
+        for (const match of ctx.matches) {
+          console.log(`[Entry Server] Match keys:`, Object.keys(match));
+          if (match.response && match.response instanceof Response) {
+            console.log(`[Entry Server] Found Response in match for: ${url.pathname}`);
+            return match.response;
+          }
+          if (match.data) {
+            console.log(`[Entry Server] Found data in match:`, typeof match.data);
+            if (match.data instanceof Response) {
+              return match.data;
+            }
+            if (typeof match.data === 'object') {
+              return Response.json(match.data, {
+                headers: responseHeaders,
+                status: responseStatusCode,
+              });
+            }
+          }
+        }
+      }
+
+      // Check loaderData (for GET requests)
+      if (ctx.loaderData) {
+        console.log(`[Entry Server] Found loaderData:`, Object.keys(ctx.loaderData));
+        for (const [routeId, data] of Object.entries(ctx.loaderData)) {
+          console.log(`[Entry Server] loaderData[${routeId}]:`, typeof data);
+          if (data instanceof Response) {
+            console.log(`[Entry Server] Found Response in loaderData for: ${url.pathname}`);
+            return data;
+          }
+          if (data && typeof data === 'object') {
+            console.log(`[Entry Server] Found object in loaderData, returning as JSON for: ${url.pathname}`);
+            return Response.json(data, {
+              headers: responseHeaders,
+              status: responseStatusCode,
+            });
+          }
+        }
+      }
+
+      // Check actionData (for POST/PUT/DELETE requests)
+      if (ctx.actionData) {
+        console.log(`[Entry Server] Found actionData:`, Object.keys(ctx.actionData));
+        for (const [routeId, data] of Object.entries(ctx.actionData)) {
+          console.log(`[Entry Server] actionData[${routeId}]:`, typeof data);
+          if (data instanceof Response) {
+            console.log(`[Entry Server] Found Response in actionData for: ${url.pathname}`);
+            return data;
+          }
+          if (data && typeof data === 'object') {
+            console.log(`[Entry Server] Found object in actionData, returning as JSON for: ${url.pathname}`);
+            return Response.json(data, {
+              headers: responseHeaders,
+              status: responseStatusCode,
+            });
+          }
+        }
+      }
+
+      // Check other possible locations
+      if (ctx.data) {
+        console.log(`[Entry Server] Found ctx.data:`, typeof ctx.data);
+        if (ctx.data instanceof Response) {
+          return ctx.data;
+        }
+        if (typeof ctx.data === 'object') {
+          return Response.json(ctx.data, {
+            headers: responseHeaders,
+            status: responseStatusCode,
+          });
+        }
+      }
+
+      console.log(`[Entry Server] No Response/data found in context for: ${url.pathname}`);
+    } catch (error) {
+      console.log(`[Entry Server] Error accessing context: ${error}`);
+    }
+
+    // Fallback: return a proper JSON error response
+    console.log(`[Entry Server] Returning fallback JSON error for: ${url.pathname}`);
+    return Response.json({
+      error: "Service temporarily unavailable",
+      message: "Please try again later"
+    }, {
+      status: 503,
+      headers: {
+        "Content-Type": "application/json; charset=utf-8"
+      }
+    });
+  }
+
+  return new Promise((resolve, reject) => {
+    const componentToRender = (
       <ServerRouter
         context={reactRouterContext}
         url={request.url}
@@ -89,18 +191,86 @@ export default async function handleRequest(
           const stream = createReadableStreamFromReadable(body);
 
           const requestUrl = new URL(request.url);
-          const isResourceRouteByPath = requestUrl.pathname.startsWith("/apps/proxy/") ||
-            requestUrl.pathname.startsWith("/apps/pixel-api/") ||
-            requestUrl.pathname.startsWith("/api/");
-          const finalContentType = responseHeaders.get("Content-Type");
-          const isResourceRouteFinal = isResourceRouteByPath ||
-            finalContentType?.includes("application/json") ||
-            finalContentType?.includes("application/javascript");
+          const isApiRouteFinal = requestUrl.pathname.startsWith("/apps/proxy/") ||
+                                 requestUrl.pathname.startsWith("/apps/pixel-api/") ||
+                                 requestUrl.pathname.startsWith("/api/");
 
-          console.log(`[Entry Server] Processing request: ${requestUrl.pathname}, Content-Type: ${finalContentType || 'not set'}, Status: ${responseStatusCode}, isResourceRoute: ${isResourceRouteFinal}`);
-          if (isResourceRouteFinal) {
-            console.log(`[Entry Server] Resource route detected - Content-Type preserved: ${finalContentType} for: ${requestUrl.pathname}`);
-          } else if (!finalContentType) {
+          console.log(`[Entry Server] Processing request: ${requestUrl.pathname}, Content-Type: ${responseHeaders.get("Content-Type") || 'not set'}, Status: ${responseStatusCode}, isApiRoute: ${isApiRouteFinal}`);
+
+          if (isApiRouteFinal) {
+            console.log(`[Entry Server] Checking context for API route: ${requestUrl.pathname}`);
+            try {
+              const ctx = reactRouterContext as any;
+
+              let responseFound = false;
+
+              // Check matches for Response objects
+              if (ctx.matches && Array.isArray(ctx.matches)) {
+                console.log(`[Entry Server] Found ${ctx.matches.length} matches`);
+                for (const match of ctx.matches) {
+                  console.log(`[Entry Server] Match:`, { hasResponse: !!match.response, responseType: typeof match.response, matchKeys: Object.keys(match) });
+                  if (match.response && match.response instanceof Response) {
+                    console.log(`[Entry Server] Found Response in match, using it directly`);
+                    resolve(match.response);
+                    responseFound = true;
+                    return;
+                  }
+                }
+              }
+
+              // Check loaderData for Response or data
+              if (ctx.loaderData) {
+                console.log(`[Entry Server] Found loaderData keys:`, Object.keys(ctx.loaderData));
+                for (const [routeId, data] of Object.entries(ctx.loaderData)) {
+                  console.log(`[Entry Server] loaderData[${routeId}]:`, { type: typeof data, isResponse: data instanceof Response, hasData: !!data });
+                  if (data instanceof Response) {
+                    console.log(`[Entry Server] Found Response in loaderData`);
+                    resolve(data);
+                    responseFound = true;
+                    return;
+                  }
+                  if (data && typeof data === 'object') {
+                    console.log(`[Entry Server] Found data in loaderData, creating JSON response`);
+                    resolve(Response.json(data, {
+                      headers: responseHeaders,
+                      status: responseStatusCode,
+                    }));
+                    responseFound = true;
+                    return;
+                  }
+                }
+              }
+
+              // Check actionData for Response or data
+              if (ctx.actionData) {
+                console.log(`[Entry Server] Found actionData keys:`, Object.keys(ctx.actionData));
+                for (const [routeId, data] of Object.entries(ctx.actionData)) {
+                  console.log(`[Entry Server] actionData[${routeId}]:`, { type: typeof data, isResponse: data instanceof Response, hasData: !!data });
+                  if (data instanceof Response) {
+                    console.log(`[Entry Server] Found Response in actionData`);
+                    resolve(data);
+                    responseFound = true;
+                    return;
+                  }
+                  if (data && typeof data === 'object') {
+                    console.log(`[Entry Server] Found data in actionData, creating JSON response`);
+                    resolve(Response.json(data, {
+                      headers: responseHeaders,
+                      status: responseStatusCode,
+                    }));
+                    responseFound = true;
+                    return;
+                  }
+                }
+              }
+
+              console.log(`[Entry Server] No data found in context for API route: ${requestUrl.pathname}, falling back to stream`);
+            } catch (error) {
+              console.log(`[Entry Server] Error checking context: ${error}`);
+            }
+          }
+
+          if (!isApiRouteFinal && !responseHeaders.get("Content-Type")) {
             responseHeaders.set("Content-Type", "text/html");
             console.log(`[Entry Server] Set Content-Type to text/html for: ${requestUrl.pathname}`);
           }

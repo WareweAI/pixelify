@@ -16,7 +16,7 @@
   var TRACK_FORMS = {{ block.settings.track_forms | json }};
   var TRACK_ECOMMERCE = {{ block.settings.track_ecommerce | json }};
   
-  var PROXY_URL = '/apps/pixel-api';
+  var PROXY_URL = '/apps/proxy';
   
   if (DEBUG) console.log('[PixelifyTracker] Starting for shop:', SHOP);
   
@@ -31,7 +31,6 @@
   
   fetch(PROXY_URL + '/get-pixel-id?shop=' + encodeURIComponent(SHOP))
     .then(function(res) {
-      // Check if response is JSON
       const contentType = res.headers.get('content-type') || '';
       if (!contentType.includes('application/json')) {
         return res.text().then(function(text) {
