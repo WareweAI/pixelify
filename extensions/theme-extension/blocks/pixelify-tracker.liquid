@@ -43,12 +43,18 @@
               body: text.substring(0, 200)
             });
           }
+          // Try to extract error from HTML if it's an error page
+          if (text.includes('Database temporarily unavailable') || text.includes('503')) {
+            throw new Error('Database temporarily unavailable. Please try again later.');
+          }
           throw new Error('Server returned HTML instead of JSON. Status: ' + res.status);
         });
       }
       if (!res.ok) {
         return res.json().then(function(data) {
           throw new Error(data.error || 'Request failed with status ' + res.status);
+        }).catch(function() {
+          throw new Error('Request failed with status ' + res.status);
         });
       }
       return res.json();
@@ -111,6 +117,42 @@
     })
     .catch(function(err) {
       console.error('[PixelifyTracker] Error:', err);
+      
+      // Retry once after 2 seconds if it's a temporary error
+      if (err.message.includes('Database temporarily unavailable') || err.message.includes('503') || err.message.includes('HTML instead of JSON')) {
+        if (DEBUG) console.log('[PixelifyTracker] Retrying in 2 seconds...');
+        setTimeout(function() {
+          fetch(PROXY_URL + '/get-pixel-id?shop=' + encodeURIComponent(SHOP))
+            .then(function(res) {
+              const contentType = res.headers.get('content-type') || '';
+              if (!contentType.includes('application/json')) {
+                throw new Error('Still receiving HTML response');
+              }
+              return res.json();
+            })
+            .then(function(data) {
+              if (data.pixelId) {
+                window.PIXEL_TRACKER_ID = data.pixelId;
+                window.PIXEL_TRACKER_CONFIG = data.config || {};
+                window.PIXEL_TRACKER_CUSTOM_EVENTS = data.customEvents || [];
+                if (DEBUG) console.log('[PixelifyTracker] Retry successful');
+                
+                // Load the pixel script after successful retry
+                var params = new URLSearchParams();
+                params.set('id', data.pixelId);
+                params.set('shop', SHOP);
+                
+                var script = document.createElement('script');
+                script.async = true;
+                script.src = PROXY_URL + '/pixel.js?' + params.toString();
+                document.head.appendChild(script);
+              }
+            })
+            .catch(function(retryErr) {
+              if (DEBUG) console.error('[PixelifyTracker] Retry failed:', retryErr);
+            });
+        }, 2000);
+      }
     });
 })();
 </script>

@@ -18,7 +18,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     if (path === "get-pixel-id" || path.startsWith("get-pixel-id")) {
       const shopDomain = url.searchParams.get("shop");
     
-    if (!shopDomain) {
+      if (!shopDomain) {
       return Response.json({ error: "Missing shop parameter" }, { 
         status: 400,
         headers: { "Content-Type": "application/json" }
@@ -101,7 +101,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
         headers: { "Content-Type": "application/json" }
       });
     }
-  }
+    }
 
   // Route: /apps/pixel-api/pixel.js
   if (path === "pixel.js" || path.startsWith("pixel.js")) {

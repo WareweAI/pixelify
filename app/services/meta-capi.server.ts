@@ -155,7 +155,7 @@ export async function forwardToMeta(params: {
   const metaEvent: MetaEventData = {
     event_name: mapEventName(event.eventName),
     event_time: event.eventTime,
-    event_id: `evt_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    event_id: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
     event_source_url: event.eventSourceUrl,
     action_source: "website",
     user_data: {
@@ -357,7 +357,7 @@ export function mapToMetaEvent(eventData: {
   return {
     event_name: metaEventName,
     event_time: Math.floor(Date.now() / 1000),
-    event_id: `evt_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    event_id: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
     event_source_url: eventData.url || undefined,
     action_source: "website",
     user_data: userData,

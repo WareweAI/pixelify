@@ -16,7 +16,7 @@ if (
   delete process.env.HOST;
 }
 
-const host = new URL(process.env.SHOPIFY_APP_URL || "https://pixel-warewe.vercel.app")
+const host = new URL(process.env.SHOPIFY_APP_URL || "https://pixelify-red.vercel.app/")
   .hostname;
 let hmrConfig;
 
@@ -34,6 +34,11 @@ if (host === "localhost") {
     port: parseInt(process.env.FRONTEND_PORT || "8002"),
     clientPort: 443,
   };
+}
+
+// Add hot reload port for theme development
+if (process.env.NODE_ENV === "development") {
+  process.env.SHOPIFY_CLI_THEME_TOKEN = process.env.SHOPIFY_CLI_THEME_TOKEN || "development";
 }
 
 export default defineConfig({

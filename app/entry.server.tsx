@@ -38,7 +38,7 @@ export default async function handleRequest(
   if (!isAppProxyRoute) {
     responseHeaders.delete("X-Frame-Options"); // Remove any existing X-Frame-Options
     // Override any CSP that Shopify might have set (including 'none' policies)
-    responseHeaders.set("Content-Security-Policy", "frame-ancestors https://*.myshopify.com https://admin.shopify.com;");
+    responseHeaders.set("Content-Security-Policy", "frame-ancestors https://*.myshopify.com https://admin.shopify.com https://shop.app;");
   }
   
   const userAgent = request.headers.get("user-agent");
