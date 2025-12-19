@@ -1,11 +1,14 @@
 import type { LoaderFunctionArgs, ActionFunctionArgs, HeadersFunction } from "react-router";
-
-
 import prisma from "../db.server";
 import { parseUserAgent, getDeviceType } from "../services/device.server";
 import { getGeoData } from "../services/geo.server";
 
-
+// Ensure all responses from this route are JSON (resource route)
+export const headers: HeadersFunction = () => {
+  return {
+    "Content-Type": "application/json; charset=utf-8",
+  };
+};
 
 // Handle GET requests (e.g., get-pixel-id)
 export async function loader({ request, params }: LoaderFunctionArgs) {
