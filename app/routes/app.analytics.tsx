@@ -29,7 +29,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shop = session.shop;
 
   const user = await prisma.user.findUnique({
-    where: { storeUrl: shop },
+    where: { email: shop },
   });
 
   if (!user) {

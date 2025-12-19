@@ -1,7 +1,7 @@
 // Apps management API - Thin HTTP handler
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
-import { getUserApps, createAppWithSettings } from '../services/app.service.server';
-import { ValidationError, DatabaseError } from '../lib/errors.server';
+import { getUserApps, createAppWithSettings } from '~/services/app.service.server';
+import { ValidationError, DatabaseError } from '~/lib/errors.server';
 
 // GET - List apps for a user
 export async function loader({ request }: LoaderFunctionArgs) {

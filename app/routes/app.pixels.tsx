@@ -33,7 +33,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shop = session.shop;
 
   const user = await prisma.user.findUnique({
-    where: { storeUrl: shop },
+    where: { email: shop },
   });
 
   if (!user) {
@@ -65,7 +65,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
 
-  const user = await prisma.user.findUnique({ where: { storeUrl: shop } });
+  const user = await prisma.user.findUnique({ where: { email: shop } });
   if (!user) {
     return { error: "User not found" };
   }

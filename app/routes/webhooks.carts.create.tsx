@@ -1,26 +1,31 @@
-// Webhook: carts/create - Server-side AddToCart tracking (adblocker-proof)
+// Webhook: carts/create - Server-side AddToCart tracking
 import type { ActionFunctionArgs } from "react-router";
-import { getShopifyInstance } from "../shopify.server";
-import prisma from "../db.server";
-import { forwardToMeta } from "../services/meta-capi.server";
+import prisma from "~/db.server";
+import crypto from "crypto";
+
+function verifyWebhook(body: string, hmac: string | null): boolean {
+  if (!hmac) return false;
+  const secret = process.env.SHOPIFY_API_SECRET || "";
+  const hash = crypto.createHmac("sha256", secret).update(body, "utf8").digest("base64");
+  return crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(hmac));
+}
 
 export async function action({ request }: ActionFunctionArgs) {
-  const shopify = getShopifyInstance();
-  
-  if (!shopify?.authenticate) {
-    console.error("[Webhook] Shopify not configured");
-    return new Response("Service unavailable", { status: 503 });
+  const hmac = request.headers.get("x-shopify-hmac-sha256");
+  const shop = request.headers.get("x-shopify-shop-domain");
+  const rawBody = await request.text();
+
+  console.log(`[Webhook] carts/create from ${shop}`);
+
+  if (process.env.NODE_ENV === "production" && !verifyWebhook(rawBody, hmac)) {
+    return new Response("Unauthorized", { status: 401 });
   }
 
   try {
-    // Use Shopify's built-in webhook authentication
-    const { payload, shop, topic } = await shopify.authenticate.webhook(request);
-    const cart = payload as any;
-
-    console.log(`[Webhook] ${topic} from ${shop}`);
+    const cart = JSON.parse(rawBody);
 
     const user = await prisma.user.findUnique({
-      where: { storeUrl: shop || "" },
+      where: { email: shop || "" },
     });
 
     if (!user) return new Response("OK", { status: 200 });
@@ -55,37 +60,6 @@ export async function action({ request }: ActionFunctionArgs) {
     }
 
     console.log(`[Webhook] AddToCart tracked: ${items.length} items`);
-
-    // Forward to Meta CAPI if enabled
-    if (app.settings?.metaPixelEnabled && app.settings?.metaVerified && app.settings?.metaAccessToken && items.length > 0) {
-      try {
-        const firstItem = items[0];
-        await forwardToMeta({
-          pixelId: app.settings.metaPixelId!,
-          accessToken: app.settings.metaAccessToken!,
-          testEventCode: app.settings.metaTestEventCode || undefined,
-          event: {
-            eventName: "AddToCart",
-            eventTime: Math.floor(Date.now() / 1000),
-            actionSource: "website",
-            userData: {
-              clientIpAddress: cart.browser_ip || null,
-              clientUserAgent: cart.user_agent || null,
-            },
-            customData: {
-              currency: cart.currency || "USD",
-              value: parseFloat(firstItem.price || "0"),
-              content_ids: [firstItem.product_id?.toString()],
-              contents: [{ id: firstItem.product_id?.toString(), quantity: firstItem.quantity }],
-            },
-          },
-        });
-        console.log("[Webhook] Forwarded AddToCart to Meta CAPI");
-      } catch (metaErr) {
-        console.error("[Webhook] Meta CAPI error:", metaErr);
-      }
-    }
-
     return new Response("OK", { status: 200 });
   } catch (error) {
     console.error("[Webhook] Error:", error);

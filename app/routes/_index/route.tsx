@@ -1,6 +1,6 @@
 import type { LoaderFunctionArgs } from "react-router";
-import { redirect, useLoaderData } from "react-router";
-import styles from "./styles.module.css";
+import { redirect } from "react-router";
+import styles from "./style.module.css";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
@@ -40,24 +40,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   if (isEmbeddedContext) {
     // Preserve any query parameters that might be needed for authentication
     const searchParams = url.searchParams.toString();
-    const redirectUrl = searchParams ? `/app?${searchParams}` : "/app";
+    const redirectUrl = searchParams ? `/app/dashboard?${searchParams}` : "/app/dashboard";
     return redirect(redirectUrl);
   }
   
   // Otherwise show public landing page
-  // Get API key for install URL
-  const apiKey = process.env.SHOPIFY_API_KEY || "";
-  const appUrl = process.env.SHOPIFY_APP_URL || "";
-  
-  return { apiKey, appUrl };
+  return null;
 };
 
 export default function App() {
-  const { apiKey, appUrl } = useLoaderData<typeof loader>();
-  // Fallback values for client-side
-  const installApiKey = apiKey || (typeof window !== "undefined" ? "" : process.env.SHOPIFY_API_KEY || "c73e202223c791156254879d10871b61");
-  const installAppUrl = appUrl || (typeof window !== "undefined" ? window.location.origin : "https://pixelify-red.vercel.app");
-  
   return (
     <div className={styles.container}>
       {/* Navbar */}
@@ -154,8 +145,7 @@ export default function App() {
                     }
                     
                     // Redirect to their specific store's app installation page
-                    const redirectUri = `${installAppUrl}/auth`;
-                    const installUrl = `https://${shopDomain}.myshopify.com/admin/oauth/authorize?client_id=${installApiKey}&scope=read_analytics,read_customers,read_orders,read_products,read_checkouts,read_themes&redirect_uri=${encodeURIComponent(redirectUri)}&state=${Date.now()}`;
+                    const installUrl = `https://${shopDomain}.myshopify.com/admin/oauth/authorize?client_id=360b03eee304490f2fd1986a55ed0dd8&scope=read_analytics,read_customers,read_orders,read_products,read_checkouts,read_themes&redirect_uri=https://pixel-warewe.vercel.app/auth&state=${Date.now()}`;
                     window.open(installUrl, '_blank');
                   } else {
                     alert('Please enter your Shopify store domain');

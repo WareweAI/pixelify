@@ -3,9 +3,8 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useFetcher, useSearchParams } from "react-router";
 import { getShopifyInstance } from "../shopify.server";
 import prisma from "../db.server";
-import { generateRandomPassword } from "../lib/crypto.server";
-import { createAppWithSettings, renameApp, deleteAppWithData } from "../services/app.service.server";
-import { validateMetaCredentials } from "../services/meta-capi.server";
+import { generateRandomPassword } from "~/lib/crypto.server";
+import { createAppWithSettings, renameApp, deleteAppWithData } from "~/services/app.service.server";
 import {
   Page,
   Card,
@@ -23,7 +22,7 @@ import {
   Divider,
   Badge,
 } from "@shopify/polaris";
-// Icons removed due to build issues - using text labels instead
+import { CheckIcon, ConnectIcon } from "@shopify/polaris-icons";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopify = getShopifyInstance();
@@ -37,13 +36,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shop = session.shop;
 
   let user = await prisma.user.findUnique({
-    where: { storeUrl: shop },
+    where: { email: shop },
   });
 
   if (!user) {
     user = await prisma.user.create({
       data: {
-        storeUrl: shop,
+        email: shop,
         password: generateRandomPassword(),
       },
     });
@@ -129,7 +128,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
 
-  const user = await prisma.user.findUnique({ where: { storeUrl: shop } });
+  const user = await prisma.user.findUnique({ where: { email: shop } });
   if (!user) {
     return { error: "User not found" };
   }
@@ -148,11 +147,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     try {
-      // Use the proper validation method from meta-capi service (same as test connection)
-      const validationResult = await validateMetaCredentials(pixelId, accessToken);
+      // Validate the pixel exists and user has access
+      const validateResponse = await fetch(`https://graph.facebook.com/v18.0/${pixelId}?access_token=${accessToken}`);
+      const validateData = await validateResponse.json();
 
-      if (!validationResult.valid) {
-        return { error: validationResult.error || "Pixel validation failed" };
+      if (validateData.error) {
+        return { error: `Pixel validation failed: ${validateData.error.message}` };
       }
 
       // Create new pixel
@@ -194,24 +194,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const accessToken = formData.get("accessToken") as string;
     
     if (!pixelId || !accessToken) {
-      return { error: "Pixel ID (Dataset ID) and access token are required" };
+      return { error: "Pixel ID and access token are required" };
     }
 
     try {
-      // Use the proper validation method from meta-capi service
-      const result = await validateMetaCredentials(pixelId, accessToken);
+      // Validate the pixel exists and user has access
+      const response = await fetch(`https://graph.facebook.com/v18.0/${pixelId}?access_token=${accessToken}`);
+      const data = await response.json();
 
-      if (!result.valid) {
-        return { error: result.error || "Pixel validation failed" };
+      if (data.error) {
+        return { error: `Pixel validation failed: ${data.error.message}` };
       }
 
-      return { 
-        success: true, 
-        message: `✅ Pixel validated successfully! ${result.datasetName ? `Name: ${result.datasetName}` : 'Pixel ID is valid'}` 
-      };
-    } catch (error: any) {
+      return { success: true, message: `✅ Pixel validated successfully! Name: ${data.name || 'Unknown'}` };
+    } catch (error) {
       console.error("Error validating pixel:", error);
-      return { error: error.message || "Failed to validate pixel. Please check your Pixel ID (Dataset ID) and Access Token." };
+      return { error: "Failed to validate pixel. Please check your Pixel ID and Access Token." };
     }
   }
 
@@ -858,7 +856,7 @@ export default function DashboardPage() {
                   marginTop: "2px"
                 }}>
                   {currentStep > 1 ? (
-                    <Text as="span" variant="bodySm">✓</Text>
+                    <Icon source={CheckIcon} tone="base" />
                   ) : (
                     <Text as="span" variant="bodySm" tone={currentStep === 1 ? "base" : "subdued"}>
                       1
@@ -1062,6 +1060,7 @@ export default function DashboardPage() {
                       <Card background="bg-surface-secondary">
                         <BlockStack gap="300">
                           <InlineStack gap="200" blockAlign="center">
+                            <Icon source={ConnectIcon} tone="base" />
                             <Text variant="headingSm" as="h3">
                               Connect to Facebook
                             </Text>

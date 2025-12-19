@@ -1,6 +1,6 @@
 // Direct route for /apps/proxy/pixel.js
 import type { LoaderFunctionArgs } from "react-router";
-import prisma from "../db.server";
+import prisma from "~/db.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
@@ -159,10 +159,5 @@ export async function loader({ request }: LoaderFunctionArgs) {
       headers: { "Content-Type": "application/javascript" },
     });
   }
-}
-
-// Resource route - no UI component
-export default function PixelJsResource() {
-  return null;
 }
 

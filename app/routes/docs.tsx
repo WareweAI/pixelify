@@ -3,13 +3,13 @@ import { useLoaderData } from "react-router";
 
 export const meta: MetaFunction = () => {
   return [
-    { title: "Pixelify - Documentation" },
-    { name: "description", content: "Complete guide to implementing Pixelify analytics on your Shopify store" },
+    { title: "Pixel Tracker - Documentation" },
+    { name: "description", content: "Complete guide to implementing Pixel Tracker analytics on your Shopify store" },
   ];
 };
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const baseUrl = process.env.SHOPIFY_APP_URL || "https://pixelify-red.vercel.app";
+  const baseUrl = process.env.SHOPIFY_APP_URL || "https://pixel-warewe.vercel.app";
   return { baseUrl };
 };
 
@@ -252,7 +252,7 @@ export default function DocsPage() {
             </svg>
             Documentation
           </div>
-          <h1 className="docs-title">Pixelify</h1>
+          <h1 className="docs-title">Pixel Tracker</h1>
           <p className="docs-subtitle">
             Complete guide to implementing analytics and tracking on your Shopify store
           </p>
@@ -277,7 +277,7 @@ export default function DocsPage() {
         <section className="section" id="quick-start">
           <h2 className="section-title">Quick Start</h2>
           <p className="section-intro">
-            Get started with Pixelify in under 5 minutes.
+            Get started with Pixel Tracker in under 5 minutes.
           </p>
 
           <div className="info-card">
@@ -285,7 +285,7 @@ export default function DocsPage() {
               <span className="step-number">1</span>
               Install the App
             </h3>
-            <p>Install Pixelify from the Shopify App Store.</p>
+            <p>Install Pixel Tracker from the Shopify App Store.</p>
           </div>
 
           <div className="info-card">
@@ -294,7 +294,7 @@ export default function DocsPage() {
               Enable Theme Extension
             </h3>
             <p>
-              Go to <strong>Online Store → Themes → Customize</strong>, then enable "Pixelify" in App Embeds.
+              Go to <strong>Online Store → Themes → Customize</strong>, then enable "Pixel Tracker" in App Embeds.
             </p>
           </div>
 
@@ -307,7 +307,7 @@ export default function DocsPage() {
           </div>
 
           <div className="note">
-            <strong>Done!</strong> Pixelify will automatically start capturing events.
+            <strong>Done!</strong> Pixel Tracker will automatically start capturing events.
           </div>
         </section>
 
@@ -323,7 +323,7 @@ export default function DocsPage() {
               <li style={{marginBottom: 8}}>Go to <strong>Online Store → Themes</strong></li>
               <li style={{marginBottom: 8}}>Click <strong>Customize</strong></li>
               <li style={{marginBottom: 8}}>Open <strong>App embeds</strong></li>
-              <li style={{marginBottom: 8}}>Toggle on <strong>Pixelify</strong></li>
+              <li style={{marginBottom: 8}}>Toggle on <strong>Pixel Tracker</strong></li>
               <li>Click <strong>Save</strong></li>
             </ol>
           </div>
@@ -423,7 +423,7 @@ export default function DocsPage() {
             <h3 className="info-card-title">Track Custom Event</h3>
             <div className="code-block">
               <code>
-                <span className="keyword">window</span>.<span className="function">Pixelify</span>.<span className="function">track</span>(<span className="string">'button_click'</span>, {'{'}<br/>
+                <span className="keyword">window</span>.<span className="function">PixelTracker</span>.<span className="function">track</span>(<span className="string">'button_click'</span>, {'{'}<br/>
                 &nbsp;&nbsp;button_name: <span className="string">'Subscribe'</span><br/>
                 {'}'});
               </code>
@@ -456,11 +456,11 @@ export default function DocsPage() {
             <div className="code-block">
               <code>
                 <span className="comment">// Track event</span><br/>
-                <span className="keyword">window</span>.<span className="function">Pixelify</span>.<span className="function">track</span>(eventName, properties)<br/><br/>
+                <span className="keyword">window</span>.<span className="function">PixelTracker</span>.<span className="function">track</span>(eventName, properties)<br/><br/>
                 <span className="comment">// Identify user</span><br/>
-                <span className="keyword">window</span>.<span className="function">Pixelify</span>.<span className="function">identify</span>(userId, traits)<br/><br/>
+                <span className="keyword">window</span>.<span className="function">PixelTracker</span>.<span className="function">identify</span>(userId, traits)<br/><br/>
                 <span className="comment">// Track page view</span><br/>
-                <span className="keyword">window</span>.<span className="function">Pixelify</span>.<span className="function">page</span>(pageName, properties)
+                <span className="keyword">window</span>.<span className="function">PixelTracker</span>.<span className="function">page</span>(pageName, properties)
               </code>
             </div>
           </div>
@@ -511,19 +511,9 @@ export default function DocsPage() {
         </section>
 
         <footer className="footer-note">
-          Pixelify • Warewe Consultancy Private Limited • © 2025
+          Pixel Tracker • Warewe Consultancy Private Limited • © 2025
         </footer>
       </div>
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-

@@ -1,5 +1,5 @@
 import type { LoaderFunctionArgs } from "react-router";
-import db from "../db.server";
+import db from "~/db.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);

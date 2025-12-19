@@ -1,13 +1,12 @@
 // API endpoint to get pixel ID for a shop
 import type { LoaderFunctionArgs } from "react-router";
-import prisma from "../db.server";
+import prisma from "~/db.server";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
   "X-Content-Type-Options": "nosniff",
-  "Content-Type": "application/json",
 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -29,7 +28,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   try {
     // Find user by shop domain
     const user = await prisma.user.findUnique({
-      where: { storeUrl: shop },
+      where: { email: shop },
       include: {
         apps: {
           where: {
@@ -50,7 +49,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       // Try to find any app for this shop
       const anyApp = await prisma.app.findFirst({
         where: {
-          user: { storeUrl: shop },
+          user: { email: shop },
         },
         include: { settings: true },
         orderBy: { createdAt: "desc" },

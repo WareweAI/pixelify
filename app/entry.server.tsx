@@ -28,70 +28,9 @@ export default async function handleRequest(
     console.log("Shopify headers not added - running in standalone mode");
   }
 
-  // Ensure loaderData is available at top level for API route handling
-  if (!reactRouterContext.loaderData && reactRouterContext.staticHandlerContext?.loaderData) {
-    reactRouterContext.loaderData = reactRouterContext.staticHandlerContext.loaderData;
-  }
-
-  // Handle API routes that return data
-  const url = new URL(request.url);
-  if (url.pathname.startsWith('/apps/proxy')) {
-    const routeId = 'routes/apps.proxy.' + '
-
   // Ensure proper headers for Shopify embedding
   responseHeaders.delete("X-Frame-Options"); // Remove any existing X-Frame-Options
-  responseHeaders.set("Content-Security-Policy", "frame-ancestors https://*.myshopify.com https://admin.shopify.com https://shop.app;");
-  const userAgent = request.headers.get("user-agent");
-  const callbackName = isbot(userAgent ?? '')
-    ? "onAllReady"
-    : "onShellReady";
-
-  return new Promise((resolve, reject) => {
-    const { pipe, abort } = renderToPipeableStream(
-      <ServerRouter
-        context={reactRouterContext}
-        url={request.url}
-      />,
-      {
-        [callbackName]: () => {
-          const body = new PassThrough();
-          const stream = createReadableStreamFromReadable(body);
-
-          responseHeaders.set("Content-Type", "text/html");
-          resolve(
-            new Response(stream, {
-              headers: responseHeaders,
-              status: responseStatusCode,
-            })
-          );
-          pipe(body);
-        },
-        onShellError(error) {
-          reject(error);
-        },
-        onError(error) {
-          responseStatusCode = 500;
-          console.error(error);
-        },
-      }
-    );
-
-    // Automatically timeout the React renderer after 6 seconds, which ensures
-    setTimeout(abort, streamTimeout + 1000);
-  });
-};
-    const data = reactRouterContext.loaderData?.[routeId] || reactRouterContext.staticHandlerContext?.loaderData?.[routeId];
-    if (data) {
-      return new Response(JSON.stringify(data), {
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        status: reactRouterContext.staticHandlerContext?.statusCode || 200,
-      });
-    }
-  }
-
-  // Ensure proper headers for Shopify embedding
-  responseHeaders.delete("X-Frame-Options"); // Remove any existing X-Frame-Options
-  responseHeaders.set("Content-Security-Policy", "frame-ancestors https://*.myshopify.com https://admin.shopify.com https://shop.app;");
+  responseHeaders.set("Content-Security-Policy", "frame-ancestors https://*.myshopify.com https://admin.shopify.com;");
   const userAgent = request.headers.get("user-agent");
   const callbackName = isbot(userAgent ?? '')
     ? "onAllReady"

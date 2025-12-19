@@ -1,6 +1,6 @@
 // Visitors API endpoint
 import type { LoaderFunctionArgs } from 'react-router';
-import prisma from '../db.server';
+import prisma from '~/db.server';
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
@@ -11,6 +11,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
   
   try {
+    // Find app
     const app = await prisma.app.findUnique({
       where: { appId },
       select: { id: true },
@@ -56,7 +57,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       where: { appId: app.id },
       select: { fingerprint: true },
       distinct: ['fingerprint'],
-    }).then((r: any) => r.length);
+    }).then(r => r.length);
 
     // Calculate average duration
     const sessionsWithDuration = await prisma.analyticsSession.findMany({
@@ -66,7 +67,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
     const avgDuration = sessionsWithDuration.length > 0
       ? Math.floor(
-          sessionsWithDuration.reduce((sum: number, s: { startTime: Date; lastSeen: Date }) => {
+          sessionsWithDuration.reduce((sum, s) => {
             const duration = (new Date(s.lastSeen).getTime() - new Date(s.startTime).getTime()) / 1000;
             return sum + duration;
           }, 0) / sessionsWithDuration.length
@@ -86,7 +87,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       _count: true,
       orderBy: { _count: { country: 'desc' } },
       take: 10,
-    }).then((results: any) => results.map((r: any) => ({ country: r.country!, count: r._count })));
+    }).then(results => results.map(r => ({ country: r.country!, count: r._count })));
 
     // Device breakdown
     const deviceBreakdown = await prisma.analyticsSession.groupBy({
@@ -94,7 +95,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       where: { appId: app.id, deviceType: { not: null } },
       _count: true,
       orderBy: { _count: { deviceType: 'desc' } },
-    }).then((results: any) => results.map((r: any) => ({ type: r.deviceType!, count: r._count })));
+    }).then(results => results.map(r => ({ type: r.deviceType!, count: r._count })));
 
     return Response.json({
       activeNow,

@@ -1,6 +1,6 @@
 // Core tracking service
 
-import prisma from '../db.server';
+import prisma from '~/db.server';
 import { getGeoData } from './geo.server';
 import { parseDevice, isBot } from './device.server';
 import { sendToMetaCAPI, mapToMetaEvent } from './meta-capi.server';

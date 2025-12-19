@@ -1,9 +1,9 @@
 // Track API endpoint - receives events from the pixel
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
-import prisma from '../db.server';
-import { parseUserAgent, getDeviceType } from '../services/device.server';
-import { getGeoData } from '../services/geo.server';
-import { forwardToMeta } from '../services/meta-capi.server';
+import prisma from '~/db.server';
+import { parseUserAgent, getDeviceType } from '~/services/device.server';
+import { getGeoData } from '~/services/geo.server';
+import { forwardToMeta } from '~/services/meta-capi.server';
 
 export async function action({ request }: ActionFunctionArgs) {
   console.log('[Track] Incoming request method:', request.method, 'URL:', request.url);

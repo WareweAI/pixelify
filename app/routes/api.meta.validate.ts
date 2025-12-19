@@ -1,7 +1,7 @@
 // Meta Pixel validation API endpoint
 import type { ActionFunctionArgs } from "react-router";
-import { validateMetaCredentials } from "../services/meta-capi.server";
-import prisma from "../db.server";
+import { validateMetaCredentials } from "~/services/meta-capi.server";
+import prisma from "~/db.server";
 
 // Server-only route - no client bundle needed
 export const clientLoader = undefined;

@@ -79,7 +79,7 @@ function initializeShopify() {
     return shopifyApp({
       apiKey: apiKey,
       apiSecretKey: apiSecret,
-      apiVersion: ApiVersion.October24,
+      apiVersion: ApiVersion.October25,
       scopes: process.env.SCOPES?.split(","),
       appUrl: appUrl,
       authPathPrefix: "/auth",
@@ -114,7 +114,7 @@ try {
 }
 
 export default shopifyInstance;
-export const apiVersion = ApiVersion.October24;
+export const apiVersion = ApiVersion.October25;
 
 // Lazy exports - these will re-initialize if needed
 export const addDocumentResponseHeaders = (request: Request, headers: Headers) => {

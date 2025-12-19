@@ -104,7 +104,7 @@ export async function validateMetaCredentials(
         let errorMessage = testData.error.message || "Invalid credentials";
 
         if (errorCode === 100) {
-          errorMessage = "Missing Permission (#100). Your access token needs 'ads_management' or 'business_management' permissions. To fix: 1) Go to Meta Events Manager > Settings > Conversions API, 2) Generate a new access token with proper permissions, 3) Ensure the token has access to this Pixel ID (Dataset ID).";
+          errorMessage = "Invalid Dataset ID (Pixel ID). Please check your Dataset ID from Meta Events Manager.";
         } else if (errorCode === 190) {
           errorMessage = "Invalid or expired access token. Please generate a new token from Meta Events Manager.";
         } else if (errorCode === 803 || errorCode === 104) {
@@ -155,7 +155,7 @@ export async function forwardToMeta(params: {
   const metaEvent: MetaEventData = {
     event_name: mapEventName(event.eventName),
     event_time: event.eventTime,
-    event_id: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
+    event_id: `evt_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     event_source_url: event.eventSourceUrl,
     action_source: "website",
     user_data: {
@@ -357,7 +357,7 @@ export function mapToMetaEvent(eventData: {
   return {
     event_name: metaEventName,
     event_time: Math.floor(Date.now() / 1000),
-    event_id: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
+    event_id: `evt_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     event_source_url: eventData.url || undefined,
     action_source: "website",
     user_data: userData,

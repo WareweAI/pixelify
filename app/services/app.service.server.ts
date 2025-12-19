@@ -1,5 +1,5 @@
 // App Service - Business logic for app management
-import prisma from "../db.server";
+import prisma from "~/db.server";
 import * as crypto from "node:crypto";
 
 interface CreateAppParams {

@@ -1,6 +1,6 @@
 // Analytics API endpoint
 import type { LoaderFunctionArgs } from 'react-router';
-import prisma from '../db.server';
+import prisma from '~/db.server';
 
 // Server-only route - no client bundle needed
 export const clientLoader = undefined;

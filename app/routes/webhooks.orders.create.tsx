@@ -1,28 +1,36 @@
 // Webhook: orders/create - Server-side purchase tracking (adblocker-proof)
 import type { ActionFunctionArgs } from "react-router";
-import { getShopifyInstance } from "../shopify.server";
-import prisma from "../db.server";
+import prisma from "~/db.server";
 import crypto from "crypto";
-import { forwardToMeta } from "../services/meta-capi.server";
+
+// Verify Shopify webhook signature
+function verifyWebhook(body: string, hmac: string | null): boolean {
+  if (!hmac) return false;
+  const secret = process.env.SHOPIFY_API_SECRET || "";
+  const hash = crypto.createHmac("sha256", secret).update(body, "utf8").digest("base64");
+  return crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(hmac));
+}
 
 export async function action({ request }: ActionFunctionArgs) {
-  const shopify = getShopifyInstance();
-  
-  if (!shopify?.authenticate) {
-    console.error("[Webhook] Shopify not configured");
-    return new Response("Service unavailable", { status: 503 });
+  const hmac = request.headers.get("x-shopify-hmac-sha256");
+  const shop = request.headers.get("x-shopify-shop-domain");
+  const topic = request.headers.get("x-shopify-topic");
+  const rawBody = await request.text();
+
+  console.log(`[Webhook] ${topic} from ${shop}`);
+
+  // Verify signature in production
+  if (process.env.NODE_ENV === "production" && !verifyWebhook(rawBody, hmac)) {
+    console.error("[Webhook] Invalid signature");
+    return new Response("Unauthorized", { status: 401 });
   }
 
   try {
-    // Use Shopify's built-in webhook authentication
-    const { payload, shop, topic } = await shopify.authenticate.webhook(request);
-    const order = payload as any;
-
-    console.log(`[Webhook] ${topic} from ${shop}`);
+    const order = JSON.parse(rawBody);
     
     // Find the shop's pixel
     const user = await prisma.user.findUnique({
-      where: { storeUrl: shop || "" },
+      where: { email: shop || "" },
     });
 
     if (!user) {
@@ -103,30 +111,33 @@ export async function action({ request }: ActionFunctionArgs) {
     console.log(`[Webhook] Purchase tracked: ${orderId} - $${totalPrice} ${currency}`);
 
     // Forward to Meta CAPI if enabled
-    if (app.settings?.metaPixelEnabled && app.settings?.metaVerified && app.settings?.metaAccessToken) {
+    if (app.settings?.metaPixelEnabled && app.settings?.metaAccessToken) {
       try {
-        await forwardToMeta({
-          pixelId: app.settings.metaPixelId!,
-          accessToken: app.settings.metaAccessToken!,
-          testEventCode: app.settings.metaTestEventCode || undefined,
-          event: {
-            eventName: "Purchase",
-            eventTime: Math.floor(Date.now() / 1000),
-            eventSourceUrl: order.order_status_url || null,
-            actionSource: "website",
-            userData: {
-              clientIpAddress: customerIp,
-              clientUserAgent: userAgent,
-              em: customerEmail ? crypto.createHash("sha256").update(customerEmail.toLowerCase()).digest("hex") : undefined,
-            },
-            customData: {
-              currency,
-              value: totalPrice,
-              content_ids: products.map((p: any) => p.id),
-              contents: products.map((p: any) => ({ id: p.id, quantity: p.quantity })),
-              order_id: orderId,
-            },
+        const metaEvent = {
+          event_name: "Purchase",
+          event_time: Math.floor(Date.now() / 1000),
+          action_source: "website",
+          user_data: {
+            em: customerEmail ? crypto.createHash("sha256").update(customerEmail.toLowerCase()).digest("hex") : undefined,
+            client_ip_address: customerIp,
+            client_user_agent: userAgent,
           },
+          custom_data: {
+            currency,
+            value: totalPrice,
+            content_ids: products.map((p: any) => p.id),
+            contents: products.map((p: any) => ({ id: p.id, quantity: p.quantity })),
+          },
+        };
+
+        await fetch(`https://graph.facebook.com/v18.0/${app.settings.metaPixelId}/events`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            data: [metaEvent],
+            access_token: app.settings.metaAccessToken,
+            test_event_code: app.settings.metaTestEventCode || undefined,
+          }),
         });
         console.log("[Webhook] Forwarded to Meta CAPI");
       } catch (metaErr) {

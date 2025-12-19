@@ -1,5 +1,6 @@
+import { redirect } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData, useNavigation, useFetcher } from "react-router";
+import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import {
   Page,
   Layout,
@@ -13,12 +14,9 @@ import {
   ButtonGroup,
   Modal,
   FormLayout,
-  EmptyState,
-  BlockStack,
-  Text,
 } from "@shopify/polaris";
 import { useState, useCallback } from "react";
-import { getShopifyInstance } from "../shopify.server";
+import { getShopifyInstance } from "~/shopify.server";
 import db from "../db.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -29,50 +27,56 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await shopify.authenticate.admin(request);
   const shop = session.shop;
 
-  const user = await db.user.findUnique({ where: { storeUrl: shop } });
+  const user = await db.user.findUnique({ where: { email: shop } });
   if (!user) {
-    return { app: null, customEvents: [], shop };
+    throw new Response("User not found for this shop", { status: 404 });
   }
 
   const app = await db.app.findFirst({
     where: { userId: user.id },
     include: { 
       customEvents: {
-        orderBy: { createdAt: "desc" }
+        select: {
+          id: true,
+          name: true,
+          displayName: true,
+          description: true,
+          metaEventName: true,
+          isActive: true,
+          createdAt: true,
+          // Only select fields that exist in the database
+          // pageType, pageUrl, eventType, selector, eventData will be added after migration
+        }
       }
     },
     orderBy: { createdAt: "desc" },
   });
 
   if (!app) {
-    return { app: null, customEvents: [], shop };
+    throw new Response("App not found for this shop", { status: 404 });
   }
 
-  return {
-    app: {
-      id: app.id,
-      appId: app.appId,
-      name: app.name,
-    },
-    customEvents: app.customEvents || [],
+  return Response.json({
+    app,
+    customEvents: app.customEvents,
     shop,
-  };
+  });
 }
 
 export async function action({ request }: ActionFunctionArgs) {
   const shopify = getShopifyInstance();
   if (!shopify?.authenticate) {
-    return { success: false, error: "Shopify configuration not found" };
+    return Response.json({ success: false, error: "Shopify configuration not found" }, { status: 500 });
   }
   const { session } = await shopify.authenticate.admin(request);
   const shop = session.shop;
   const formData = await request.formData();
-  const actionType = formData.get("action") as string;
+  const action = formData.get("action");
 
   try {
-    const user = await db.user.findUnique({ where: { storeUrl: shop } });
+    const user = await db.user.findUnique({ where: { email: shop } });
     if (!user) {
-      return { success: false, error: "User not found for this shop" };
+      return Response.json({ success: false, error: "User not found for this shop" }, { status: 404 });
     }
 
     const appIdFromForm = formData.get("appId") as string | null;
@@ -82,52 +86,44 @@ export async function action({ request }: ActionFunctionArgs) {
         : await db.app.findFirst({ where: { userId: user.id }, orderBy: { createdAt: "desc" } });
 
     if (!app) {
-      return { success: false, error: "App not found for this shop" };
+      return Response.json({ success: false, error: "App not found for this shop" }, { status: 404 });
     }
 
-    if (actionType === "create") {
-      const name = (formData.get("name") as string) || "";
-      const displayName = (formData.get("displayName") as string) || "";
+    if (action === "create") {
+      const name = formData.get("name") as string;
+      const displayName = formData.get("displayName") as string;
       const description = formData.get("description") as string;
-      const pageType = (formData.get("pageType") as string) || "all";
+      const pageType = formData.get("pageType") as string;
       const pageUrl = formData.get("pageUrl") as string;
-      const eventType = (formData.get("eventType") as string) || "click";
-      const selector = (formData.get("selector") as string) || "";
+      const eventType = formData.get("eventType") as string;
+      const selector = formData.get("selector") as string;
       const eventData = formData.get("eventData") as string;
       const metaEventName = formData.get("metaEventName") as string;
 
       if (!selector || selector.trim() === "") {
-        return { success: false, error: "CSS Selector is required" };
+        return Response.json({ success: false, error: "CSS Selector is required to trigger the event" }, { status: 400 });
       }
-
-      if (!displayName || displayName.trim() === "") {
-        return { success: false, error: "Display Name is required" };
-      }
-
-      const eventName = name.trim() 
-        ? name.toLowerCase().replace(/\s+/g, '_')
-        : displayName.toLowerCase().replace(/\s+/g, '_');
 
       await db.customEvent.create({
         data: {
           appId: app.id,
-          name: eventName,
-          displayName: displayName.trim(),
-          description: description?.trim() || null,
-          pageType: pageType,
-          pageUrl: pageUrl?.trim() || null,
-          eventType: eventType,
+          name: name.toLowerCase().replace(/\s+/g, '_'),
+          displayName,
+          description: description || null,
+          pageType: pageType || "all",
+          pageUrl: pageUrl || null,
+          eventType: eventType || "click",
           selector: selector.trim(),
-          eventData: eventData?.trim() || null,
+          eventData: eventData || null,
           metaEventName: metaEventName || null,
           isActive: true,
         }
       });
 
-      return { success: true, message: "Custom event created successfully!" };
+      return Response.json({ success: true, message: "Custom event created successfully!" });
     }
 
-    if (actionType === "toggle") {
+    if (action === "toggle") {
       const eventId = formData.get("eventId") as string;
       const isActive = formData.get("isActive") === "true";
 
@@ -136,43 +132,30 @@ export async function action({ request }: ActionFunctionArgs) {
         data: { isActive: !isActive }
       });
 
-      return { success: true, message: "Event status updated!" };
+      return Response.json({ success: true, message: "Event status updated!" });
     }
 
-    if (actionType === "delete") {
+    if (action === "delete") {
       const eventId = formData.get("eventId") as string;
 
       await db.customEvent.delete({
         where: { id: eventId }
       });
 
-      return { success: true, message: "Event deleted!" };
+      return Response.json({ success: true, message: "Event deleted!" });
     }
 
-  } catch (error: any) {
+  } catch (error) {
     console.error("Custom events action error:", error);
-    return { success: false, error: error.message || "Failed to process request" };
+    return Response.json({ success: false, error: "Failed to process request" }, { status: 500 });
   }
 
-  return { success: false, error: "Invalid action" };
+  return Response.json({ success: false, error: "Invalid action" }, { status: 400 });
 }
 
 type LoaderData = {
-  app: { id: string; appId: string; name: string } | null;
-  customEvents: Array<{
-    id: string;
-    name: string;
-    displayName: string;
-    description: string | null;
-    pageType: string;
-    pageUrl: string | null;
-    eventType: string;
-    selector: string | null;
-    eventData: string | null;
-    metaEventName: string | null;
-    isActive: boolean;
-    createdAt: Date;
-  }>;
+  app: any;
+  customEvents: any[];
   shop: string;
 };
 
@@ -204,6 +187,7 @@ export default function CustomEvents() {
   const handleModalToggle = useCallback(() => {
     setModalActive(!modalActive);
     if (!modalActive) {
+      // Reset form when opening
       setFormData({
         name: "",
         displayName: "",
@@ -222,32 +206,11 @@ export default function CustomEvents() {
     setFormData(prev => ({ ...prev, [field]: value }));
   }, []);
 
-  if (!app) {
-    return (
-      <Page title="Custom Events">
-        <Layout>
-          <Layout.Section>
-            <Card>
-              <EmptyState
-                heading="No pixel app found"
-                action={{ content: "Create a pixel first", url: "/app/pixels" }}
-                image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
-              >
-                <p>You need to create a pixel app before you can set up custom events.</p>
-              </EmptyState>
-            </Card>
-          </Layout.Section>
-        </Layout>
-      </Page>
-    );
-  }
-
-  const appId = app.appId;
-  const rows = (customEvents || []).map((event) => [
+  const rows = customEvents.map((event: any) => [
     event.displayName,
     event.name,
-    event.pageType || "all",
-    event.selector || "-",
+    (event as any).pageType || "all",
+    (event as any).selector || "-",
     <Badge tone={event.isActive ? "success" : "critical"}>
       {event.isActive ? "Active" : "Inactive"}
     </Badge>,
@@ -256,14 +219,14 @@ export default function CustomEvents() {
         <input type="hidden" name="action" value="toggle" />
         <input type="hidden" name="eventId" value={event.id} />
         <input type="hidden" name="isActive" value={event.isActive.toString()} />
-        <Button submit size="slim" disabled={isLoading}>
+        <Button submit size="slim">
           {event.isActive ? "Disable" : "Enable"}
         </Button>
       </Form>
       <Form method="post">
         <input type="hidden" name="action" value="delete" />
         <input type="hidden" name="eventId" value={event.id} />
-        <Button submit tone="critical" size="slim" disabled={isLoading}>
+        <Button submit tone="critical" size="slim">
           Delete
         </Button>
       </Form>
@@ -273,11 +236,11 @@ export default function CustomEvents() {
   return (
     <Page
       title="Custom Events"
-      subtitle="Track custom interactions on your store"
-      primaryAction={app ? {
+      subtitle="Create events that trigger when users interact with specific elements on selected pages"
+      primaryAction={{
         content: "Create Event",
         onAction: handleModalToggle
-      } : undefined}
+      }}
     >
       <Layout>
         {actionData?.success && (
@@ -298,42 +261,35 @@ export default function CustomEvents() {
 
         <Layout.Section>
           <Card>
-            <BlockStack gap="400">
-              <Text variant="headingMd" as="h2">How Custom Events Work</Text>
-              <BlockStack gap="200">
-                <Text as="p">Custom events track user interactions with specific elements on your store.</Text>
-                <Text as="p"><strong>1. Page Type:</strong> Choose where the event triggers (All Pages, Product, Cart, etc.)</Text>
-                <Text as="p"><strong>2. Event Type:</strong> Choose the interaction (Click, Submit, Change, etc.)</Text>
-                <Text as="p"><strong>3. CSS Selector:</strong> Target elements using CSS selectors like <code>.add-to-cart</code> or <code>#wishlist-btn</code></Text>
-                <Text as="p"><strong>Example:</strong> Track clicks on <code>.add-to-wishlist</code> button on product pages</Text>
-              </BlockStack>
-            </BlockStack>
+            <div style={{ padding: '16px', marginBottom: '16px' }}>
+              <h3 style={{ marginBottom: '12px' }}>How Custom Events Work:</h3>
+              <ol style={{ paddingLeft: '20px' }}>
+                <li style={{ marginBottom: '8px' }}><strong>Select a Page:</strong> Choose where the event should trigger (Home, Product, Cart, etc.)</li>
+                <li style={{ marginBottom: '8px' }}><strong>Set Event Type:</strong> Choose when to trigger (Click, Submit, Change, etc.)</li>
+                <li style={{ marginBottom: '8px' }}><strong>Add CSS Selector:</strong> Target specific elements using CSS selectors (e.g., <code>.add-to-cart</code>, <code>#wishlist-btn</code>)</li>
+                <li style={{ marginBottom: '8px' }}><strong>Enable Event:</strong> Toggle the event on/off to control when it fires</li>
+                <li style={{ marginBottom: '8px' }}>The event will automatically track when users interact with the selected elements on the specified pages</li>
+              </ol>
+              <p style={{ marginTop: '12px', color: '#666' }}>
+                <strong>Example:</strong> Create an event with selector <code>.add-to-wishlist</code> on Product pages with event type "click" to track when users click the wishlist button.
+              </p>
+            </div>
           </Card>
         </Layout.Section>
 
         <Layout.Section>
           <Card>
-            {!customEvents || customEvents.length === 0 ? (
-              <EmptyState
-                heading="No custom events yet"
-                action={{ content: "Create Event", onAction: handleModalToggle }}
-                image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
-              >
-                <p>Create your first custom event to start tracking specific user interactions.</p>
-              </EmptyState>
-            ) : (
             <DataTable
               columnContentTypes={['text', 'text', 'text', 'text', 'text', 'text']}
               headings={['Display Name', 'Event Name', 'Page Type', 'Selector', 'Status', 'Actions']}
               rows={rows}
             />
-            )}
           </Card>
         </Layout.Section>
       </Layout>
 
       <Modal
-        open={modalActive && !!app}
+        open={modalActive}
         onClose={handleModalToggle}
         title="Create Custom Event"
         primaryAction={{
@@ -341,14 +297,13 @@ export default function CustomEvents() {
           loading: isLoading,
           onAction: () => {
             if (!formData.selector || formData.selector.trim() === "") {
+              alert("CSS Selector is required to trigger the event");
               return;
             }
             const form = document.getElementById('create-event-form') as HTMLFormElement;
-            if (form) {
             form.requestSubmit();
-            }
           },
-          disabled: !formData.selector || formData.selector.trim() === "" || !formData.displayName || formData.displayName.trim() === ""
+          disabled: !formData.selector || formData.selector.trim() === ""
         }}
         secondaryActions={[{
           content: "Cancel",
@@ -359,7 +314,7 @@ export default function CustomEvents() {
           <Form method="post" id="create-event-form">
             <FormLayout>
               <input type="hidden" name="action" value="create" />
-              <input type="hidden" name="appId" value={appId} />
+              <input type="hidden" name="appId" value={app.appId} />
               
               <TextField
                 label="Display Name"
@@ -368,16 +323,15 @@ export default function CustomEvents() {
                 name="displayName"
                 placeholder="e.g., Add to Wishlist"
                 autoComplete="off"
-                requiredIndicator
               />
 
               <TextField
-                label="Event Name"
+                label="Event Name (for tracking)"
                 value={formData.name}
                 onChange={handleInputChange('name')}
                 name="name"
                 placeholder="e.g., add_to_wishlist"
-                helpText="Auto-generated from display name if empty"
+                helpText="Used for analytics. Will be auto-generated from display name if empty."
                 autoComplete="off"
               />
 
@@ -425,12 +379,12 @@ export default function CustomEvents() {
               />
 
               <TextField
-                label="CSS Selector"
+                label="CSS Selector *"
                 value={formData.selector}
                 onChange={handleInputChange('selector')}
                 name="selector"
                 placeholder=".add-to-cart, #wishlist-btn, button[data-add-to-wishlist]"
-                helpText="Required: CSS selector to target elements"
+                helpText="Required: CSS selector to target elements that will trigger this event"
                 autoComplete="off"
                 requiredIndicator
               />
@@ -442,11 +396,12 @@ export default function CustomEvents() {
                 name="description"
                 placeholder="Describe what this event tracks..."
                 multiline={2}
+                helpText="Optional description of what this event tracks"
                 autoComplete="off"
               />
 
               <Select
-                label="Meta Event Mapping"
+                label="Meta Event Mapping (Optional)"
                 options={[
                   { label: "None", value: "" },
                   { label: "Purchase", value: "Purchase" },
@@ -462,16 +417,17 @@ export default function CustomEvents() {
                 value={formData.metaEventName}
                 onChange={(value) => setFormData(prev => ({ ...prev, metaEventName: value }))}
                 name="metaEventName"
+                helpText="Map this event to a Meta standard event for better attribution"
               />
 
               <TextField
-                label="Event Data (JSON)"
+                label="Event Data (JSON - Optional)"
                 value={formData.eventData}
                 onChange={handleInputChange('eventData')}
                 name="eventData"
                 multiline={3}
-                placeholder='{"product_id": "123", "value": 99.99}'
-                helpText="Optional JSON data to send with the event"
+                placeholder='{"product_id": "123", "category": "electronics", "value": 99.99}'
+                helpText="Optional JSON data to send with the event when it's triggered"
                 autoComplete="off"
               />
             </FormLayout>

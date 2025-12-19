@@ -2,7 +2,7 @@ import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const baseUrl = process.env.SHOPIFY_APP_URL || "https://pixelify-red.vercel.app";
+  const baseUrl = process.env.SHOPIFY_APP_URL || "https://pixel-warewe.vercel.app";
   return { baseUrl };
 };
 
@@ -257,7 +257,7 @@ export default function PrivacyPolicy() {
 
         <section className="section">
           <p className="section-intro">
-            This Privacy Policy describes how Pixelify ("we", "our", or "us") collects, uses, 
+            This Privacy Policy describes how Pixel Tracker ("we", "our", or "us") collects, uses, 
             and protects your information when you use our analytics and tracking services. 
             By using our services, you agree to the collection and use of information in accordance 
             with this policy.
@@ -267,7 +267,7 @@ export default function PrivacyPolicy() {
         <section className="section">
           <h2 className="section-title">1. Information We Collect</h2>
           <p className="section-intro">
-            When you visit a website that uses Pixelify, we automatically collect the following types of information:
+            When you visit a website that uses Pixel Tracker, we automatically collect the following types of information:
           </p>
 
           <div className="info-card">
@@ -428,7 +428,7 @@ export default function PrivacyPolicy() {
         <section className="section">
           <h2 className="section-title">6. Contact Us</h2>
           <div className="contact-card">
-            <h3>Pixelify</h3>
+            <h3>Pixel Tracker</h3>
             <p className="company">Warewe Consultancy Private Limited</p>
             <div>
               <a href="mailto:support@warewe.online" className="contact-link">
@@ -472,19 +472,9 @@ export default function PrivacyPolicy() {
         </section>
 
         <footer className="footer-note">
-          This Privacy Policy is effective as of January 2025 and applies to all users of Pixelify services.
+          This Privacy Policy is effective as of January 2025 and applies to all users of Pixel Tracker services.
         </footer>
       </div>
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-

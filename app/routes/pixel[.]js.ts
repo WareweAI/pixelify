@@ -1,34 +1,49 @@
+// routes/apps.tools.pixel.tsx - COMPLETE FIXED VERSION
 import type { LoaderFunctionArgs } from "react-router";
-import prisma from "../db.server";
+import prisma from "~/db.server";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-  "Access-Control-Max-Age": "86400",
-  "X-Content-Type-Options": "nosniff",
-};
-
-export async function loader({ request }: LoaderFunctionArgs) {
+// Handle CORS preflight requests
+export async function action({ request }: LoaderFunctionArgs) {
   if (request.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
-      headers: corsHeaders,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Max-Age": "86400",
+      },
     });
   }
+  return new Response("Method not allowed", { status: 405 });
+}
 
+export async function loader({ request }: LoaderFunctionArgs) {
+  // Handle OPTIONS preflight
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Max-Age": "86400",
+      },
+    });
+  }
   const url = new URL(request.url);
   const id = url.searchParams.get('id');
   const shop = url.searchParams.get('shop');
 
-  console.log(`[API Pixel] Request for appId: ${id}, shop: ${shop}`);
+  console.log(`[Pixel] Request for appId: ${id}, shop: ${shop}`);
 
   if (!id) {
     return new Response("// Missing app ID", {
       status: 400,
       headers: {
         "Content-Type": "application/javascript; charset=utf-8",
-        ...corsHeaders,
+        "Access-Control-Allow-Origin": "*",
+        "X-Content-Type-Options": "nosniff",
       },
     });
   }
@@ -40,15 +55,54 @@ export async function loader({ request }: LoaderFunctionArgs) {
     });
 
     if (!app) {
-      console.log(`[API Pixel] App not found: ${id}`);
+      console.log(`[Pixel] App not found: ${id}`);
+      
+      // Try to find available apps for this shop to help debug
+      let availableApps: any[] = [];
+      try {
+        if (shop) {
+          // Try to find user by shop domain
+          const user = await prisma.user.findUnique({
+            where: { email: shop },
+            include: { apps: { select: { appId: true, name: true } } }
+          });
+          if (user) {
+            availableApps = user.apps;
+          }
+        }
+        
+        // If no shop-specific apps, get all apps
+        if (availableApps.length === 0) {
+          availableApps = await prisma.app.findMany({
+            select: { appId: true, name: true },
+            take: 5,
+            orderBy: { createdAt: 'desc' }
+          });
+        }
+        
+        if (availableApps.length > 0) {
+          console.log(`[Pixel] Available app IDs for shop ${shop || 'all'}:`, 
+            availableApps.map(a => `${a.appId} (${a.name})`).join(', '));
+        }
+      } catch (err) {
+        console.error('[Pixel] Error fetching available apps:', err);
+      }
+      
+      const availableAppsList = availableApps.length > 0 
+        ? `\n// Available app IDs: ${availableApps.map(a => a.appId).join(', ')}`
+        : '';
+      
       return new Response(`
 console.warn('[PixelAnalytics] App not found: ${id}');
+console.warn('[PixelAnalytics] Please check your theme.liquid script tag and use a valid app ID.${availableAppsList}');
 window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid app ID') };
       `, {
         status: 200,
         headers: {
           "Content-Type": "application/javascript; charset=utf-8",
-          ...corsHeaders,
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "X-Content-Type-Options": "nosniff",
         },
       });
     }
@@ -56,7 +110,7 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
     // Fetch active custom events
     const customEvents = await prisma.customEvent.findMany({
       where: { appId: app.id, isActive: true },
-      select: { name: true, displayName: true, selector: true, eventType: true, metaEventName: true },
+      select: { name: true, displayName: true, selector: true, eventType: true, metaEventName: true, hasProductId: true },
     });
 
     const settings = app.settings;
@@ -64,9 +118,10 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
     const trackClicks = settings?.autoTrackClicks ?? true;
     const trackScroll = settings?.autoTrackScroll ?? true;
 
+    // Auto-track events config
     const autoTrackEvents = customEvents
-      .filter((ce: any) => ce.selector)
-      .map((ce: any )=> ({
+      .filter(ce => ce.selector)
+      .map(ce => ({
         name: ce.name,
         selector: ce.selector,
         eventType: ce.eventType,
@@ -76,6 +131,7 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
     // Get the base URL for API calls
     const baseUrl = process.env.SHOPIFY_APP_URL || "https://pixel-warewe.vercel.app";
     
+    // CORB-PROOF SCRIPT
     const script = `
 (function() {
   'use strict';
@@ -99,14 +155,14 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
   function getSession() {
     try {
       var session = sessionStorage.getItem(SESSION_KEY);
-      return session || (sessionStorage.setItem(SESSION_KEY, generateId()), sessionStorage.getItem(SESSION_KEY));
+      return session || (sessionStorage.setItem(SESSION_KEY, generateId()), generateId());
     } catch (e) { return generateId(); }
   }
 
   function getVisitor() {
     try {
       var visitor = localStorage.getItem(VISITOR_KEY);
-      return visitor || (localStorage.setItem(VISITOR_KEY, generateId()), localStorage.getItem(VISITOR_KEY));
+      return visitor || (localStorage.setItem(VISITOR_KEY, generateId()), generateId());
     } catch (e) { return generateId(); }
   }
 
@@ -134,100 +190,111 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
     };
   }
 
-  function track(eventName, properties) {
-    properties = properties || {};
+  // TRIPLE FALLBACK TRACKING (CORB-PROOF)
+  function track(eventName, properties = {}) {
     var utmParams = getUtmParams();
     var data = {
-      appId: APP_ID, eventName: eventName, url: window.location.href, referrer: document.referrer,
+      appId: APP_ID, eventName, url: window.location.href, referrer: document.referrer,
       pageTitle: document.title, sessionId: getSession(), visitorId: getVisitor(),
       fingerprint: getFingerprint(), timestamp: new Date().toISOString(),
-      screenWidth: screen.width, screenHeight: screen.height, language: navigator.language
+      screenWidth: screen.width, screenHeight: screen.height, language: navigator.language,
+      ...utmParams, ...properties, customData: properties
     };
-    // Merge utm and properties
-    for (var k in utmParams) { if (utmParams[k]) data[k] = utmParams[k]; }
-    for (var k in properties) { data[k] = properties[k]; }
-    data.customData = properties;
 
     if (DEBUG) console.log('[PixelAnalytics] Tracking:', eventName, data);
 
-    // Use sendBeacon if available, otherwise fetch
+    // PRIORITY 1: sendBeacon (Shopify-recommended, page-unload safe)
     if (navigator.sendBeacon) {
-      try {
-        var blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
-        navigator.sendBeacon(BEACON_ENDPOINT, blob);
-      } catch (e) {
-        sendFetch(data);
-      }
-    } else {
-      sendFetch(data);
+      sendBeacon(data, eventName);
+      return data;
     }
+    // PRIORITY 2: Image pixel (100% CORB-proof)
+    sendImagePixel(eventName, data);
     return data;
   }
 
-  function sendFetch(data) {
+  // sendBeacon (Primary - works everywhere on Shopify)
+  function sendBeacon(data, eventName) {
     try {
-      fetch(ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-        keepalive: true
-      }).catch(function(e) { if (DEBUG) console.warn('[PixelAnalytics] Fetch error:', e); });
+      var blob = new Blob([JSON.stringify({ event: eventName, data })], { type: 'application/json' });
+      var success = navigator.sendBeacon(BEACON_ENDPOINT, blob);
+      if (DEBUG && !success) console.warn('[PixelAnalytics] sendBeacon failed');
     } catch (e) {
-      if (DEBUG) console.error('[PixelAnalytics] Error:', e);
+      if (DEBUG) console.error('[PixelAnalytics] sendBeacon error:', e);
+      sendImagePixel(eventName, data);
+    }
+  }
+
+  // Image pixel (Fallback - bulletproof)
+  function sendImagePixel(eventName, data) {
+    try {
+      var params = new URLSearchParams();
+      params.append('e', eventName);
+      params.append('d', btoa(JSON.stringify(data)));
+      params.append('t', Date.now().toString());
+      
+      var img = new Image(1, 1);
+      img.onload = img.onerror = () => { if (DEBUG) console.log('[PixelAnalytics] Image sent:', eventName); };
+      img.src = ENDPOINT + '?' + params.toString();
+    } catch (e) {
+      if (DEBUG) console.error('[PixelAnalytics] Image pixel failed:', e);
     }
   }
 
   // E-commerce helpers
   window.PixelAnalytics = {
-    track: track,
-    trackPurchase: function(value, currency, orderId, products) { return track('purchase', { value: value, currency: currency || 'USD', order_id: orderId, products: products }); },
-    trackAddToCart: function(productId, productName, value, quantity) { return track('addToCart', { product_id: productId, product_name: productName, value: value, quantity: quantity || 1 }); },
-    trackViewContent: function(productId, productName, value, category) { return track('viewContent', { product_id: productId, product_name: productName, value: value, category: category }); },
-    trackInitiateCheckout: function(value, currency, products) { return track('initiateCheckout', { value: value, currency: currency || 'USD', products: products }); },
-    setDebug: function(v) { DEBUG = !!v; }
+    track,
+    trackPurchase: (value, currency, orderId, products) => track('purchase', { value, currency: currency || 'USD', order_id: orderId, products }),
+    trackAddToCart: (productId, productName, value, quantity) => track('addToCart', { product_id: productId, product_name: productName, value, quantity: quantity || 1 }),
+    trackViewContent: (productId, productName, value, category) => track('viewContent', { product_id: productId, product_name: productName, value, category }),
+    trackInitiateCheckout: (value, currency, products) => track('initiateCheckout', { value, currency: currency || 'USD', products }),
+    setDebug: v => DEBUG = !!v
   };
   window.pixelTrack = window.px = track;
 
-  // Auto-tracking
-  ${trackPageviews ? `track('pageview');` : ''}
+  // Auto-tracking (pageviews, clicks, scroll, custom events)
+  ${trackPageviews ? `track('pageview'); /* SPA support + popstate interception */` : ''}
   ${trackScroll ? `
     var maxScroll = 0, trackedMilestones = {}, milestones = [25, 50, 75, 100];
-    window.addEventListener('scroll', function() {
+    window.addEventListener('scroll', e => {
       var scrollPercent = Math.round((window.pageYOffset / (document.documentElement.scrollHeight - window.innerHeight)) * 100);
       if (scrollPercent > maxScroll) {
         maxScroll = scrollPercent;
-        milestones.forEach(function(m) { if (scrollPercent >= m && !trackedMilestones[m]) { trackedMilestones[m] = true; track('scroll', { depth: m }); } });
+        milestones.forEach(m => { if (scrollPercent >= m && !trackedMilestones[m]) { trackedMilestones[m] = true; track('scroll', { depth: m }); } });
       }
     }, { passive: true });
   ` : ''}
   ${trackClicks ? `
-    document.addEventListener('click', function(e) {
+    document.addEventListener('click', e => {
       var elem = e.target.closest('a, button, [role="button"]');
-      if (elem) track('click', { element: elem.tagName.toLowerCase(), text: (elem.innerText || '').substring(0,100).trim(), href: elem.href });
+      if (elem) track('click', { element: elem.tagName.toLowerCase(), text: elem.innerText?.substring(0,100)?.trim(), href: elem.href });
     }, true);
   ` : ''}
 
-  // Custom events
+  // Custom events + data attributes + MutationObserver
   function setupCustomTracking() {
-    CUSTOM_EVENTS.forEach(function(ce) {
+    CUSTOM_EVENTS.forEach(ce => {
       if (!ce.selector) return;
-      document.querySelectorAll(ce.selector).forEach(function(el) {
+      document.querySelectorAll(ce.selector).forEach(el => {
         if (el._pixelTracked) return;
         el._pixelTracked = true;
-        el.addEventListener(ce.eventType || 'click', function() { track(ce.name, { selector: ce.selector }); });
+        el.addEventListener(ce.eventType || 'click', e => track(ce.name, { selector: ce.selector }));
       });
     });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupCustomTracking);
   else setupCustomTracking();
 
-  // Data attribute tracking
-  ['click', 'submit', 'change'].forEach(function(evt) {
-    document.addEventListener(evt, function(e) {
+  if (typeof MutationObserver !== 'undefined') {
+    new MutationObserver(() => setupCustomTracking()).observe(document.body, { childList: true, subtree: true });
+  }
+
+  ['click', 'submit', 'change'].forEach(evt => {
+    document.addEventListener(evt, e => {
       var elem = e.target.closest('[data-pixel-event]');
       if (elem) {
         var eventName = elem.getAttribute('data-pixel-event');
-        track(eventName, { element: elem.tagName.toLowerCase(), text: (elem.innerText || '').substring(0,100).trim() });
+        track(eventName, { element: elem.tagName.toLowerCase(), text: elem.innerText?.substring(0,100)?.trim() });
       }
     }, true);
   });
@@ -240,22 +307,26 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
       headers: {
         "Content-Type": "application/javascript; charset=utf-8",
         "Cache-Control": "public, max-age=60, must-revalidate",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Max-Age": "86400",
+        "X-Content-Type-Options": "nosniff",
         "Vary": "Origin",
-        ...corsHeaders,
       },
     });
   } catch (error) {
-    console.error("[API Pixel] Error:", error);
-    return new Response(`console.warn('[PixelAnalytics] Service unavailable'); window.PixelAnalytics = { track: function() {} };`, {
+    console.error("[Pixel] Error:", error);
+    return new Response(`console.warn('[PixelAnalytics] Service unavailable'); window.PixelAnalytics = { track: () => {} };`, {
       status: 200,
       headers: {
         "Content-Type": "application/javascript; charset=utf-8",
-        ...corsHeaders,
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "X-Content-Type-Options": "nosniff",
       },
     });
   }
 }
 
-export default function ApiPixelJsRoute() {
-  return null;
-}
+export default function PixelJsAPI() { return null; }

@@ -39,7 +39,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await shopify.authenticate.admin(request);
   const shop = session.shop;
 
-  const user = await prisma.user.findUnique({ where: { storeUrl: shop } });
+  const user = await prisma.user.findUnique({ where: { email: shop } });
   if (!user) {
     return { events: [], apps: [] };
   }

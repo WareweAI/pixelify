@@ -1,6 +1,6 @@
 // Events API endpoint
 import type { LoaderFunctionArgs } from 'react-router';
-import prisma from '../db.server';
+import prisma from '~/db.server';
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
