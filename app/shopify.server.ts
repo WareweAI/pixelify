@@ -44,13 +44,17 @@
     const hasShopifyConfig = Boolean(apiKey && apiSecret);
 
     if (!hasShopifyConfig) {
-      console.error('❌ Shopify config missing:', {
-        hasApiKey: !!apiKey,
-        hasApiSecret: !!apiSecret,
-        apiKeyLength: apiKey.length,
-        apiSecretLength: apiSecret.length,
-        cwd: process.cwd(),
-      });
+      // Only log error in development - in production (Vercel), this is expected if Shopify isn't configured
+      const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL;
+      if (!isProduction) {
+        console.error('❌ Shopify config missing:', {
+          hasApiKey: !!apiKey,
+          hasApiSecret: !!apiSecret,
+          apiKeyLength: apiKey.length,
+          apiSecretLength: apiSecret.length,
+          cwd: process.cwd(),
+        });
+      }
       return null;
     }
 

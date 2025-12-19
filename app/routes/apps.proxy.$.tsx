@@ -1,16 +1,9 @@
 // App Proxy handler - receives requests from /apps/pixel-api/* on the shop domain
 // This avoids CORS issues because requests come from the same origin (shop domain)
-import type { LoaderFunctionArgs, ActionFunctionArgs, HeadersFunction } from "react-router";
+import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { parseUserAgent, getDeviceType } from "../services/device.server";
 import { getGeoData } from "../services/geo.server";
-
-// Ensure all responses from this route are JSON (resource route)
-export const headers: HeadersFunction = () => {
-  return {
-    "Content-Type": "application/json; charset=utf-8",
-  };
-};
 
 // Handle GET requests (e.g., get-pixel-id)
 export async function loader({ request, params }: LoaderFunctionArgs) {
@@ -35,21 +28,35 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       });
     }
 
-    // Check database connection first
+    // Check database connection first and wrap all DB operations
     try {
-      await prisma.$queryRaw`SELECT 1`;
+      // Test connection with timeout
+      await Promise.race([
+        prisma.$queryRaw`SELECT 1`,
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Database connection timeout')), 5000)
+        )
+      ]);
     } catch (dbError: any) {
       console.error("[App Proxy] Database connection error:", dbError);
-      return Response.json({ 
-        error: "Database temporarily unavailable",
-        shop: shopDomain 
-      }, { 
-        status: 503,
-        headers: { 
-          "Content-Type": "application/json; charset=utf-8",
-          "X-Content-Type-Options": "nosniff"
-        }
-      });
+      // Check for PrismaClientInitializationError or connection errors
+      if (dbError?.code === 'P1001' || 
+          dbError?.name === 'PrismaClientInitializationError' ||
+          dbError?.message?.includes("Can't reach database") ||
+          dbError?.message?.includes("connection timeout")) {
+        return Response.json({ 
+          error: "Database temporarily unavailable",
+          shop: shopDomain 
+        }, { 
+          status: 503,
+          headers: { 
+            "Content-Type": "application/json; charset=utf-8",
+            "X-Content-Type-Options": "nosniff"
+          }
+        });
+      }
+      // Re-throw if it's not a connection error
+      throw dbError;
     }
 
     try {
@@ -108,19 +115,31 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       });
     } catch (error: any) {
       console.error("[App Proxy] Error:", error);
-      // Check if it's a database error
-      if (error?.code === 'P1001' || error?.message?.includes('Can\'t reach database')) {
+      // Check if it's a database connection error
+      if (error?.code === 'P1001' || 
+          error?.name === 'PrismaClientInitializationError' ||
+          error?.message?.includes("Can't reach database") ||
+          error?.message?.includes("connection timeout")) {
         return Response.json({ 
           error: "Database temporarily unavailable",
           shop: shopDomain 
         }, { 
           status: 503,
-          headers: { "Content-Type": "application/json" }
+          headers: { 
+            "Content-Type": "application/json; charset=utf-8",
+            "X-Content-Type-Options": "nosniff"
+          }
         });
       }
-      return Response.json({ error: "Internal error" }, { 
+      return Response.json({ 
+        error: "Internal error",
+        message: process.env.NODE_ENV === 'development' ? error?.message : undefined
+      }, { 
         status: 500,
-        headers: { "Content-Type": "application/json" }
+        headers: { 
+          "Content-Type": "application/json; charset=utf-8",
+          "X-Content-Type-Options": "nosniff"
+        }
       });
     }
     }
@@ -280,7 +299,10 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       } catch (error: any) {
         console.error("[App Proxy pixel.js] Error:", error);
         // Check if it's a database error
-        if (error?.code === 'P1001' || error?.message?.includes('Can\'t reach database')) {
+        if (error?.code === 'P1001' || 
+            error?.name === 'PrismaClientInitializationError' ||
+            error?.message?.includes("Can't reach database") ||
+            error?.message?.includes("connection timeout")) {
           return new Response(`console.warn('[PixelTracker] Database temporarily unavailable');`, {
             headers: { "Content-Type": "application/javascript" },
           });
@@ -395,7 +417,10 @@ export async function action({ request, params }: ActionFunctionArgs) {
       } catch (error: any) {
         console.error("[App Proxy track] Error:", error);
         // Check if it's a database error
-        if (error?.code === 'P1001' || error?.message?.includes('Can\'t reach database')) {
+        if (error?.code === 'P1001' || 
+            error?.name === 'PrismaClientInitializationError' ||
+            error?.message?.includes("Can't reach database") ||
+            error?.message?.includes("connection timeout")) {
           return Response.json({ 
             success: false,
             error: "Database temporarily unavailable"

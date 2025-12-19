@@ -32,7 +32,7 @@ export function loadEnv() {
     }
   }
   
-  if (!envLoaded) {
+  if (!envLoaded && process.env.NODE_ENV === 'development') {
     console.log('⚠️  No .env file found, using process.env');
   }
 
@@ -46,11 +46,14 @@ export function loadEnv() {
 
   envLoadedOnce = true;
 
-  // Check critical environment variables
+  // Check critical environment variables (only log in development or if actually missing in production)
   const required = ['SHOPIFY_API_KEY', 'SHOPIFY_API_SECRET'];
   const missing = required.filter(key => !process.env[key] || process.env[key] === '');
   
-  if (missing.length > 0) {
+  // Only log errors in development or if we're in a local environment
+  // In production (Vercel), env vars come from platform settings, not .env files
+  const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL;
+  if (missing.length > 0 && !isProduction) {
     console.error('❌ Missing required environment variables:', missing);
     console.error('Current working directory:', process.cwd());
     console.error('Environment file loaded:', envLoaded);
@@ -58,8 +61,7 @@ export function loadEnv() {
     console.error('SHOPIFY_API_SECRET present:', !!process.env.SHOPIFY_API_SECRET);
     // Don't throw error - allow app to continue for Vercel deployment
     // In Vercel, env vars are injected, so we don't need the file
-    // throw new Error(`Missing environment variables: ${missing.join(', ')}`);
-  } else {
+  } else if (missing.length === 0 && !isProduction) {
     console.log('✅ All required environment variables are present');
   }
   
