@@ -54,18 +54,14 @@ export default async function handleRequest(
           const contentType = responseHeaders.get("Content-Type");
           const isJsonResponse = contentType?.includes("application/json");
           const isJsResponse = contentType?.includes("application/javascript");
-          const isResourceRoute = isAppProxyRoute || isJsonResponse || isJsResponse;
           
-          // CRITICAL: For resource routes (API routes), React Router v7 should use the Response body
-          // from the loader directly. DO NOT set Content-Type to HTML for these routes.
-          // React Router will automatically use the Response body when loader returns a Response.
-          if (!isResourceRoute && !responseHeaders.has("Content-Type")) {
+          if (!isAppProxyRoute && !isJsonResponse && !isJsResponse && !responseHeaders.has("Content-Type")) {
             responseHeaders.set("Content-Type", "text/html");
           }
           
           // Log for debugging API routes
           if (isAppProxyRoute) {
-            console.log(`[Entry Server] API route: ${url.pathname}, Content-Type: ${contentType || 'not set'}, Status: ${responseStatusCode}, isResourceRoute: ${isResourceRoute}`);
+            console.log(`[Entry Server] API route: ${url.pathname}, Content-Type: ${contentType || 'not set'}, Status: ${responseStatusCode}`);
           }
           
           resolve(
