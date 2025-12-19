@@ -20,17 +20,33 @@ export default async function handleRequest(
   responseHeaders: Headers,
   reactRouterContext: EntryContext
 ) {
-  // Add Shopify headers if available
-  try {
-    addDocumentResponseHeaders(request, responseHeaders);
-  } catch (error) {
-    // Shopify not configured - this is fine for landing page on Vercel
-    console.log("Shopify headers not added - running in standalone mode");
+  const url = new URL(request.url);
+  
+  // CRITICAL: Detect resource routes early - these should return JSON/JS, not HTML
+  // React Router v7 should use the Response body directly for these routes
+  const isResourceRoute = url.pathname.startsWith("/apps/proxy/") ||
+                         url.pathname.startsWith("/apps/pixel-api/") ||
+                         url.pathname.startsWith("/api/");
+  
+  // Add Shopify headers if available (skip for resource routes to avoid conflicts)
+  if (!isResourceRoute) {
+    try {
+      addDocumentResponseHeaders(request, responseHeaders);
+    } catch (error) {
+      // Shopify not configured - this is fine for landing page on Vercel
+      console.log("Shopify headers not added - running in standalone mode");
+    }
   }
 
-  // Ensure proper headers for Shopify embedding
-  responseHeaders.delete("X-Frame-Options"); // Remove any existing X-Frame-Options
-  responseHeaders.set("Content-Security-Policy", "frame-ancestors https://*.myshopify.com https://admin.shopify.com;");
+  // Ensure proper headers for Shopify embedding (only for non-resource routes)
+  if (!isResourceRoute) {
+    // Note: This CSP allows our app to be embedded in Shopify admin
+    // The shop.app CSP error is a client-side issue (browser extension/theme code trying to embed shop.app)
+    // and cannot be fixed server-side. shop.app explicitly blocks all framing with frame-ancestors 'none'
+    responseHeaders.delete("X-Frame-Options"); // Remove any existing X-Frame-Options
+    responseHeaders.set("Content-Security-Policy", "frame-ancestors https://*.myshopify.com https://admin.shopify.com;");
+  }
+  
   const userAgent = request.headers.get("user-agent");
   const callbackName = isbot(userAgent ?? '')
     ? "onAllReady"
@@ -51,22 +67,27 @@ export default async function handleRequest(
           // For resource routes (API routes), React Router v7 should use the Response body directly
           // DO NOT override JSON/JS Content-Type with HTML
           const existingContentType = responseHeaders.get("Content-Type");
-          const url = new URL(request.url);
-          const isResourceRoute = existingContentType?.includes("application/json") || 
-                                 existingContentType?.includes("application/javascript") ||
-                                 url.pathname.startsWith("/apps/proxy/") ||
-                                 url.pathname.startsWith("/apps/pixel-api/") ||
-                                 url.pathname.startsWith("/api/");
+          const requestUrl = new URL(request.url);
+          const isResourceRouteByPath = requestUrl.pathname.startsWith("/apps/proxy/") ||
+                                       requestUrl.pathname.startsWith("/apps/pixel-api/") ||
+                                       requestUrl.pathname.startsWith("/api/");
+          const isResourceRouteByContentType = existingContentType?.includes("application/json") || 
+                                              existingContentType?.includes("application/javascript");
+          const isResourceRoute = isResourceRouteByPath || isResourceRouteByContentType;
           
           // Debug logging for all routes
-          console.log(`[Entry Server] Processing request: ${url.pathname}, Content-Type: ${existingContentType || 'not set'}, Status: ${responseStatusCode}, isResourceRoute: ${isResourceRoute}`);
+          console.log(`[Entry Server] Processing request: ${requestUrl.pathname}, Content-Type: ${existingContentType || 'not set'}, Status: ${responseStatusCode}, isResourceRoute: ${isResourceRoute}`);
           
-          // Only set HTML Content-Type if it's not already set and it's not a resource route
-          if (!isResourceRoute && !existingContentType) {
+          // CRITICAL: For resource routes, React Router v7 should use the Response body from the loader
+          // DO NOT set HTML Content-Type - React Router will use the Response body directly
+          if (isResourceRoute) {
+            // Don't set Content-Type - let the loader's Response headers take precedence
+            // React Router v7 should automatically use the Response body when loader returns a Response
+            console.log(`[Entry Server] Resource route - React Router should use Response body directly for: ${requestUrl.pathname}`);
+          } else if (!existingContentType) {
+            // Only set HTML for non-resource routes that don't have Content-Type set
             responseHeaders.set("Content-Type", "text/html");
-            console.log(`[Entry Server] Set Content-Type to text/html for: ${url.pathname}`);
-          } else if (isResourceRoute) {
-            console.log(`[Entry Server] Resource route detected - preserving Content-Type: ${existingContentType} for: ${url.pathname}`);
+            console.log(`[Entry Server] Set Content-Type to text/html for: ${requestUrl.pathname}`);
           }
           
           resolve(
