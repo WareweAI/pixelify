@@ -71,5 +71,6 @@ export function ErrorBoundary() {
 }
 
 export const headers: HeadersFunction = (headersArgs) => {
+  // Let entry.server.tsx handle CSP - it runs after Shopify headers
   return boundary.headers(headersArgs);
 };

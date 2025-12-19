@@ -5,6 +5,7 @@ import { getShopifyInstance } from "../shopify.server";
 import prisma from "../db.server";
 import { generateRandomPassword } from "../lib/crypto.server";
 import { createAppWithSettings, renameApp, deleteAppWithData } from "../services/app.service.server";
+import { validateMetaCredentials } from "../services/meta-capi.server";
 import {
   Page,
   Card,
@@ -22,7 +23,7 @@ import {
   Divider,
   Badge,
 } from "@shopify/polaris";
-import { CheckIcon, ConnectIcon } from "@shopify/polaris-icons";
+// Icons removed due to build issues - using text labels instead
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopify = getShopifyInstance();
@@ -148,7 +149,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     try {
       // Use the proper validation method from meta-capi service (same as test connection)
-      const { validateMetaCredentials } = await import("../services/meta-capi.server");
       const validationResult = await validateMetaCredentials(pixelId, accessToken);
 
       if (!validationResult.valid) {
@@ -199,7 +199,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     try {
       // Use the proper validation method from meta-capi service
-      const { validateMetaCredentials } = await import("../services/meta-capi.server");
       const result = await validateMetaCredentials(pixelId, accessToken);
 
       if (!result.valid) {
@@ -859,7 +858,7 @@ export default function DashboardPage() {
                   marginTop: "2px"
                 }}>
                   {currentStep > 1 ? (
-                    <Icon source={CheckIcon} tone="base" />
+                    <Text as="span" variant="bodySm">✓</Text>
                   ) : (
                     <Text as="span" variant="bodySm" tone={currentStep === 1 ? "base" : "subdued"}>
                       1
@@ -1063,7 +1062,6 @@ export default function DashboardPage() {
                       <Card background="bg-surface-secondary">
                         <BlockStack gap="300">
                           <InlineStack gap="200" blockAlign="center">
-                            <Icon source={ConnectIcon} tone="base" />
                             <Text variant="headingSm" as="h3">
                               Connect to Facebook
                             </Text>

@@ -56,3 +56,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return Response.json({ error: "Internal error" }, { status: 500 });
   }
 }
+
+// Resource route - no UI component
+export default function GetPixelIdResource() {
+  return null;
+}

@@ -74,16 +74,19 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
       }));
 
     // Get the base URL for API calls
-    const baseUrl = process.env.SHOPIFY_APP_URL || "https://pixel-warewe.vercel.app";
+    const baseUrl = process.env.SHOPIFY_APP_URL?.replace(/^["']|["']$/g, '').trim() || "https://pixelify-red.vercel.app";
+    
+    // Use App Proxy endpoint if shop is provided (no CORS), otherwise fallback to API endpoint
+    const useAppProxy = shop && shop.includes('.myshopify.com');
+    const endpoint = useAppProxy ? '/apps/pixel-api/track' : (baseUrl + '/api/track');
     
     const script = `
 (function() {
   'use strict';
   var APP_ID = '${id}';
-  var SHOP_DOMAIN = '${shop}';
-  var BASE_URL = '${baseUrl}';
-  var ENDPOINT = BASE_URL + '/api/track';
-  var BEACON_ENDPOINT = BASE_URL + '/api/track';
+  var SHOP_DOMAIN = '${shop || ""}';
+  var ENDPOINT = '${endpoint}';
+  var BEACON_ENDPOINT = '${endpoint}';
   var SESSION_KEY = 'px_session_${id}';
   var VISITOR_KEY = 'px_visitor_${id}';
   var DEBUG = true;
@@ -150,12 +153,15 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
 
     if (DEBUG) console.log('[PixelAnalytics] Tracking:', eventName, data);
 
-    // Use sendBeacon if available, otherwise fetch
+    // Use sendBeacon if available (works with App Proxy), otherwise fetch
     if (navigator.sendBeacon) {
       try {
         var blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
-        navigator.sendBeacon(BEACON_ENDPOINT, blob);
+        var url = BEACON_ENDPOINT + (SHOP_DOMAIN ? '?shop=' + SHOP_DOMAIN : '');
+        var success = navigator.sendBeacon(url, blob);
+        if (DEBUG && !success) console.warn('[PixelAnalytics] sendBeacon failed');
       } catch (e) {
+        if (DEBUG) console.error('[PixelAnalytics] sendBeacon error:', e);
         sendFetch(data);
       }
     } else {
@@ -166,7 +172,8 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
 
   function sendFetch(data) {
     try {
-      fetch(ENDPOINT, {
+      var url = ENDPOINT + (SHOP_DOMAIN ? '?shop=' + SHOP_DOMAIN : '');
+      fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),

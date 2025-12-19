@@ -127,3 +127,8 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 }
 
+// Resource route - no UI component
+export default function TrackResource() {
+  return null;
+}
+

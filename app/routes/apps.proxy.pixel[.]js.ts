@@ -161,3 +161,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 }
 
+// Resource route - no UI component
+export default function PixelJsResource() {
+  return null;
+}
+

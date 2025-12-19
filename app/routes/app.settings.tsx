@@ -160,7 +160,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       // Find and delete script tags from our app (pixel-warewe or pixel.js)
       let deletedCount = 0;
       for (const tag of scriptTags) {
-        if (tag.src && (tag.src.includes("pixel-warewe") || tag.src.includes("pixel.js"))) {
+        if (tag.src && (tag.src.includes("pixelify") || tag.src.includes("pixel-warewe") || tag.src.includes("pixel.js"))) {
           console.log(`Deleting script tag: ${tag.id} - ${tag.src}`);
           const deleteRes = await fetch(`https://${session.shop}/admin/api/2024-10/script_tags/${tag.id}.json`, {
             method: "DELETE",
