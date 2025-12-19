@@ -7,7 +7,7 @@ import { getGeoData } from "~/services/geo.server";
 
 // Helper function to create consistent JSON responses with proper headers
 function createJsonResponse(data: any, status: number = 200, additionalHeaders: Record<string, string> = {}) {
-  return new Response(JSON.stringify(data), {
+  return Response.json(data, {
     status,
     headers: {
       "Content-Type": "application/json; charset=utf-8",

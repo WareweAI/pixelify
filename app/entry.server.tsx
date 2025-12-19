@@ -20,6 +20,63 @@ export default async function handleRequest(
   responseHeaders: Headers,
   reactRouterContext: EntryContext
 ) {
+  const url = new URL(request.url);
+  const isApiRoute = url.pathname.startsWith("/apps/proxy/") ||
+                      url.pathname.startsWith("/apps/pixel-api/") ||
+                      url.pathname.startsWith("/api/");
+
+  // For API routes, check if we have loader/action data to return as JSON
+  if (isApiRoute && reactRouterContext.staticHandlerContext) {
+    const { loaderData, actionData, statusCode } = reactRouterContext.staticHandlerContext;
+    
+    // Check loaderData first (for GET requests)
+    if (loaderData && Object.keys(loaderData).length > 0) {
+      // Find the matching route's data (usually the last match for the API route)
+      const matches = reactRouterContext.staticHandlerContext.matches || [];
+      for (let i = matches.length - 1; i >= 0; i--) {
+        const match = matches[i];
+        const routeId = match.route.id;
+        if (loaderData[routeId] !== undefined && loaderData[routeId] !== null) {
+          const data = loaderData[routeId];
+          // Found data, return as JSON
+          return Response.json(data, {
+            status: statusCode || responseStatusCode || 200,
+            headers: {
+              "Content-Type": "application/json; charset=utf-8",
+              "X-Content-Type-Options": "nosniff",
+              "Access-Control-Allow-Origin": "*",
+              "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+              "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            },
+          });
+        }
+      }
+    }
+    
+    // Check actionData (for POST/PUT/DELETE requests)
+    if (actionData && Object.keys(actionData).length > 0) {
+      const matches = reactRouterContext.staticHandlerContext.matches || [];
+      for (let i = matches.length - 1; i >= 0; i--) {
+        const match = matches[i];
+        const routeId = match.route.id;
+        if (actionData[routeId] !== undefined && actionData[routeId] !== null) {
+          const data = actionData[routeId];
+          // Found data, return as JSON
+          return Response.json(data, {
+            status: statusCode || responseStatusCode || 200,
+            headers: {
+              "Content-Type": "application/json; charset=utf-8",
+              "X-Content-Type-Options": "nosniff",
+              "Access-Control-Allow-Origin": "*",
+              "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+              "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            },
+          });
+        }
+      }
+    }
+  }
+
   // Add Shopify headers if available
   try {
     addDocumentResponseHeaders(request, responseHeaders);
