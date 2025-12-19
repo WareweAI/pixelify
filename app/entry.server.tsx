@@ -20,20 +20,17 @@ export default async function handleRequest(
   responseHeaders: Headers,
   reactRouterContext: EntryContext
 ) {
-  const url = new URL(request.url);
-  const isAppProxyRoute = url.pathname.startsWith('/apps/proxy/') || 
-                          url.pathname.startsWith('/apps/pixel-api/') ||
-                          url.pathname.startsWith('/api/');
-  
-  // Let Shopify handle all embedding headers - DO NOT override CSP
-  if (!isAppProxyRoute) {
-    try {
-      addDocumentResponseHeaders(request, responseHeaders);
-    } catch (error) {
-      console.log("Shopify headers not added - running in standalone mode");
-    }
+  // Add Shopify headers if available
+  try {
+    addDocumentResponseHeaders(request, responseHeaders);
+  } catch (error) {
+    // Shopify not configured - this is fine for landing page on Vercel
+    console.log("Shopify headers not added - running in standalone mode");
   }
-  
+
+  // Ensure proper headers for Shopify embedding
+  responseHeaders.delete("X-Frame-Options"); // Remove any existing X-Frame-Options
+  responseHeaders.set("Content-Security-Policy", "frame-ancestors https://*.myshopify.com https://admin.shopify.com;");
   const userAgent = request.headers.get("user-agent");
   const callbackName = isbot(userAgent ?? '')
     ? "onAllReady"
@@ -50,18 +47,26 @@ export default async function handleRequest(
           const body = new PassThrough();
           const stream = createReadableStreamFromReadable(body);
 
-          // Check if Content-Type is already set (from route's headers function or loader Response)
-          const contentType = responseHeaders.get("Content-Type");
-          const isJsonResponse = contentType?.includes("application/json");
-          const isJsResponse = contentType?.includes("application/javascript");
+          // CRITICAL: Check if Content-Type is already set (from route's headers function or loader Response)
+          // For resource routes (API routes), React Router v7 should use the Response body directly
+          // DO NOT override JSON/JS Content-Type with HTML
+          const existingContentType = responseHeaders.get("Content-Type");
+          const url = new URL(request.url);
+          const isResourceRoute = existingContentType?.includes("application/json") || 
+                                 existingContentType?.includes("application/javascript") ||
+                                 url.pathname.startsWith("/apps/proxy/") ||
+                                 url.pathname.startsWith("/apps/pixel-api/") ||
+                                 url.pathname.startsWith("/api/");
           
-          if (!isAppProxyRoute && !isJsonResponse && !isJsResponse && !responseHeaders.has("Content-Type")) {
+          // Debug logging for all routes
+          console.log(`[Entry Server] Processing request: ${url.pathname}, Content-Type: ${existingContentType || 'not set'}, Status: ${responseStatusCode}, isResourceRoute: ${isResourceRoute}`);
+          
+          // Only set HTML Content-Type if it's not already set and it's not a resource route
+          if (!isResourceRoute && !existingContentType) {
             responseHeaders.set("Content-Type", "text/html");
-          }
-          
-          // Log for debugging API routes
-          if (isAppProxyRoute) {
-            console.log(`[Entry Server] API route: ${url.pathname}, Content-Type: ${contentType || 'not set'}, Status: ${responseStatusCode}`);
+            console.log(`[Entry Server] Set Content-Type to text/html for: ${url.pathname}`);
+          } else if (isResourceRoute) {
+            console.log(`[Entry Server] Resource route detected - preserving Content-Type: ${existingContentType} for: ${url.pathname}`);
           }
           
           resolve(
@@ -83,7 +88,6 @@ export default async function handleRequest(
     );
 
     // Automatically timeout the React renderer after 6 seconds, which ensures
-    // React has enough time to flush down the rejected boundary contents
     setTimeout(abort, streamTimeout + 1000);
   });
 }
