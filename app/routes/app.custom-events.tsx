@@ -322,11 +322,11 @@ export default function CustomEvents() {
                 <p>Create your first custom event to start tracking specific user interactions.</p>
               </EmptyState>
             ) : (
-              <DataTable
-                columnContentTypes={['text', 'text', 'text', 'text', 'text', 'text']}
-                headings={['Display Name', 'Event Name', 'Page Type', 'Selector', 'Status', 'Actions']}
-                rows={rows}
-              />
+            <DataTable
+              columnContentTypes={['text', 'text', 'text', 'text', 'text', 'text']}
+              headings={['Display Name', 'Event Name', 'Page Type', 'Selector', 'Status', 'Actions']}
+              rows={rows}
+            />
             )}
           </Card>
         </Layout.Section>
@@ -345,7 +345,7 @@ export default function CustomEvents() {
             }
             const form = document.getElementById('create-event-form') as HTMLFormElement;
             if (form) {
-              form.requestSubmit();
+            form.requestSubmit();
             }
           },
           disabled: !formData.selector || formData.selector.trim() === "" || !formData.displayName || formData.displayName.trim() === ""

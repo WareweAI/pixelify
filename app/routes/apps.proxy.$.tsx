@@ -25,14 +25,14 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       const shopDomain = url.searchParams.get("shop");
     
       if (!shopDomain) {
-      return Response.json({ error: "Missing shop parameter" }, { 
-        status: 400,
-        headers: { 
-          "Content-Type": "application/json; charset=utf-8",
-          "X-Content-Type-Options": "nosniff"
-        }
-      });
-    }
+        return Response.json({ error: "Missing shop parameter" }, { 
+          status: 400,
+          headers: { 
+            "Content-Type": "application/json; charset=utf-8",
+            "X-Content-Type-Options": "nosniff"
+          }
+        });
+      }
 
     // Check database connection first and wrap all DB operations
     try {
@@ -136,7 +136,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
         headers: { "Content-Type": "application/json" }
       });
     }
-    }
+  }
 
   // Route: /apps/pixel-api/pixel.js
   if (path === "pixel.js" || path.startsWith("pixel.js")) {
@@ -347,60 +347,60 @@ export async function action({ request, params }: ActionFunctionArgs) {
       }
 
       try {
-      const body = await request.json();
-      const { appId, eventName } = body;
+        const body = await request.json();
+        const { appId, eventName } = body;
 
-      if (!appId || !eventName) {
-        return Response.json({ error: "Missing required fields" }, { 
-        status: 400,
-        headers: { "Content-Type": "application/json" }
-      });
-      }
+        if (!appId || !eventName) {
+          return Response.json({ error: "Missing required fields" }, { 
+            status: 400,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
 
-      const app = await prisma.app.findUnique({
-        where: { appId },
-        include: { settings: true },
-      });
-
-      if (!app) {
-        return Response.json({ error: "App not found" }, { 
-          status: 404,
-          headers: { "Content-Type": "application/json" }
+        const app = await prisma.app.findUnique({
+          where: { appId },
+          include: { settings: true },
         });
-      }
 
-      const userAgent = request.headers.get("user-agent") || "";
-      const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "0.0.0.0";
-      const deviceInfo = parseUserAgent(userAgent);
-      const deviceType = getDeviceType(userAgent, body.screenWidth);
-      const geoData = app.settings?.recordLocation ? await getGeoData(ip) : null;
+        if (!app) {
+          return Response.json({ error: "App not found" }, { 
+            status: 404,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
 
-      const event = await prisma.event.create({
-        data: {
-          appId: app.id,
-          eventName,
-          url: body.url || null,
-          referrer: body.referrer || null,
-          sessionId: body.sessionId || null,
-          fingerprint: body.visitorId || null,
-          ipAddress: app.settings?.recordIp ? ip : null,
-          userAgent,
-          browser: deviceInfo.browser,
-          browserVersion: deviceInfo.browserVersion,
-          os: deviceInfo.os,
-          osVersion: deviceInfo.osVersion,
-          deviceType,
-          screenWidth: body.screenWidth || null,
-          screenHeight: body.screenHeight || null,
-          pageTitle: body.pageTitle || null,
-          utmSource: body.utmSource || null,
-          utmMedium: body.utmMedium || null,
-          utmCampaign: body.utmCampaign || null,
-          city: geoData?.city || null,
-          country: geoData?.country || null,
-          customData: body.customData || null,
-        },
-      });
+        const userAgent = request.headers.get("user-agent") || "";
+        const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "0.0.0.0";
+        const deviceInfo = parseUserAgent(userAgent);
+        const deviceType = getDeviceType(userAgent, body.screenWidth);
+        const geoData = app.settings?.recordLocation ? await getGeoData(ip) : null;
+
+        const event = await prisma.event.create({
+          data: {
+            appId: app.id,
+            eventName,
+            url: body.url || null,
+            referrer: body.referrer || null,
+            sessionId: body.sessionId || null,
+            fingerprint: body.visitorId || null,
+            ipAddress: app.settings?.recordIp ? ip : null,
+            userAgent,
+            browser: deviceInfo.browser,
+            browserVersion: deviceInfo.browserVersion,
+            os: deviceInfo.os,
+            osVersion: deviceInfo.osVersion,
+            deviceType,
+            screenWidth: body.screenWidth || null,
+            screenHeight: body.screenHeight || null,
+            pageTitle: body.pageTitle || null,
+            utmSource: body.utmSource || null,
+            utmMedium: body.utmMedium || null,
+            utmCampaign: body.utmCampaign || null,
+            city: geoData?.city || null,
+            country: geoData?.country || null,
+            customData: body.customData || null,
+          },
+        });
 
         return Response.json({ success: true, eventId: event.id }, {
           headers: { "Content-Type": "application/json" }

@@ -30,7 +30,7 @@ export default async function handleRequest(
 
   // Ensure proper headers for Shopify embedding
   responseHeaders.delete("X-Frame-Options"); // Remove any existing X-Frame-Options
-  responseHeaders.set("Content-Security-Policy", "frame-ancestors https://*.myshopify.com https://admin.shopify.com;");
+  responseHeaders.set("Content-Security-Policy", "frame-ancestors https://*.myshopify.com https://admin.shopify.com https://shop.app;");
   const userAgent = request.headers.get("user-agent");
   const callbackName = isbot(userAgent ?? '')
     ? "onAllReady"
