@@ -16,29 +16,31 @@ if (
   delete process.env.HOST;
 }
 
-const host = new URL(process.env.SHOPIFY_APP_URL || "https://pixelify-red.vercel.app/")
+const host = new URL(process.env.SHOPIFY_APP_URL || "https://pixelify-red.vercel.app")
   .hostname;
 let hmrConfig;
 
-if (host === "localhost") {
+// Check if we're in development mode and hot reload should be enabled
+const isDevelopment = process.env.NODE_ENV === "development";
+const hotReloadPort = process.env.HMR_PORT || process.env.FRONTEND_PORT;
+
+if (host === "localhost" && isDevelopment) {
   hmrConfig = {
     protocol: "ws",
     host: "localhost",
     port: 64999,
     clientPort: 64999,
   };
-} else {
+} else if (isDevelopment && hotReloadPort) {
   hmrConfig = {
     protocol: "wss",
     host: host,
-    port: parseInt(process.env.FRONTEND_PORT || "8002"),
+    port: parseInt(hotReloadPort),
     clientPort: 443,
   };
-}
-
-// Add hot reload port for theme development
-if (process.env.NODE_ENV === "development") {
-  process.env.SHOPIFY_CLI_THEME_TOKEN = process.env.SHOPIFY_CLI_THEME_TOKEN || "development";
+} else {
+  // Disable HMR if not in development or no port specified
+  hmrConfig = false;
 }
 
 export default defineConfig({
@@ -59,6 +61,6 @@ export default defineConfig({
     assetsInlineLimit: 0,
   },
   optimizeDeps: {
-    include: ["@shopify/app-bridge-react", "@shopify/polaris-icons"],
+    include: ["@shopify/app-bridge-react"],
   },
 });

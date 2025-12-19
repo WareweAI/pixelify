@@ -1,9 +1,16 @@
 // App Proxy handler - receives requests from /apps/pixel-api/* on the shop domain
 // This avoids CORS issues because requests come from the same origin (shop domain)
-import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import type { LoaderFunctionArgs, ActionFunctionArgs, HeadersFunction } from "react-router";
 import prisma from "../db.server";
 import { parseUserAgent, getDeviceType } from "../services/device.server";
 import { getGeoData } from "../services/geo.server";
+
+// Ensure all responses from this route are JSON (resource route)
+export const headers: HeadersFunction = () => {
+  return {
+    "Content-Type": "application/json; charset=utf-8",
+  };
+};
 
 // Handle GET requests (e.g., get-pixel-id)
 export async function loader({ request, params }: LoaderFunctionArgs) {
@@ -21,7 +28,10 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       if (!shopDomain) {
       return Response.json({ error: "Missing shop parameter" }, { 
         status: 400,
-        headers: { "Content-Type": "application/json" }
+        headers: { 
+          "Content-Type": "application/json; charset=utf-8",
+          "X-Content-Type-Options": "nosniff"
+        }
       });
     }
 
@@ -35,7 +45,10 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
         shop: shopDomain 
       }, { 
         status: 503,
-        headers: { "Content-Type": "application/json" }
+        headers: { 
+          "Content-Type": "application/json; charset=utf-8",
+          "X-Content-Type-Options": "nosniff"
+        }
       });
     }
 
@@ -47,7 +60,10 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       if (!user) {
         return Response.json({ error: "Shop not found", shop: shopDomain }, { 
           status: 404,
-          headers: { "Content-Type": "application/json" }
+          headers: { 
+            "Content-Type": "application/json; charset=utf-8",
+            "X-Content-Type-Options": "nosniff"
+          }
         });
       }
 
@@ -60,7 +76,10 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       if (!app) {
         return Response.json({ error: "No pixel configured", shop: shopDomain }, { 
           status: 404,
-          headers: { "Content-Type": "application/json" }
+          headers: { 
+            "Content-Type": "application/json; charset=utf-8",
+            "X-Content-Type-Options": "nosniff"
+          }
         });
       }
 
@@ -82,7 +101,10 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
         },
         customEvents,
       }, {
-        headers: { "Content-Type": "application/json" }
+        headers: { 
+          "Content-Type": "application/json; charset=utf-8",
+          "X-Content-Type-Options": "nosniff"
+        }
       });
     } catch (error: any) {
       console.error("[App Proxy] Error:", error);
