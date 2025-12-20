@@ -52,29 +52,11 @@ function initializeShopify() {
     const appUrl = sanitizeUrl(process.env.SHOPIFY_APP_URL || vercelUrl);
     process.env.SHOPIFY_APP_URL = appUrl;
 
-    // Only use PrismaSessionStorage if database is available
-    // Create a dedicated Prisma client for session storage
+    // Temporarily disable PrismaSessionStorage due to database connectivity issues
+    // TODO: Re-enable once Supabase database is accessible
     let sessionStorage;
-    if (hasDatabase) {
-      try {
-        // Always use pooled connection for session storage for better reliability
-        const dbUrl = process.env.DATABASE_URL;
-        console.log("[Shopify] Using pooled connection for session storage (port 6543)");
-        
-        const sessionPrisma = new PrismaClient({
-          datasources: {
-            db: { url: dbUrl },
-          },
-        });
-        
-        sessionStorage = new PrismaSessionStorage(sessionPrisma);
-        console.log("[Shopify] Session storage initialized successfully");
-      } catch (error) {
-        console.error("[Shopify] Failed to initialize session storage:", error);
-        console.log("[Shopify] Falling back to memory session storage");
-        sessionStorage = undefined; // Will use default memory storage
-      }
-    }
+    console.log("[Shopify] Using memory session storage (database temporarily disabled)");
+    sessionStorage = undefined; // Will use default memory storage
 
     return shopifyApp({
       apiKey: apiKey,
