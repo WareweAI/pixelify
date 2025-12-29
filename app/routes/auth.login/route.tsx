@@ -89,13 +89,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         // Check if prisma is actually initialized (not empty object)
         if (prisma && typeof prisma.user !== "undefined") {
           let user = await prisma.user.findUnique({
-            where: { email: session.shop },
+            where: { storeUrl: session.shop },
           });
 
           if (!user) {
             user = await prisma.user.create({
               data: {
-                email: session.shop,
+                storeUrl: session.shop,
                 password: generateRandomPassword(),
               },
             });

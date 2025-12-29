@@ -1,5 +1,5 @@
 import type { LoaderFunctionArgs } from "react-router";
-import db from "~/db.server";
+import db from "../db.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
@@ -32,9 +32,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
       .map(event => ({
         id: event.id,
         name: event.name,
-        buttonText: event.buttonText,
-        buttonColor: event.buttonColor,
-        textColor: event.textColor,
+        displayName: event.displayName,
+        selector: event.selector,
+        eventType: event.eventType,
+        pageType: event.pageType,
+        pageUrl: event.pageUrl,
         data: event.eventData ? JSON.parse(event.eventData) : {}
       }));
 

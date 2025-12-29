@@ -5,6 +5,72 @@ import { parseUserAgent, getDeviceType } from '~/services/device.server';
 import { getGeoData } from '~/services/geo.server';
 import { forwardToMeta } from '~/services/meta-capi.server';
 
+// Sanitize event data for Facebook CAPI
+function sanitizeEventDataForFacebook(data: any): any {
+  if (!data || typeof data !== 'object') return {};
+  
+  const sanitized: any = {};
+  
+  for (const [key, value] of Object.entries(data)) {
+    // Skip null or undefined values
+    if (value === null || value === undefined) continue;
+    
+    // Handle numeric fields that Facebook expects as numbers
+    if (['value', 'quantity', 'num_items'].includes(key)) {
+      if (typeof value === 'string') {
+        // Check if it's a Liquid template (contains {{ }})
+        if (value.includes('{{') && value.includes('}}')) {
+          console.log(`[Track] Skipping Liquid template for ${key}: ${value}`);
+          continue; // Skip Liquid templates
+        }
+        
+        // Try to parse as number
+        const numValue = parseFloat(value);
+        if (!isNaN(numValue)) {
+          sanitized[key] = numValue;
+        } else {
+          console.log(`[Track] Invalid numeric value for ${key}: ${value}`);
+          continue; // Skip invalid numeric values
+        }
+      } else if (typeof value === 'number') {
+        sanitized[key] = value;
+      }
+      continue;
+    }
+    
+    // Handle string fields
+    if (typeof value === 'string') {
+      // Skip Liquid templates for all string fields
+      if (value.includes('{{') && value.includes('}}')) {
+        console.log(`[Track] Skipping Liquid template for ${key}: ${value}`);
+        continue;
+      }
+      sanitized[key] = value;
+    } else if (typeof value === 'number' || typeof value === 'boolean') {
+      sanitized[key] = value;
+    } else if (Array.isArray(value)) {
+      // Handle arrays (like content_ids)
+      const sanitizedArray = value.filter(item => {
+        if (typeof item === 'string') {
+          return !item.includes('{{') || !item.includes('}}');
+        }
+        return true;
+      });
+      if (sanitizedArray.length > 0) {
+        sanitized[key] = sanitizedArray;
+      }
+    } else if (typeof value === 'object') {
+      // Recursively sanitize nested objects
+      const sanitizedNested = sanitizeEventDataForFacebook(value);
+      if (Object.keys(sanitizedNested).length > 0) {
+        sanitized[key] = sanitizedNested;
+      }
+    }
+  }
+  
+  return sanitized;
+}
+
 export async function action({ request }: ActionFunctionArgs) {
   console.log('[Track] Incoming request method:', request.method, 'URL:', request.url);
 
@@ -251,15 +317,54 @@ export async function action({ request }: ActionFunctionArgs) {
       },
     });
 
-    // Forward to Meta if enabled
+    // Forward ALL events to Meta CAPI (server-side) to bypass adblockers
+    // Both regular events (pageview, click, etc.) and custom events are sent to Facebook CAPI
     if (app.settings?.metaPixelEnabled && app.settings?.metaVerified) {
       try {
+        // Check if this is a custom event to get Meta event mapping
+        const customEvent = await prisma.customEvent.findFirst({
+          where: {
+            appId: app.id,
+            name: eventName,
+            isActive: true,
+          },
+        });
+
+        // Use Meta event name from custom event mapping if available, otherwise map the event name
+        let metaEventName = eventName;
+        if (customEvent?.metaEventName) {
+          metaEventName = customEvent.metaEventName;
+        }
+
+        // Parse event data if provided
+        let eventData = properties || {};
+        if (customEvent?.eventData) {
+          try {
+            const parsedEventData = JSON.parse(customEvent.eventData);
+            eventData = { ...parsedEventData, ...eventData };
+          } catch (e) {
+            console.error('[Track] Error parsing custom event data:', e);
+          }
+        }
+
+        // Add e-commerce data if available
+        if (value) eventData.value = value;
+        if (currency) eventData.currency = currency;
+        if (productId) eventData.product_id = productId;
+        if (productName) eventData.product_name = productName;
+        if (quantity) eventData.quantity = quantity;
+
+        // Sanitize event data for Facebook CAPI
+        const sanitizedEventData = sanitizeEventDataForFacebook(eventData);
+        console.log('[Track] Original event data:', eventData);
+        console.log('[Track] Sanitized event data:', sanitizedEventData);
+
         await forwardToMeta({
           pixelId: app.settings.metaPixelId!,
           accessToken: app.settings.metaAccessToken!,
           testEventCode: app.settings.metaTestEventCode || undefined,
           event: {
-            eventName,
+            eventName: metaEventName,
             eventTime: Math.floor(Date.now() / 1000),
             eventSourceUrl: url,
             actionSource: 'website',
@@ -268,12 +373,12 @@ export async function action({ request }: ActionFunctionArgs) {
               clientUserAgent: userAgent,
               externalId: fingerprint || visitorId,
             },
-            customData: properties,
+            customData: Object.keys(sanitizedEventData).length > 0 ? sanitizedEventData : undefined,
           },
         });
+        console.log(`[Track] Event "${eventName}" sent to Facebook CAPI as "${metaEventName}" (adblocker-proof)`);
       } catch (error) {
-        console.error('Meta forwarding error:', error);
-        // Don't fail the request if Meta forwarding fails
+        console.error('[Track] Meta CAPI forwarding error:', error);
       }
     }
 

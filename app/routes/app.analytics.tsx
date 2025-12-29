@@ -11,13 +11,36 @@ import {
   BlockStack,
   InlineStack,
   Select,
-  EmptyState,
+  EmptyState,   
   Spinner,
   Box,
   Badge,
   ProgressBar,
+  Button,
+  Icon,
+  Divider,
+  Grid,
+  DataTable,
+  Tooltip,
 } from "@shopify/polaris";
-// ClientOnly removed - Polaris components work with SSR
+import {
+  AlertTriangleIcon,
+  ViewIcon,
+  PersonIcon,
+  ClockIcon,
+  ChevronUpIcon,
+  ChevronDownIcon,
+  CalendarIcon,
+  LocationIcon,
+  DesktopIcon,
+  MobileIcon,
+  TabletIcon,
+  ExternalIcon,
+  SearchIcon,
+  CartIcon,
+  CheckIcon,
+  OrderIcon
+} from "@shopify/polaris-icons";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopify = getShopifyInstance();
@@ -29,7 +52,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shop = session.shop;
 
   const user = await prisma.user.findUnique({
-    where: { email: shop },
+    where: { storeUrl: shop },
   });
 
   if (!user) {
@@ -45,6 +68,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 interface AnalyticsData {
+  app: {
+    id: string;
+    name: string;
+    appId: string;
+  };
+  range: string;
   overview: {
     totalEvents: number;
     pageviews: number;
@@ -62,6 +91,16 @@ interface AnalyticsData {
     pageviews: number;
     uniqueUsers: number;
     sessions: number;
+  }>;
+  recentEvents: Array<{
+    id: string;
+    eventName: string;
+    url: string | null;
+    country: string | null;
+    city: string | null;
+    browser: string | null;
+    deviceType: string | null;
+    createdAt: string;
   }>;
 }
 
@@ -112,11 +151,19 @@ export default function AnalyticsPage() {
     { label: "Last 90 days", value: "90d" },
   ];
 
-  // Calculate max for progress bars
-  const maxPageCount = analytics?.topPages?.reduce((max, p) => Math.max(max, p.count), 1) || 1;
-  const maxCountryCount = analytics?.topCountries?.reduce((max, c) => Math.max(max, c.count), 1) || 1;
-  const maxBrowserCount = analytics?.topBrowsers?.reduce((max, b) => Math.max(max, b.count), 1) || 1;
-  const maxEventCount = analytics?.topEvents?.reduce((max, e) => Math.max(max, e.count), 1) || 1;
+  const formatNumber = (num: number) => {
+    if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+    if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
+    return num.toLocaleString();
+  };
+
+  const getDeviceIcon = (type: string) => {
+    switch (type.toLowerCase()) {
+      case 'mobile': return MobileIcon;
+      case 'tablet': return TabletIcon;
+      default: return DesktopIcon;
+    }
+  };
 
   if (apps.length === 0) {
     return (
@@ -126,10 +173,10 @@ export default function AnalyticsPage() {
             <Card>
               <EmptyState
                 heading="No pixels created"
-                action={{ content: "Go to Dashboard", url: "/app/dashboard" }}
+                action={{ content: "Create Pixel", url: "/app/pixels" }}
                 image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
               >
-                <p>Create a pixel first to view analytics.</p>
+                <p>Create a pixel first to start tracking and view analytics.</p>
               </EmptyState>
             </Card>
           </Layout.Section>
@@ -139,316 +186,327 @@ export default function AnalyticsPage() {
   }
 
   return (
-    <Page title="Analytics">
-        <Layout>
-          {/* Filters */}
+    <Page
+      title="Analytics Dashboard"
+      subtitle="Track your website performance and user behavior"
+    >
+      <Layout>
+        {/* Header Controls */}
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="400">
+              <InlineStack gap="400" wrap={false} align="space-between">
+                <InlineStack gap="300">
+                  <div style={{ minWidth: "200px" }}>
+                    <Select
+                      label="Select Pixel"
+                      options={appOptions}
+                      value={selectedApp}
+                      onChange={setSelectedApp}
+                    />
+                  </div>
+                  <div style={{ minWidth: "150px" }}>
+                    <Select
+                      label="Date Range"
+                      options={dateRangeOptions}
+                      value={dateRange}
+                      onChange={setDateRange}
+                    />
+                  </div>
+                </InlineStack>
+                <Button onClick={fetchAnalytics} loading={loading}>
+                  Refresh
+                </Button>
+              </InlineStack>
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+
+        {loading ? (
           <Layout.Section>
             <Card>
-              <InlineStack gap="400" wrap={false}>
-                <div style={{ minWidth: "200px" }}>
-                  <Select
-                    label="Select Pixel"
-                    options={appOptions}
-                    value={selectedApp}
-                    onChange={setSelectedApp}
-                  />
-                </div>
-                <div style={{ minWidth: "200px" }}>
-                  <Select
-                    label="Date Range"
-                    options={dateRangeOptions}
-                    value={dateRange}
-                    onChange={setDateRange}
-                  />
-                </div>
-              </InlineStack>
+              <BlockStack gap="400" inlineAlign="center">
+                <Spinner size="large" />
+                <Text as="p">Loading analytics...</Text>
+              </BlockStack>
             </Card>
           </Layout.Section>
-
-          {loading ? (
+        ) : error ? (
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="300" inlineAlign="center">
+                <Icon source={AlertTriangleIcon} tone="critical" />
+                <Text as="p" tone="critical" variant="headingMd">{error}</Text>
+                <Button onClick={fetchAnalytics}>Try Again</Button>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        ) : analytics ? (
+          <>
+            {/* Key Metrics Cards */}
             <Layout.Section>
-              <Card>
-                <BlockStack gap="400" inlineAlign="center">
-                  <Spinner size="large" />
-                  <Text as="p">Loading analytics...</Text>
-                </BlockStack>
-              </Card>
-            </Layout.Section>
-          ) : error ? (
-            <Layout.Section>
-              <Card>
-                <Text as="p" tone="critical">{error}</Text>
-              </Card>
-            </Layout.Section>
-          ) : analytics ? (
-            <>
-              {/* Overview Stats */}
-              <Layout.Section>
-                <InlineStack gap="400" wrap={false}>
-                  <div style={{ flex: 1 }}>
-                    <Card>
-                      <BlockStack gap="200">
-                        <Text variant="bodySm" as="p" tone="subdued">
-                          Total Events
+              <Grid>
+                <Grid.Cell columnSpan={{xs: 6, sm: 3, md: 3, lg: 3, xl: 3}}>
+                  <Card>
+                    <BlockStack gap="200">
+                      <Icon source={ViewIcon} tone="base" />
+                      <BlockStack gap="100">
+                        <Text variant="headingXl" as="h3">
+                          {formatNumber(analytics.overview.pageviews)}
                         </Text>
-                        <Text variant="heading2xl" as="p">
-                          {analytics.overview.totalEvents.toLocaleString()}
-                        </Text>
-                      </BlockStack>
-                    </Card>
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <Card>
-                      <BlockStack gap="200">
                         <Text variant="bodySm" as="p" tone="subdued">
                           Pageviews
                         </Text>
-                        <Text variant="heading2xl" as="p">
-                          {analytics.overview.pageviews.toLocaleString()}
-                        </Text>
                       </BlockStack>
-                    </Card>
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <Card>
-                      <BlockStack gap="200">
+                    </BlockStack>
+                  </Card>
+                </Grid.Cell>
+
+                <Grid.Cell columnSpan={{xs: 6, sm: 3, md: 3, lg: 3, xl: 3}}>
+                  <Card>
+                    <BlockStack gap="200">
+                      <Icon source={PersonIcon} tone="base" />
+                      <BlockStack gap="100">
+                        <Text variant="headingXl" as="h3">
+                          {formatNumber(analytics.overview.uniqueVisitors)}
+                        </Text>
                         <Text variant="bodySm" as="p" tone="subdued">
                           Unique Visitors
                         </Text>
-                        <Text variant="heading2xl" as="p">
-                          {analytics.overview.uniqueVisitors.toLocaleString()}
-                        </Text>
                       </BlockStack>
-                    </Card>
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <Card>
-                      <BlockStack gap="200">
+                    </BlockStack>
+                  </Card>
+                </Grid.Cell>
+
+                <Grid.Cell columnSpan={{xs: 6, sm: 3, md: 3, lg: 3, xl: 3}}>
+                  <Card>
+                    <BlockStack gap="200">
+                      <Icon source={ClockIcon} tone="base" />
+                      <BlockStack gap="100">
+                        <Text variant="headingXl" as="h3">
+                          {formatNumber(analytics.overview.sessions)}
+                        </Text>
                         <Text variant="bodySm" as="p" tone="subdued">
                           Sessions
                         </Text>
-                        <Text variant="heading2xl" as="p">
-                          {analytics.overview.sessions.toLocaleString()}
+                      </BlockStack>
+                    </BlockStack>
+                  </Card>
+                </Grid.Cell>
+
+                <Grid.Cell columnSpan={{xs: 6, sm: 3, md: 3, lg: 3, xl: 3}}>
+                  <Card>
+                    <BlockStack gap="200">
+                      <Icon source={CheckIcon} tone="base" />
+                      <BlockStack gap="100">
+                        <Text variant="headingXl" as="h3">
+                          {formatNumber(analytics.overview.totalEvents)}
+                        </Text>
+                        <Text variant="bodySm" as="p" tone="subdued">
+                          Total Events
                         </Text>
                       </BlockStack>
-                    </Card>
-                  </div>
-                </InlineStack>
-              </Layout.Section>
+                    </BlockStack>
+                  </Card>
+                </Grid.Cell>
+              </Grid>
+            </Layout.Section>
 
-              {/* Top Pages */}
-              <Layout.Section variant="oneHalf">
-                <Card>
-                  <BlockStack gap="400">
-                    <Text variant="headingMd" as="h2">Top Pages</Text>
-                    {analytics.topPages.length > 0 ? (
+            {/* Charts and Data */}
+            <Layout.Section>
+              <Grid>
+                {/* Daily Chart */}
+                <Grid.Cell columnSpan={{xs: 6, sm: 6, md: 4, lg: 8, xl: 8}}>
+                  <Card>
+                    <BlockStack gap="400">
+                      <Text variant="headingMd" as="h3">Daily Trends</Text>
+
+                      {analytics.dailyStats.length > 0 && (
+                        <Box padding="400" background="bg-surface-secondary" borderRadius="200">
+                          <InlineStack gap="100" align="end" blockAlign="end">
+                            {analytics.dailyStats.map((day, idx) => {
+                              const maxPv = Math.max(...analytics.dailyStats.map(d => d.pageviews), 1);
+                              const height = Math.max((day.pageviews / maxPv) * 120, 5);
+                              return (
+                                <Tooltip key={idx} content={`${day.date}: ${day.pageviews} pageviews, ${day.uniqueUsers} visitors`}>
+                                  <div
+                                    style={{
+                                      width: `${100 / analytics.dailyStats.length - 0.5}%`,
+                                      minWidth: "8px",
+                                      height: `${height}px`,
+                                      background: "linear-gradient(to top, #0f62fe, #4589ff)",
+                                      borderRadius: "4px 4px 0 0",
+                                      cursor: "pointer",
+                                    }}
+                                  />
+                                </Tooltip>
+                              );
+                            })}
+                          </InlineStack>
+                          <Box paddingBlockStart="200">
+                            <InlineStack align="space-between">
+                              <Text variant="bodySm" as="p" tone="subdued">
+                                {analytics.dailyStats[0]?.date}
+                              </Text>
+                              <Text variant="bodySm" as="p" tone="subdued">
+                                {analytics.dailyStats[analytics.dailyStats.length - 1]?.date}
+                              </Text>
+                            </InlineStack>
+                          </Box>
+                        </Box>
+                      )}
+                    </BlockStack>
+                  </Card>
+                </Grid.Cell>
+
+                {/* Device Breakdown */}
+                <Grid.Cell columnSpan={{xs: 6, sm: 6, md: 2, lg: 4, xl: 4}}>
+                  <Card>
+                    <BlockStack gap="400">
+                      <Text variant="headingMd" as="h3">Device Types</Text>
                       <BlockStack gap="300">
-                        {analytics.topPages.slice(0, 5).map((page, idx) => {
-                          let pathname = "-";
-                          try {
-                            pathname = page.url ? new URL(page.url).pathname : "-";
-                          } catch {
-                            pathname = page.url || "-";
-                          }
+                        {analytics.deviceTypes.map((device, idx) => {
+                          const total = analytics.deviceTypes.reduce((sum, d) => sum + d.count, 0);
+                          const percentage = total > 0 ? (device.count / total) * 100 : 0;
                           return (
-                            <BlockStack key={idx} gap="100">
+                            <BlockStack key={idx} gap="200">
                               <InlineStack align="space-between">
-                                <Text as="p" truncate>{pathname}</Text>
-                                <Text as="p" tone="subdued">{page.count}</Text>
+                                <InlineStack gap="200">
+                                  <Icon source={getDeviceIcon(device.type)} />
+                                  <Text as="p" variant="bodyMd" fontWeight="medium">
+                                    {device.type || "Unknown"}
+                                  </Text>
+                                </InlineStack>
+                                <Text as="p" tone="subdued">
+                                  {percentage.toFixed(1)}%
+                                </Text>
                               </InlineStack>
-                              <ProgressBar progress={(page.count / maxPageCount) * 100} size="small" />
+                              <ProgressBar
+                                progress={percentage}
+                                tone="success"
+                              />
                             </BlockStack>
                           );
                         })}
                       </BlockStack>
-                    ) : (
-                      <Text as="p" tone="subdued">No data yet</Text>
-                    )}
-                  </BlockStack>
-                </Card>
-              </Layout.Section>
-
-              {/* Top Countries */}
-              <Layout.Section variant="oneHalf">
-                <Card>
-                  <BlockStack gap="400">
-                    <Text variant="headingMd" as="h2">Top Countries</Text>
-                    {analytics.topCountries.length > 0 ? (
-                      <BlockStack gap="300">
-                        {analytics.topCountries.slice(0, 5).map((country, idx) => (
-                          <BlockStack key={idx} gap="100">
-                            <InlineStack align="space-between">
-                              <Text as="p">{country.country || "Unknown"}</Text>
-                              <Text as="p" tone="subdued">{country.count}</Text>
-                            </InlineStack>
-                            <ProgressBar progress={(country.count / maxCountryCount) * 100} size="small" tone="primary" />
-                          </BlockStack>
-                        ))}
-                      </BlockStack>
-                    ) : (
-                      <Text as="p" tone="subdued">No data yet</Text>
-                    )}
-                  </BlockStack>
-                </Card>
-              </Layout.Section>
-
-              {/* Top Browsers */}
-              <Layout.Section variant="oneHalf">
-                <Card>
-                  <BlockStack gap="400">
-                    <Text variant="headingMd" as="h2">Browsers</Text>
-                    {analytics.topBrowsers.length > 0 ? (
-                      <BlockStack gap="300">
-                        {analytics.topBrowsers.slice(0, 5).map((browser, idx) => (
-                          <BlockStack key={idx} gap="100">
-                            <InlineStack align="space-between">
-                              <Text as="p">{browser.browser || "Unknown"}</Text>
-                              <Text as="p" tone="subdued">{browser.count}</Text>
-                            </InlineStack>
-                            <ProgressBar progress={(browser.count / maxBrowserCount) * 100} size="small" tone="success" />
-                          </BlockStack>
-                        ))}
-                      </BlockStack>
-                    ) : (
-                      <Text as="p" tone="subdued">No data yet</Text>
-                    )}
-                  </BlockStack>
-                </Card>
-              </Layout.Section>
-
-              {/* Device Types */}
-              <Layout.Section variant="oneHalf">
-                <Card>
-                  <BlockStack gap="400">
-                    <Text variant="headingMd" as="h2">Devices</Text>
-                    {analytics.deviceTypes.length > 0 ? (
-                      <InlineStack gap="200" wrap>
-                        {analytics.deviceTypes.map((device, idx) => (
-                          <Badge
-                            key={String(idx)}
-                            tone={device.type === "mobile" ? "info" : device.type === "tablet" ? "warning" : "success"}
-                          >
-                            {`${device.type || "Unknown"}: ${device.count}`}
-                          </Badge>
-                        ))}
-                      </InlineStack>
-                    ) : (
-                      <Text as="p" tone="subdued">No data yet</Text>
-                    )}
-                  </BlockStack>
-                </Card>
-              </Layout.Section>
-
-              {/* Top Events */}
-              <Layout.Section variant="oneHalf">
-                <Card>
-                  <BlockStack gap="400">
-                    <Text variant="headingMd" as="h2">Top Events</Text>
-                    {analytics.topEvents.length > 0 ? (
-                      <BlockStack gap="300">
-                        {analytics.topEvents.slice(0, 5).map((event, idx) => (
-                          <BlockStack key={idx} gap="100">
-                            <InlineStack align="space-between">
-                              <Badge>{event.event}</Badge>
-                              <Text as="p" tone="subdued">{event.count}</Text>
-                            </InlineStack>
-                            <ProgressBar progress={(event.count / maxEventCount) * 100} size="small" tone="critical" />
-                          </BlockStack>
-                        ))}
-                      </BlockStack>
-                    ) : (
-                      <Text as="p" tone="subdued">No custom events yet</Text>
-                    )}
-                  </BlockStack>
-                </Card>
-              </Layout.Section>
-
-              {/* Top Referrers */}
-              <Layout.Section variant="oneHalf">
-                <Card>
-                  <BlockStack gap="400">
-                    <Text variant="headingMd" as="h2">Top Referrers</Text>
-                    {analytics.topReferrers.length > 0 ? (
-                      <BlockStack gap="200">
-                        {analytics.topReferrers.slice(0, 5).map((ref, idx) => {
-                          let domain = ref.referrer || "Direct";
-                          try {
-                            if (ref.referrer) {
-                              domain = new URL(ref.referrer).hostname;
-                            }
-                          } catch {
-                            domain = ref.referrer || "Direct";
-                          }
-                          return (
-                            <InlineStack key={idx} align="space-between">
-                              <Text as="p" truncate>{domain}</Text>
-                              <Text as="p" tone="subdued">{ref.count}</Text>
-                            </InlineStack>
-                          );
-                        })}
-                      </BlockStack>
-                    ) : (
-                      <Text as="p" tone="subdued">No referrer data yet</Text>
-                    )}
-                  </BlockStack>
-                </Card>
-              </Layout.Section>
-
-              {/* Daily Chart Placeholder */}
-              {analytics.dailyStats.length > 0 && (
-                <Layout.Section>
-                  <Card>
-                    <BlockStack gap="400">
-                      <Text variant="headingMd" as="h2">Daily Pageviews</Text>
-                      <Box padding="400" background="bg-surface-secondary" borderRadius="200">
-                        <InlineStack gap="100" align="end" blockAlign="end">
-                          {analytics.dailyStats.map((day, idx) => {
-                            const maxPv = Math.max(...analytics.dailyStats.map(d => d.pageviews), 1);
-                            const height = Math.max((day.pageviews / maxPv) * 100, 5);
-                            return (
-                              <div
-                                key={idx}
-                                style={{
-                                  width: `${100 / analytics.dailyStats.length - 1}%`,
-                                  minWidth: "20px",
-                                  height: `${height}px`,
-                                  backgroundColor: "#0f62fe",
-                                  borderRadius: "4px 4px 0 0",
-                                  display: "flex",
-                                  alignItems: "flex-start",
-                                  justifyContent: "center",
-                                }}
-                                title={`${day.date}: ${day.pageviews} pageviews`}
-                              />
-                            );
-                          })}
-                        </InlineStack>
-                        <InlineStack gap="100" align="space-between">
-                          {analytics.dailyStats.length > 0 && (
-                            <>
-                              <Text variant="bodySm" as="span" tone="subdued">
-                                {analytics.dailyStats[0]?.date}
-                              </Text>
-                              <Text variant="bodySm" as="span" tone="subdued">
-                                {analytics.dailyStats[analytics.dailyStats.length - 1]?.date}
-                              </Text>
-                            </>
-                          )}
-                        </InlineStack>
-                      </Box>
                     </BlockStack>
                   </Card>
-                </Layout.Section>
-              )}
-            </>
-          ) : (
+                </Grid.Cell>
+              </Grid>
+            </Layout.Section>
+
+            {/* Detailed Tables */}
+            <Layout.Section>
+              <Grid>
+                <Grid.Cell columnSpan={{xs: 6, sm: 6, md: 3, lg: 6, xl: 6}}>
+                  <Card>
+                    <BlockStack gap="400">
+                      <Text variant="headingMd" as="h3">Top Pages</Text>
+
+                      {analytics.topPages.length > 0 ? (
+                        <DataTable
+                          columnContentTypes={['text', 'numeric']}
+                          headings={['Page', 'Views']}
+                          rows={analytics.topPages.slice(0, 10).map(page => {
+                            let pathname = "-";
+                            try {
+                              pathname = page.url ? new URL(page.url).pathname : "-";
+                            } catch {
+                              pathname = page.url || "-";
+                            }
+                            return [
+                              pathname,
+                              formatNumber(page.count)
+                            ];
+                          })}
+                        />
+                      ) : (
+                        <Text as="p" tone="subdued">No page data yet</Text>
+                      )}
+                    </BlockStack>
+                  </Card>
+                </Grid.Cell>
+
+                <Grid.Cell columnSpan={{xs: 6, sm: 6, md: 3, lg: 6, xl: 6}}>
+                  <Card>
+                    <BlockStack gap="400">
+                      <Text variant="headingMd" as="h3">Traffic Sources</Text>
+
+                      {analytics.topReferrers.length > 0 ? (
+                        <DataTable
+                          columnContentTypes={['text', 'numeric']}
+                          headings={['Source', 'Visitors']}
+                          rows={analytics.topReferrers.slice(0, 10).map(ref => {
+                            let domain = ref.referrer || "Direct";
+                            try {
+                              if (ref.referrer) {
+                                domain = new URL(ref.referrer).hostname;
+                              }
+                            } catch {
+                              domain = ref.referrer || "Direct";
+                            }
+                            return [
+                              domain,
+                              formatNumber(ref.count)
+                            ];
+                          })}
+                        />
+                      ) : (
+                        <Text as="p" tone="subdued">No referrer data yet</Text>
+                      )}
+                    </BlockStack>
+                  </Card>
+                </Grid.Cell>
+              </Grid>
+            </Layout.Section>
+
+            {/* Recent Events */}
             <Layout.Section>
               <Card>
-                <Text as="p" tone="subdued">Select a pixel to view analytics</Text>
+                <BlockStack gap="400">
+                  <Text variant="headingMd" as="h3">Recent Events</Text>
+
+                  {analytics.recentEvents.length > 0 ? (
+                    <DataTable
+                      columnContentTypes={['text', 'text', 'text', 'text', 'text']}
+                      headings={['Event', 'Page', 'Location', 'Browser', 'Time']}
+                      rows={analytics.recentEvents.slice(0, 20).map(event => {
+                        const time = new Date(event.createdAt).toLocaleString();
+                        let pathname = "-";
+                        try {
+                          pathname = event.url ? new URL(event.url).pathname : "-";
+                        } catch {
+                          pathname = event.url || "-";
+                        }
+                        return [
+                          event.eventName,
+                          pathname,
+                          `${event.city || ''} ${event.country || ''}`.trim() || '-',
+                          event.browser || '-',
+                          time
+                        ];
+                      })}
+                    />
+                  ) : (
+                    <Text as="p" tone="subdued">No events yet</Text>
+                  )}
+                </BlockStack>
               </Card>
             </Layout.Section>
-          )}
-        </Layout>
-      </Page>
+          </>
+        ) : (
+          <Layout.Section>
+            <Card>
+              <EmptyState
+                heading="Select a pixel to view analytics"
+                image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+              >
+                <p>Choose a pixel from the dropdown above to start viewing analytics data.</p>
+              </EmptyState>
+            </Card>
+          </Layout.Section>
+        )}
+      </Layout>
+    </Page>
   );
-} 
+}

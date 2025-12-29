@@ -36,13 +36,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shop = session.shop;
 
   let user = await prisma.user.findUnique({
-    where: { email: shop },
+    where: { storeUrl: shop },
   });
 
   if (!user) {
     user = await prisma.user.create({
       data: {
-        email: shop,
+        storeUrl: shop,
         password: generateRandomPassword(),
       },
     });
@@ -128,7 +128,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
 
-  const user = await prisma.user.findUnique({ where: { email: shop } });
+  const user = await prisma.user.findUnique({ where: { storeUrl: shop } });
   if (!user) {
     return { error: "User not found" };
   }
@@ -146,9 +146,28 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return { error: "Access token is required to validate the pixel" };
     }
 
+    // Check if pixel already exists for this user
+    const existingPixel = await prisma.appSettings.findFirst({
+      where: {
+        metaPixelId: pixelId,
+        app: {
+          userId: user.id
+        }
+      },
+      include: {
+        app: {
+          select: { name: true }
+        }
+      }
+    });
+
+    if (existingPixel) {
+      return { error: `Pixel "${pixelId}" already exists in your app as "${existingPixel.app.name}". Each pixel can only be added once.` };
+    }
+
     try {
       // Validate the pixel exists and user has access
-      const validateResponse = await fetch(`https://graph.facebook.com/v18.0/${pixelId}?access_token=${accessToken}`);
+      const validateResponse = await fetch(`https://graph.facebook.com/v24.0/${pixelId}?access_token=${accessToken}`);
       const validateData = await validateResponse.json();
 
       if (validateData.error) {
@@ -199,7 +218,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     try {
       // Validate the pixel exists and user has access
-      const response = await fetch(`https://graph.facebook.com/v18.0/${pixelId}?access_token=${accessToken}`);
+      const response = await fetch(`https://graph.facebook.com/v24.0/${pixelId}?access_token=${accessToken}`);
       const data = await response.json();
 
       if (data.error) {
@@ -220,6 +239,25 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     if (!name || !metaAppId) {
       return { error: "App Name and Pixel ID are required" };
+    }
+
+    // Check if pixel already exists for this user
+    const existingPixel = await prisma.appSettings.findFirst({
+      where: {
+        metaPixelId: metaAppId,
+        app: {
+          userId: user.id
+        }
+      },
+      include: {
+        app: {
+          select: { name: true }
+        }
+      }
+    });
+
+    if (existingPixel) {
+      return { error: `Pixel "${metaAppId}" already exists in your app as "${existingPixel.app.name}". Each pixel can only be added once.` };
     }
 
     try {
@@ -285,29 +323,82 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     try {
-      // Fetch pixels from Facebook Graph API
-      const response = await fetch(`https://graph.facebook.com/v18.0/me/adaccounts?fields=account_id,name,pixels{id,name}&access_token=${accessToken}`);
-      const data = await response.json();
+      // Step 1: Fetch ad accounts to get business account ID
+      console.log("[Dashboard] Fetching Facebook ad accounts for pixels...");
+      const adAccountsResponse = await fetch(
+        `https://graph.facebook.com/v24.0/me/adaccounts?fields=id,name,business&access_token=${accessToken}`
+      );
+      const adAccountsData = await adAccountsResponse.json();
+      console.log("[Dashboard] Ad accounts response:", adAccountsData);
 
-      if (data.error) {
-        return { error: `Facebook API Error: ${data.error.message}` };
+      if (adAccountsData.error) {
+        console.error("[Dashboard] Ad accounts error:", adAccountsData.error);
+        // Fallback to original /me/adspixels if ad accounts fail
       }
 
-      const pixels: Array<{id: string, name: string, accountName: string}> = [];
-      
-      if (data.data) {
-        data.data.forEach((account: any) => {
-          if (account.pixels && account.pixels.data) {
-            account.pixels.data.forEach((pixel: any) => {
-              pixels.push({
-                id: pixel.id,
-                name: pixel.name,
-                accountName: account.name
-              });
+      let businessId: string | null = null;
+      let businessName: string | null = null;
+
+      if (adAccountsData.data && adAccountsData.data.length > 0) {
+        const accountWithBusiness = adAccountsData.data.find((acc: any) => acc.business && acc.business.id);
+        if (accountWithBusiness) {
+          businessId = accountWithBusiness.business.id;
+          businessName = accountWithBusiness.business.name || "Business Manager";
+          console.log(`[Dashboard] Using business account: ${businessName} (${businessId})`);
+        }
+      }
+
+      const pixels: Array<{ id: string; name: string; accountName: string }> = [];
+
+      if (businessId) {
+        // Step 2: Fetch pixels from business account: /{businessId}/adspixels
+        console.log(`[Dashboard] Fetching pixels from business: ${businessName} (${businessId})`);
+        const pixelsResponse = await fetch(
+          `https://graph.facebook.com/v24.0/${businessId}/adspixels?fields=id,name,creation_time,last_fired_time&access_token=${accessToken}`
+        );
+        const pixelsData = await pixelsResponse.json();
+        console.log("[Dashboard] Business pixels response:", pixelsData);
+
+        if (pixelsData.error) {
+          console.error("[Dashboard] Business pixels error:", pixelsData.error);
+        } else if (pixelsData.data) {
+          pixelsData.data.forEach((pixel: any) => {
+            pixels.push({
+              id: pixel.id,
+              name: pixel.name,
+              accountName: businessName || "Business Manager",
             });
-          }
-        });
+          });
+        }
       }
+
+      // Fallback: if no pixels from business or no business found, try /me/adspixels
+      if (pixels.length === 0) {
+        console.log("[Dashboard] No pixels from business. Falling back to /me/adspixels...");
+        const response = await fetch(
+          `https://graph.facebook.com/v24.0/me/adspixels?fields=id,name&access_token=${accessToken}`
+        );
+        const data = await response.json();
+        console.log("[Dashboard] /me/adspixels response:", data);
+
+        if (data.error) {
+          console.error("[Dashboard] Facebook API Error (me/adspixels):", data.error);
+          return { error: `Facebook API Error: ${data.error.message}` };
+        }
+
+        if (data.data) {
+          data.data.forEach((pixel: any) => {
+            pixels.push({
+              id: pixel.id,
+              name: pixel.name,
+              accountName: "Direct Pixel",
+            });
+          });
+        }
+      }
+
+      console.log(`[Dashboard] Fetched ${pixels.length} pixels from Facebook`);
+      console.log("[Dashboard] Pixels:", pixels);
 
       return { success: true, facebookPixels: pixels };
     } catch (error) {
@@ -335,11 +426,21 @@ export default function DashboardPage() {
   const [facebookPixels, setFacebookPixels] = useState<Array<{id: string, name: string, accountName: string}>>([]);
   const [isConnectedToFacebook, setIsConnectedToFacebook] = useState(false);
   const [facebookError, setFacebookError] = useState("");
+  const [facebookUser, setFacebookUser] = useState<{id: string, name: string} | null>(null);
+  const [isRefreshingToken, setIsRefreshingToken] = useState(false);
   
   const [pixelForm, setPixelForm] = useState({
     pixelName: "",
     pixelId: "",
     trackingPages: "all",
+  });
+
+  // Enhanced create modal state
+  const [showEnhancedCreateModal, setShowEnhancedCreateModal] = useState(false);
+  const [enhancedCreateForm, setEnhancedCreateForm] = useState({
+    appName: "",
+    pixelId: "",
+    accessToken: "",
   });
 
   // Create form state (for manual pixel creation)
@@ -354,6 +455,34 @@ export default function DashboardPage() {
 
   const isLoading = fetcher.state !== "idle";
 
+  // Load Facebook connection state from localStorage
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const savedToken = localStorage.getItem("facebook_access_token");
+      const savedUser = localStorage.getItem("facebook_user");
+      const savedPixels = localStorage.getItem("facebook_pixels");
+      
+      if (savedToken && savedUser) {
+        setFacebookAccessToken(savedToken);
+        setFacebookUser(JSON.parse(savedUser));
+        setIsConnectedToFacebook(true);
+        
+        if (savedPixels) {
+          setFacebookPixels(JSON.parse(savedPixels));
+        } else {
+          // Auto-fetch pixels if we have token but no cached pixels
+          fetcher.submit(
+            {
+              intent: "fetch-facebook-pixels",
+              accessToken: savedToken,
+            },
+            { method: "POST" }
+          );
+        }
+      }
+    }
+  }, [fetcher]);
+
   // Handle Facebook OAuth callback
   useEffect(() => {
     const facebookToken = searchParams.get("facebook_token");
@@ -364,6 +493,13 @@ export default function DashboardPage() {
       setFacebookError(`Facebook connection failed: ${facebookError}`);
     } else if (facebookToken && facebookSuccess) {
       setFacebookAccessToken(facebookToken);
+      setIsConnectedToFacebook(true);
+      
+      // Save to localStorage
+      if (typeof window !== "undefined") {
+        localStorage.setItem("facebook_access_token", facebookToken);
+      }
+      
       // Automatically fetch pixels when we get the token
       fetcher.submit(
         {
@@ -393,18 +529,66 @@ export default function DashboardPage() {
   }, [fetcher, pixelForm, inputMethod, facebookAccessToken]);
 
   const handleConnectToFacebook = useCallback(() => {
-    if (!facebookAccessToken) return;
-
-    fetcher.submit(
-      {
-        intent: "fetch-facebook-pixels",
-        accessToken: facebookAccessToken,
-      },
-      { method: "POST" }
-    );
+    // Open Facebook OAuth popup
+    const facebookAppId = "881927951248648"; // Your Facebook App ID
+    const redirectUri = encodeURIComponent(`${window.location.origin}/api/facebook/callback`);
+    const scope = "ads_read,business_management,ads_management,pages_show_list,pages_read_engagement"; // Required permissions for pixel access
     
-    setShowFacebookModal(false);
-  }, [fetcher, facebookAccessToken]);
+    const oauthUrl = `https://www.facebook.com/v24.0/dialog/oauth?client_id=${facebookAppId}&redirect_uri=${redirectUri}&scope=${scope}&response_type=code&state=${Date.now()}`;
+    
+    const popup = window.open(
+      oauthUrl,
+      'facebook-oauth',
+      'width=600,height=600,scrollbars=yes,resizable=yes'
+    );
+
+    // Listen for messages from the popup
+    const handleMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+
+      if (event.data.type === 'FACEBOOK_AUTH_SUCCESS') {
+        setFacebookAccessToken(event.data.accessToken);
+        
+        // Set pixels if they were fetched
+        if (event.data.pixels && event.data.pixels.length > 0) {
+          setFacebookPixels(event.data.pixels);
+          setIsConnectedToFacebook(true);
+        }
+        
+        // Show warning if any
+        if (event.data.warning) {
+          setFacebookError(event.data.warning);
+        }
+        
+        setShowFacebookModal(false);
+        window.removeEventListener('message', handleMessage);
+        
+        // If no pixels were fetched automatically, try to fetch them
+        if (!event.data.pixels || event.data.pixels.length === 0) {
+          fetcher.submit(
+            {
+              intent: "fetch-facebook-pixels",
+              accessToken: event.data.accessToken,
+            },
+            { method: "POST" }
+          );
+        }
+      } else if (event.data.type === 'FACEBOOK_AUTH_ERROR') {
+        setFacebookError(event.data.error);
+        window.removeEventListener('message', handleMessage);
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+
+    // Clean up if popup is closed manually
+    const checkClosed = setInterval(() => {
+      if (popup?.closed) {
+        window.removeEventListener('message', handleMessage);
+        clearInterval(checkClosed);
+      }
+    }, 1000);
+  }, [fetcher]);
 
   const handleSelectFacebookPixel = useCallback(() => {
     const selectedPixel = facebookPixels.find(p => p.id === selectedFacebookPixel);
@@ -418,12 +602,94 @@ export default function DashboardPage() {
   }, [facebookPixels, selectedFacebookPixel]);
 
   // Handle fetcher response
-  if (fetcher.data?.facebookPixels) {
-    if (facebookPixels.length === 0) {
+  useEffect(() => {
+    if (fetcher.data?.facebookPixels) {
       setFacebookPixels(fetcher.data.facebookPixels);
       setIsConnectedToFacebook(true);
+      
+      // Save pixels to localStorage
+      if (typeof window !== "undefined") {
+        localStorage.setItem("facebook_pixels", JSON.stringify(fetcher.data.facebookPixels));
+      }
     }
-  }
+    
+    // Handle user data from Facebook
+    if (fetcher.data?.facebookUser) {
+      setFacebookUser(fetcher.data.facebookUser);
+      
+      // Save user to localStorage
+      if (typeof window !== "undefined") {
+        localStorage.setItem("facebook_user", JSON.stringify(fetcher.data.facebookUser));
+      }
+    }
+  }, [fetcher.data]);
+
+  // Refresh Facebook token and pixels
+  const handleRefreshFacebookData = useCallback(async () => {
+    if (!facebookAccessToken) return;
+    
+    setIsRefreshingToken(true);
+    try {
+      // Validate current token and refresh pixels
+      fetcher.submit(
+        {
+          intent: "fetch-facebook-pixels",
+          accessToken: facebookAccessToken,
+        },
+        { method: "POST" }
+      );
+    } catch (error) {
+      console.error("Failed to refresh Facebook data:", error);
+      setFacebookError("Failed to refresh Facebook data. Please reconnect.");
+    } finally {
+      setIsRefreshingToken(false);
+    }
+  }, [facebookAccessToken, fetcher]);
+
+  // Disconnect from Facebook
+  const handleDisconnectFacebook = useCallback(() => {
+    setFacebookAccessToken("");
+    setFacebookUser(null);
+    setFacebookPixels([]);
+    setIsConnectedToFacebook(false);
+    setSelectedFacebookPixel("");
+    setFacebookError("");
+    
+    // Clear localStorage
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("facebook_access_token");
+      localStorage.removeItem("facebook_user");
+      localStorage.removeItem("facebook_pixels");
+    }
+  }, []);
+
+  const handleEnhancedCreate = useCallback(() => {
+    const pixelId = selectedFacebookPixel && selectedFacebookPixel !== "manual" 
+      ? selectedFacebookPixel 
+      : enhancedCreateForm.pixelId;
+    
+    const accessToken = selectedFacebookPixel && selectedFacebookPixel !== "manual"
+      ? facebookAccessToken
+      : enhancedCreateForm.accessToken;
+
+    if (!enhancedCreateForm.appName || !pixelId) {
+      return;
+    }
+
+    fetcher.submit(
+      {
+        intent: "create",
+        name: enhancedCreateForm.appName,
+        metaAppId: pixelId,
+        metaAccessToken: accessToken || "",
+      },
+      { method: "POST" }
+    );
+
+    setShowEnhancedCreateModal(false);
+    setEnhancedCreateForm({ appName: "", pixelId: "", accessToken: "" });
+    setSelectedFacebookPixel("");
+  }, [fetcher, enhancedCreateForm, selectedFacebookPixel, facebookAccessToken]);
 
   const handleCreate = useCallback(() => {
     if (!createForm.name || !createForm.metaAppId) {
@@ -494,8 +760,18 @@ export default function DashboardPage() {
         subtitle="Facebook Pixel & Conversion Tracking for Shopify"
         primaryAction={{
           content: "Add Facebook Pixel",
-          onAction: () => setShowCreateModal(true),
+          onAction: () => setShowEnhancedCreateModal(true),
         }}
+        secondaryActions={[
+          {
+            content: isConnectedToFacebook 
+              ? `Connected: ${facebookUser?.name || 'Facebook'}` 
+              : "Connect Facebook",
+            icon: ConnectIcon,
+            onAction: isConnectedToFacebook ? handleRefreshFacebookData : handleConnectToFacebook,
+            loading: isRefreshingToken,
+          }
+        ]}
       >
         <Layout>
           {/* Success/Error Banner */}
@@ -544,7 +820,7 @@ export default function DashboardPage() {
                   <BlockStack gap="200">
                     <Text variant="bodySm" as="p" tone="subdued">Events Today</Text>
                     <Text variant="headingXl" as="p">{stats.todayEvents.toLocaleString()}</Text>
-                    <Text variant="bodySm" as="p" tone="info">Live tracking</Text>
+                    <Text variant="bodySm" as="p" tone="subdued">Live tracking</Text>
                   </BlockStack>
                 </Card>
               </InlineStack>
@@ -639,7 +915,258 @@ export default function DashboardPage() {
           )}
         </Layout>
 
-        {/* Create Modal */}
+        {/* Enhanced Create Modal - Omega Pixel Style */}
+        <Modal
+          open={showEnhancedCreateModal}
+          onClose={() => {
+            setShowEnhancedCreateModal(false);
+            setEnhancedCreateForm({ appName: "", pixelId: "", accessToken: "" });
+            setSelectedFacebookPixel("");
+          }}
+          title="Create New Pixel"
+          primaryAction={{
+            content: "Create Pixel",
+            onAction: handleEnhancedCreate,
+            loading: isLoading,
+            disabled: 
+              !enhancedCreateForm.appName || 
+              (!enhancedCreateForm.pixelId && !selectedFacebookPixel) ||
+              apps.some((app: any) => app.settings?.metaPixelId === (enhancedCreateForm.pixelId || selectedFacebookPixel)),
+          }}
+          secondaryActions={[
+            {
+              content: "Cancel",
+              onAction: () => {
+                setShowEnhancedCreateModal(false);
+                setEnhancedCreateForm({ appName: "", pixelId: "", accessToken: "" });
+                setSelectedFacebookPixel("");
+              },
+            },
+          ]}
+        >
+          <Modal.Section>
+            <BlockStack gap="400">
+              {/* Facebook Connection Status */}
+              {isConnectedToFacebook && facebookUser ? (
+                <Card background="bg-surface-success">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <InlineStack gap="200" blockAlign="center">
+                      <div style={{
+                        width: "32px",
+                        height: "32px",
+                        borderRadius: "50%",
+                        backgroundColor: "#1877f2",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "white",
+                        fontWeight: "bold",
+                        fontSize: "14px"
+                      }}>
+                        {facebookUser.name.charAt(0).toUpperCase()}
+                      </div>
+                      <BlockStack gap="050">
+                        <Text variant="bodyMd" fontWeight="medium" as="span">
+                          Connected to Facebook
+                        </Text>
+                        <Text variant="bodySm" tone="subdued" as="span">
+                          {facebookUser.name} • {facebookPixels.length} pixel(s) available
+                        </Text>
+                      </BlockStack>
+                    </InlineStack>
+                    <InlineStack gap="200">
+                      <Button
+                        size="slim"
+                        onClick={handleRefreshFacebookData}
+                        loading={isRefreshingToken}
+                      >
+                        Refresh
+                      </Button>
+                      <Button
+                        size="slim"
+                        variant="plain"
+                        tone="critical"
+                        onClick={handleDisconnectFacebook}
+                      >
+                        Disconnect
+                      </Button>
+                    </InlineStack>
+                  </InlineStack>
+                </Card>
+              ) : (
+                <Card background="bg-surface-secondary">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <BlockStack gap="100">
+                      <Text variant="bodyMd" fontWeight="medium" as="span">
+                        Connect Facebook Account
+                      </Text>
+                      <Text variant="bodySm" tone="subdued" as="span">
+                        Auto-fetch your existing pixels
+                      </Text>
+                    </BlockStack>
+                    <Button
+                      onClick={handleConnectToFacebook}
+                      variant="primary"
+                      size="slim"
+                    >
+                      Connect Facebook
+                    </Button>
+                  </InlineStack>
+                </Card>
+              )}
+
+              <div>
+                <Text as="p" variant="bodyMd" fontWeight="medium">
+                  App Name <Text as="span" tone="critical">*</Text>
+                </Text>
+                <div style={{ marginTop: "8px", marginBottom: "4px" }}>
+                  <TextField
+                    label=""
+                    value={enhancedCreateForm.appName}
+                    onChange={(value) => setEnhancedCreateForm(prev => ({ ...prev, appName: value }))}
+                    placeholder="e.g., My Store Pixel"
+                    autoComplete="off"
+                  />
+                </div>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Name for your pixel in this app
+                </Text>
+              </div>
+
+              {/* Pixel Selection - Omega Style */}
+              {isConnectedToFacebook && facebookPixels.length > 0 ? (
+                <div>
+                  <Text as="p" variant="bodyMd" fontWeight="medium">
+                    Select Facebook Pixel <Text as="span" tone="critical">*</Text>
+                  </Text>
+                  <div style={{ marginTop: "8px", marginBottom: "4px" }}>
+                    <Select
+                      label=""
+                      options={[
+                        { label: "Choose a pixel...", value: "" },
+                        ...facebookPixels
+                          .filter(pixel => !apps.some((app: any) => app.settings?.metaPixelId === pixel.id))
+                          .map(pixel => ({
+                            label: `${pixel.name} (${pixel.id})`,
+                            value: pixel.id
+                          })),
+                        { label: "Enter manually", value: "manual" }
+                      ]}
+                      value={selectedFacebookPixel}
+                      onChange={(value) => {
+                        setSelectedFacebookPixel(value);
+                        if (value !== "manual" && value !== "") {
+                          const selectedPixel = facebookPixels.find(p => p.id === value);
+                          if (selectedPixel) {
+                            setEnhancedCreateForm(prev => ({
+                              ...prev,
+                              pixelId: selectedPixel.id,
+                              appName: prev.appName || selectedPixel.name,
+                              accessToken: facebookAccessToken
+                            }));
+                          }
+                        } else if (value === "manual") {
+                          setEnhancedCreateForm(prev => ({
+                            ...prev,
+                            pixelId: "",
+                            accessToken: ""
+                          }));
+                        }
+                      }}
+                    />
+                  </div>
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    Select from your Facebook pixels or enter manually
+                  </Text>
+                  
+                  {/* Show filtered pixels info */}
+                  {facebookPixels.some(pixel => apps.some((app: any) => app.settings?.metaPixelId === pixel.id)) && (
+                    <div style={{ marginTop: "8px" }}>
+                      <Banner tone="info">
+                        <p>
+                          Some pixels are hidden because they're already added to your app.
+                        </p>
+                      </Banner>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
+              {/* Manual Pixel ID Input */}
+              {(!isConnectedToFacebook || selectedFacebookPixel === "manual") && (
+                <div>
+                  <Text as="p" variant="bodyMd" fontWeight="medium">
+                    Pixel ID (Dataset ID) <Text as="span" tone="critical">*</Text>
+                  </Text>
+                  <div style={{ marginTop: "8px", marginBottom: "4px" }}>
+                    <TextField
+                      label=""
+                      value={enhancedCreateForm.pixelId}
+                      onChange={(value) => setEnhancedCreateForm(prev => ({ ...prev, pixelId: value }))}
+                      placeholder="e.g., 1234567890123456"
+                      autoComplete="off"
+                      error={
+                        enhancedCreateForm.pixelId && 
+                        apps.some((app: any) => app.settings?.metaPixelId === enhancedCreateForm.pixelId)
+                          ? "This pixel is already added to your app"
+                          : undefined
+                      }
+                    />
+                  </div>
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    Find in Meta Events Manager → Data Sources → Select your dataset → Dataset ID
+                  </Text>
+                  
+                  {/* Show warning if pixel already exists */}
+                  {enhancedCreateForm.pixelId && 
+                   apps.some((app: any) => app.settings?.metaPixelId === enhancedCreateForm.pixelId) && (
+                    <div style={{ marginTop: "8px" }}>
+                      <Banner tone="critical">
+                        <p>
+                          This pixel ID is already added to your app as "{apps.find((app: any) => app.settings?.metaPixelId === enhancedCreateForm.pixelId)?.name}". 
+                          Each pixel can only be added once.
+                        </p>
+                      </Banner>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Access Token - Only for manual entry */}
+              {(!isConnectedToFacebook || selectedFacebookPixel === "manual") && (
+                <div>
+                  <Text as="p" variant="bodyMd" fontWeight="medium">
+                    Access Token (Optional)
+                  </Text>
+                  <div style={{ marginTop: "8px", marginBottom: "4px" }}>
+                    <TextField
+                      label=""
+                      value={enhancedCreateForm.accessToken}
+                      onChange={(value) => setEnhancedCreateForm(prev => ({ ...prev, accessToken: value }))}
+                      type="password"
+                      placeholder="EAAxxxxxxxx..."
+                      autoComplete="off"
+                    />
+                  </div>
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    Generate in Meta Events Manager → Settings → Conversions API → Generate Access Token
+                  </Text>
+                </div>
+              )}
+
+              {/* Token Validation Status */}
+              {isConnectedToFacebook && selectedFacebookPixel && selectedFacebookPixel !== "manual" && (
+                <Banner tone="success">
+                  <p>
+                    ✅ Pixel validated with your Facebook account. Access token will be automatically refreshed.
+                  </p>
+                </Banner>
+              )}
+            </BlockStack>
+          </Modal.Section>
+        </Modal>
+
+        {/* Create Modal - Enhanced Facebook Pixel Manager Style */}
         <Modal
           open={showCreateModal}
           onClose={handleCreateModalClose}
@@ -648,7 +1175,10 @@ export default function DashboardPage() {
             content: "Create Pixel",
             onAction: handleCreate,
             loading: isLoading,
-            disabled: !createForm.name || !createForm.metaAppId,
+            disabled: 
+              !createForm.name || 
+              !createForm.metaAppId ||
+              apps.some((app: any) => app.settings?.metaPixelId === createForm.metaAppId),
           }}
           secondaryActions={[
             {
@@ -669,25 +1199,61 @@ export default function DashboardPage() {
                 requiredIndicator
               />
 
-              <TextField
-                label="Pixel ID (Dataset ID)"
-                value={createForm.metaAppId}
-                onChange={(value) => setCreateForm(prev => ({ ...prev, metaAppId: value }))}
-                placeholder="e.g., 1234567890123456"
-                helpText="Find in Meta Events Manager → Data Sources → Select your dataset → Dataset ID"
-                autoComplete="off"
-                requiredIndicator
-              />
+              <div>
+                <Text as="p" variant="bodyMd" fontWeight="medium">
+                  Pixel ID (Dataset ID) <Text as="span" tone="critical">*</Text>
+                </Text>
+                <div style={{ marginTop: "8px", marginBottom: "4px" }}>
+                  <TextField
+                    label=""
+                    value={createForm.metaAppId}
+                    onChange={(value) => setCreateForm(prev => ({ ...prev, metaAppId: value }))}
+                    placeholder="e.g., 1234567890123456"
+                    autoComplete="off"
+                    error={
+                      createForm.metaAppId && 
+                      apps.some((app: any) => app.settings?.metaPixelId === createForm.metaAppId)
+                        ? "This pixel is already added to your app"
+                        : undefined
+                    }
+                  />
+                </div>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Find in Meta Events Manager → Data Sources → Select your dataset → Dataset ID
+                </Text>
+                
+                {/* Show warning if pixel already exists */}
+                {createForm.metaAppId && 
+                 apps.some((app: any) => app.settings?.metaPixelId === createForm.metaAppId) && (
+                  <div style={{ marginTop: "8px" }}>
+                    <Banner tone="critical">
+                      <p>
+                        This pixel ID is already added to your app as "{apps.find((app: any) => app.settings?.metaPixelId === createForm.metaAppId)?.name}". 
+                        Each pixel can only be added once.
+                      </p>
+                    </Banner>
+                  </div>
+                )}
+              </div>
 
-              <TextField
-                label="Access Token (Optional)"
-                value={createForm.metaAccessToken}
-                onChange={(value) => setCreateForm(prev => ({ ...prev, metaAccessToken: value }))}
-                type="password"
-                placeholder="EAAxxxxxxxx..."
-                helpText="Generate in Meta Events Manager → Settings → Conversions API → Generate Access Token"
-                autoComplete="off"
-              />
+              <div>
+                <Text as="p" variant="bodyMd" fontWeight="medium">
+                  Access Token (Optional)
+                </Text>
+                <div style={{ marginTop: "8px", marginBottom: "4px" }}>
+                  <TextField
+                    label=""
+                    value={createForm.metaAccessToken}
+                    onChange={(value) => setCreateForm(prev => ({ ...prev, metaAccessToken: value }))}
+                    type="password"
+                    placeholder="EAAxxxxxxxx..."
+                    autoComplete="off"
+                  />
+                </div>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Generate in Meta Events Manager → Settings → Conversions API → Generate Access Token
+                </Text>
+              </div>
             </BlockStack>
           </Modal.Section>
         </Modal>
@@ -993,8 +1559,14 @@ export default function DashboardPage() {
               )}
 
               <Text variant="headingLg" as="h2">
-                Add Facebook Pixel
+                Create New Pixel
               </Text>
+
+              <Banner tone="info">
+                <p>
+                  <strong>Two ways to add pixels:</strong> Connect your Facebook account to auto-fetch existing pixels, or manually enter your Pixel ID and Access Token.
+                </p>
+              </Banner>
 
               {/* Input Method Tabs */}
               <div style={{ 
@@ -1068,12 +1640,20 @@ export default function DashboardPage() {
                           <Text as="p" tone="subdued">
                             Connect your Facebook account to automatically fetch your available pixels.
                           </Text>
-                          <Button 
-                            variant="primary" 
-                            onClick={() => setShowFacebookModal(true)}
-                          >
-                            Connect to Facebook
-                          </Button>
+                          <InlineStack gap="200">
+                            <Button 
+                              variant="primary" 
+                              onClick={handleConnectToFacebook}
+                            >
+                              Connect to Facebook
+                            </Button>
+                            <Button 
+                              variant="secondary" 
+                              onClick={() => setShowFacebookModal(true)}
+                            >
+                              Manual Token
+                            </Button>
+                          </InlineStack>
                         </BlockStack>
                       </Card>
                     ) : (
@@ -1083,28 +1663,55 @@ export default function DashboardPage() {
                         </Banner>
                         
                         {facebookPixels.length > 0 && (
-                          <Select
-                            label="Select a Facebook Pixel"
-                            options={[
-                              { label: "Choose a pixel...", value: "" },
-                              ...facebookPixels.map(pixel => ({
-                                label: `${pixel.name} (${pixel.accountName})`,
-                                value: pixel.id
-                              }))
-                            ]}
-                            value={selectedFacebookPixel}
-                            onChange={(value) => {
-                              setSelectedFacebookPixel(value);
-                              const selectedPixel = facebookPixels.find(p => p.id === value);
-                              if (selectedPixel) {
-                                setPixelForm(prev => ({
-                                  ...prev,
-                                  pixelName: selectedPixel.name,
-                                  pixelId: selectedPixel.id,
-                                }));
-                              }
-                            }}
-                          />
+                          <>
+                            <Select
+                              label="Select a Facebook Pixel"
+                              options={[
+                                { label: "Choose a pixel...", value: "" },
+                                ...facebookPixels
+                                  .filter(pixel => {
+                                    // Filter out pixels that are already added
+                                    return !apps.some((app: any) => app.settings?.metaPixelId === pixel.id);
+                                  })
+                                  .map(pixel => ({
+                                    label: `${pixel.name} (${pixel.accountName})`,
+                                    value: pixel.id
+                                  }))
+                              ]}
+                              value={selectedFacebookPixel}
+                              onChange={(value) => {
+                                setSelectedFacebookPixel(value);
+                                const selectedPixel = facebookPixels.find(p => p.id === value);
+                                if (selectedPixel) {
+                                  setPixelForm(prev => ({
+                                    ...prev,
+                                    pixelName: selectedPixel.name,
+                                    pixelId: selectedPixel.id,
+                                  }));
+                                }
+                              }}
+                            />
+                            
+                            {/* Show message if some pixels are already added */}
+                            {facebookPixels.some(pixel => apps.some((app: any) => app.settings?.metaPixelId === pixel.id)) && (
+                              <Banner tone="info">
+                                <p>
+                                  Some pixels are hidden because they're already added to your app. 
+                                  Each pixel can only be added once.
+                                </p>
+                              </Banner>
+                            )}
+                            
+                            {/* Show message if all pixels are already added */}
+                            {facebookPixels.every(pixel => apps.some((app: any) => app.settings?.metaPixelId === pixel.id)) && (
+                              <Banner tone="warning">
+                                <p>
+                                  All your Facebook pixels are already added to this app. 
+                                  You can manage them from the main dashboard.
+                                </p>
+                              </Banner>
+                            )}
+                          </>
                         )}
                         
                         <Button 
@@ -1144,13 +1751,32 @@ export default function DashboardPage() {
                           value={pixelForm.pixelId}
                           onChange={(value) => setPixelForm(prev => ({ ...prev, pixelId: value }))}
                           placeholder="Enter your Facebook Pixel ID / Dataset ID"
-                          error={!pixelForm.pixelId && fetcher.data?.error ? "Facebook Pixel ID is required" : undefined}
+                          error={
+                            (!pixelForm.pixelId && fetcher.data?.error) 
+                              ? "Facebook Pixel ID is required" 
+                              : (pixelForm.pixelId && apps.some((app: any) => app.settings?.metaPixelId === pixelForm.pixelId))
+                                ? "This pixel is already added to your app"
+                                : undefined
+                          }
                           autoComplete="off"
                         />
                       </div>
                       <Text as="p" variant="bodySm" tone="subdued">
                         This is your Facebook Pixel ID (also called Dataset ID)
                       </Text>
+                      
+                      {/* Show warning if pixel already exists */}
+                      {pixelForm.pixelId && 
+                       apps.some((app: any) => app.settings?.metaPixelId === pixelForm.pixelId) && (
+                        <div style={{ marginTop: "8px" }}>
+                          <Banner tone="critical">
+                            <p>
+                              This pixel ID is already added to your app as "{apps.find((app: any) => app.settings?.metaPixelId === pixelForm.pixelId)?.name}". 
+                              Each pixel can only be added once.
+                            </p>
+                          </Banner>
+                        </div>
+                      )}
                     </div>
 
                     <div>
@@ -1251,7 +1877,10 @@ export default function DashboardPage() {
                   disabled={
                     inputMethod === "auto" 
                       ? !pixelForm.pixelId || !selectedFacebookPixel
-                      : !pixelForm.pixelName || !pixelForm.pixelId || !facebookAccessToken
+                      : !pixelForm.pixelName || 
+                        !pixelForm.pixelId || 
+                        !facebookAccessToken ||
+                        apps.some((app: any) => app.settings?.metaPixelId === pixelForm.pixelId)
                   }
                 >
                   {inputMethod === "manual" ? "Validate & Create Pixel" : "Next"}
@@ -1268,13 +1897,24 @@ export default function DashboardPage() {
         onClose={() => {
           setShowFacebookModal(false);
           setFacebookAccessToken("");
+          setFacebookError("");
         }}
         title="Connect to Facebook"
         primaryAction={{
-          content: "Fetch Pixels",
-          onAction: handleConnectToFacebook,
+          content: facebookAccessToken ? "Fetch Pixels" : "Connect with OAuth",
+          onAction: facebookAccessToken ? 
+            () => {
+              fetcher.submit(
+                {
+                  intent: "fetch-facebook-pixels",
+                  accessToken: facebookAccessToken,
+                },
+                { method: "POST" }
+              );
+              setShowFacebookModal(false);
+            } : 
+            handleConnectToFacebook,
           loading: isLoading,
-          disabled: !facebookAccessToken,
         }}
         secondaryActions={[
           {
@@ -1282,64 +1922,67 @@ export default function DashboardPage() {
             onAction: () => {
               setShowFacebookModal(false);
               setFacebookAccessToken("");
+              setFacebookError("");
             },
           },
         ]}
       >
         <Modal.Section>
           <BlockStack gap="400">
-            <Banner tone="warning">
-              <p><strong>Important:</strong> Your Facebook app needs specific permissions to access pixels. Follow the steps below to get a valid access token.</p>
-            </Banner>
+            {facebookError && (
+              <Banner tone="critical">
+                <p>{facebookError}</p>
+              </Banner>
+            )}
 
-            <TextField
-              label="Facebook Pixel Access Token"
-              value={facebookAccessToken}
-              onChange={setFacebookAccessToken}
-              type="password"
-              placeholder="Enter your Facebook Pixel access token..."
-              helpText="This must be a pixel-specific access token with ads_read permissions"
-              autoComplete="off"
-              requiredIndicator
-            />
+            <Card>
+              <BlockStack gap="300">
+                <Text variant="headingSm" as="h3">🚀 Recommended: OAuth Login</Text>
+                <Text as="p" variant="bodyMd">
+                  Click "Connect with OAuth" above to automatically authenticate with Facebook and fetch your pixels.
+                </Text>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  This will open a popup window where you can log in to Facebook and grant permissions.
+                </Text>
+              </BlockStack>
+            </Card>
 
             <Divider />
 
-            <BlockStack gap="300">
-              <Text variant="headingSm" as="h3">📋 Step-by-Step Guide:</Text>
-              
-              <BlockStack gap="200">
-                <Text as="p" variant="bodySm">
-                  <strong>1. Go to Facebook Graph API Explorer:</strong><br />
-                  Visit: <a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noopener noreferrer" style={{color: "#2563eb"}}>https://developers.facebook.com/tools/explorer/</a>
-                </Text>
+            <Card>
+              <BlockStack gap="300">
+                <Text variant="headingSm" as="h3">🔧 Alternative: Manual Token</Text>
                 
-                <Text as="p" variant="bodySm">
-                  <strong>2. Select Your App:</strong><br />
-                  Choose your Facebook app from the dropdown (App ID: 1751098928884384)
-                </Text>
-                
-                <Text as="p" variant="bodySm">
-                  <strong>3. Generate Pixel Access Token:</strong><br />
-                  Click "Generate Access Token" and add these permissions:
-                </Text>
-                
-                <div style={{marginLeft: "16px"}}>
-                  <Text as="p" variant="bodySm" tone="subdued">• ads_read (required for pixel access)</Text>
-                  <Text as="p" variant="bodySm" tone="subdued">• business_management (required for pixel management)</Text>
-                  <Text as="p" variant="bodySm" tone="subdued">• ads_management (optional for pixel creation)</Text>
-                </div>
-                
-                <Text as="p" variant="bodySm">
-                  <strong>4. Copy Pixel Token:</strong><br />
-                  Copy the generated pixel access token and paste it above
-                </Text>
-              </BlockStack>
+                <TextField
+                  label="Facebook Pixel Access Token"
+                  value={facebookAccessToken}
+                  onChange={setFacebookAccessToken}
+                  type="password"
+                  placeholder="Enter your Facebook Pixel access token..."
+                  helpText="Use this if OAuth doesn't work or you prefer manual setup"
+                  autoComplete="off"
+                />
 
-              <Banner tone="info">
-                <p><strong>Important:</strong> The access token must have pixel-specific permissions. If you get permission errors, ensure your Facebook app has been approved for ads_read and business_management permissions, and that you're an admin/developer of the Facebook app.</p>
-              </Banner>
-            </BlockStack>
+                <BlockStack gap="200">
+                  <Text as="p" variant="bodySm">
+                    <strong>To get a manual token:</strong>
+                  </Text>
+                  <Text as="p" variant="bodySm">
+                    1. Go to <a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noopener noreferrer" style={{color: "#2563eb"}}>Facebook Graph API Explorer</a>
+                  </Text>
+                  <Text as="p" variant="bodySm">
+                    2. Select your app and generate a token with <code>ads_read</code>, <code>business_management</code>, <code>ads_management</code>, <code>pages_show_list</code>, <code>pages_read_engagement</code> permissions
+                  </Text>
+                  <Text as="p" variant="bodySm">
+                    3. Copy and paste the token above
+                  </Text>
+                </BlockStack>
+              </BlockStack>
+            </Card>
+
+            <Banner tone="info">
+              <p><strong>Required Permissions:</strong> Your Facebook app needs <code>ads_read</code>, <code>business_management</code>, <code>ads_management</code>, <code>pages_show_list</code>, <code>pages_read_engagement</code> permissions to access pixel data.</p>
+            </Banner>
           </BlockStack>
         </Modal.Section>
       </Modal>

@@ -3,6 +3,7 @@ import type { ActionFunctionArgs } from "react-router";
 import prisma from "~/db.server";
 import { parseUserAgent, getDeviceType } from "~/services/device.server";
 import { getGeoData } from "~/services/geo.server";
+import { forwardToMeta } from "~/services/meta-capi.server";
 
 export async function action({ request }: ActionFunctionArgs) {
   const url = new URL(request.url);
@@ -120,10 +121,76 @@ export async function action({ request }: ActionFunctionArgs) {
       },
     });
 
+    // Forward ALL events to Meta CAPI (server-side) to bypass adblockers
+    if (app.settings?.metaPixelEnabled && app.settings?.metaVerified && app.settings?.metaAccessToken) {
+      // Check if token is expired
+      const now = new Date();
+      const tokenExpiresAt = app.settings.metaTokenExpiresAt;
+      const isTokenExpired = tokenExpiresAt && now > tokenExpiresAt;
+
+      if (isTokenExpired) {
+        console.warn('[App Proxy track] Facebook access token expired, skipping CAPI send. User needs to re-authenticate.');
+      } else {
+        try {
+
+          // Check if this is a custom event to get Meta event mapping
+          const customEvent = await prisma.customEvent.findFirst({
+            where: {
+              appId: app.id,
+              name: eventName,
+              isActive: true,
+            },
+          });
+
+          // Use Meta event name from custom event mapping if available, otherwise map the event name
+          let metaEventName = eventName;
+          if (customEvent?.metaEventName) {
+            metaEventName = customEvent.metaEventName;
+          }
+
+          // Parse event data if provided
+          let eventData = body.customData || {};
+          if (customEvent?.eventData) {
+            try {
+              const parsedEventData = JSON.parse(customEvent.eventData);
+              eventData = { ...parsedEventData, ...eventData };
+            } catch (e) {
+              console.error('[App Proxy track] Error parsing custom event data:', e);
+            }
+          }
+
+          await forwardToMeta({
+            pixelId: app.settings.metaPixelId!,
+            accessToken: app.settings.metaAccessToken!,
+            testEventCode: app.settings.metaTestEventCode || undefined,
+            event: {
+              eventName: metaEventName,
+              eventTime: Math.floor(Date.now() / 1000),
+              eventSourceUrl: body.url,
+              actionSource: 'website',
+              userData: {
+                clientIpAddress: ip,
+                clientUserAgent: userAgent,
+                externalId: body.visitorId,
+              },
+              customData: Object.keys(eventData).length > 0 ? eventData : undefined,
+            },
+          });
+          console.log(`[App Proxy track] Event "${eventName}" sent to Facebook CAPI as "${metaEventName}" (adblocker-proof)`);
+        } catch (metaError) {
+          console.error('[App Proxy track] Meta CAPI forwarding error:', metaError);
+        }
+      }
+    }
+
     return Response.json({ success: true, eventId: event.id });
   } catch (error) {
     console.error("[App Proxy track] Error:", error);
     return Response.json({ error: "Failed to track event" }, { status: 500 });
   }
+}
+
+export default function AppsProxyTrack() {
+  return null;
 }
 

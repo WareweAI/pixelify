@@ -6,10 +6,8 @@ import { type EntryContext } from "react-router";
 import { isbot } from "isbot";
 import { loadEnv } from "./lib/env-loader.server";
 
-// Load environment variables FIRST, before importing shopify.server
 loadEnv();
 
-// Now import shopify.server (which depends on env vars being loaded)
 import { addDocumentResponseHeaders } from "./shopify.server";
 
 export const streamTimeout = 5000;
@@ -25,20 +23,16 @@ export default async function handleRequest(
                       url.pathname.startsWith("/apps/pixel-api/") ||
                       url.pathname.startsWith("/api/");
 
-  // For API routes, check if we have loader/action data to return as JSON
   if (isApiRoute && reactRouterContext.staticHandlerContext) {
     const { loaderData, actionData, statusCode } = reactRouterContext.staticHandlerContext;
     
-    // Check loaderData first (for GET requests)
     if (loaderData && Object.keys(loaderData).length > 0) {
-      // Find the matching route's data (usually the last match for the API route)
       const matches = reactRouterContext.staticHandlerContext.matches || [];
       for (let i = matches.length - 1; i >= 0; i--) {
         const match = matches[i];
         const routeId = match.route.id;
         if (loaderData[routeId] !== undefined && loaderData[routeId] !== null) {
           const data = loaderData[routeId];
-          // Found data, return as JSON
           return Response.json(data, {
             status: statusCode || responseStatusCode || 200,
             headers: {
@@ -53,7 +47,6 @@ export default async function handleRequest(
       }
     }
     
-    // Check actionData (for POST/PUT/DELETE requests)
     if (actionData && Object.keys(actionData).length > 0) {
       const matches = reactRouterContext.staticHandlerContext.matches || [];
       for (let i = matches.length - 1; i >= 0; i--) {

@@ -1,7 +1,3 @@
-/**
- * Client-safe code generation utilities
- * These functions don't import server-only modules
- */
 
 export function generateThemeIntegrationCode(
   pixelId: string,

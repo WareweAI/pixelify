@@ -5,18 +5,15 @@ import {
   shopifyApp,
 } from "@shopify/shopify-app-react-router/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
-import { PrismaClient } from "@prisma/client";
 import { loadEnv } from "./lib/env-loader.server";
 import { validateProductionEnvironment, sanitizeUrl } from "./lib/env-validation.server";
+import prisma from "./db.server";
 
-// Load environment variables immediately
 loadEnv();
 
-// Lazy initialization function
 function initializeShopify() {
   loadEnv();
 
-  // Validate production environment
   try {
     validateProductionEnvironment();
   } catch (error) {
@@ -38,7 +35,6 @@ function initializeShopify() {
     });
     return null;
   }
-
   console.log('✅ Initializing Shopify app:', {
     hasApiKey: !!apiKey,
     hasApiSecret: !!apiSecret,
@@ -47,16 +43,30 @@ function initializeShopify() {
   });
 
   try {
-    // PRODUCTION SAFETY: Sanitize and validate app URL, fallback to Vercel host if env missing
     const vercelUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "";
     const appUrl = sanitizeUrl(process.env.SHOPIFY_APP_URL || vercelUrl);
     process.env.SHOPIFY_APP_URL = appUrl;
 
-    // Temporarily disable PrismaSessionStorage due to database connectivity issues
-    // TODO: Re-enable once Supabase database is accessible
+    if (!hasDatabase) {
+      throw new Error("DATABASE_URL environment variable is required for session storage");
+    }
+
+    if (!prisma) {
+      throw new Error("Prisma client is not initialized. Check database connection.");
+    }
+
     let sessionStorage;
-    console.log("[Shopify] Using memory session storage (database temporarily disabled)");
-    sessionStorage = undefined; // Will use default memory storage
+    try {
+      sessionStorage = new PrismaSessionStorage(prisma);
+      console.log("[Shopify] Using PrismaSessionStorage for session management");
+    } catch (storageError) {
+      console.error("[Shopify] Failed to create PrismaSessionStorage:", storageError);
+      throw new Error(`Failed to create session storage: ${storageError instanceof Error ? storageError.message : String(storageError)}`);
+    }
+
+    if (!sessionStorage) {
+      throw new Error("Session storage is undefined after initialization");
+    }
 
     return shopifyApp({
       apiKey: apiKey,
@@ -65,7 +75,7 @@ function initializeShopify() {
       scopes: process.env.SCOPES?.split(","),
       appUrl: appUrl,
       authPathPrefix: "/auth",
-      ...(sessionStorage ? { sessionStorage } : {}),
+      sessionStorage: sessionStorage,
       distribution: AppDistribution.AppStore,
       ...(process.env.SHOP_CUSTOM_DOMAIN
         ? { customShopDomains: [process.env.SHOP_CUSTOM_DOMAIN] }
@@ -77,10 +87,8 @@ function initializeShopify() {
   }
 }
 
-// Cache the shopify instance
 let shopifyInstance: ReturnType<typeof shopifyApp> | null = null;
 
-// Lazy getter that initializes on first access
 function getShopify() {
   if (!shopifyInstance) {
     shopifyInstance = initializeShopify();
@@ -88,7 +96,6 @@ function getShopify() {
   return shopifyInstance;
 }
 
-// Try to initialize immediately (but won't fail if env vars aren't ready)
 try {
   shopifyInstance = initializeShopify();
 } catch (error) {
@@ -98,7 +105,6 @@ try {
 export default shopifyInstance;
 export const apiVersion = ApiVersion.October25;
 
-// Lazy exports - these will re-initialize if needed
 export const addDocumentResponseHeaders = (request: Request, headers: Headers) => {
   const instance = getShopify();
   if (instance?.addDocumentResponseHeaders) {
@@ -106,7 +112,6 @@ export const addDocumentResponseHeaders = (request: Request, headers: Headers) =
   }
 };
 
-// Export getter function to get fresh instance
 export function getShopifyInstance() {
   return getShopify();
 }
@@ -118,8 +123,8 @@ export const registerWebhooks = getShopify()?.registerWebhooks || null;
 export const sessionStorage = getShopify()?.sessionStorage || null;
 
 function reinitializeShopify() {
-  shopifyInstance = null; // Clear cache
-  return getShopify(); // Reinitialize
+  shopifyInstance = null;
+  return getShopify();
 }
 
 export { reinitializeShopify };

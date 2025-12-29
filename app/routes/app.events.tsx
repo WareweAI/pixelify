@@ -27,7 +27,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shop = session.shop;
 
   const user = await prisma.user.findUnique({
-    where: { email: shop },
+    where: { storeUrl: shop },
   });
 
   if (!user) {
@@ -50,6 +50,7 @@ interface EventData {
   country: string | null;
   browser: string | null;
   deviceType: string | null;
+  customData: any;
   createdAt: string;
 }
 
@@ -120,6 +121,8 @@ export default function EventsPage() {
       pathname = event.url || "-";
     }
 
+    const customDataStr = event.customData ? JSON.stringify(event.customData) : "-";
+
     return [
       <Badge key={event.id} tone={getBadgeTone(event.eventName)}>
         {event.eventName}
@@ -130,6 +133,9 @@ export default function EventsPage() {
       [event.city, event.country].filter(Boolean).join(", ") || "-",
       event.browser || "-",
       event.deviceType || "-",
+      <Text key={`data-${event.id}`} as="span" truncate>
+        {customDataStr}
+      </Text>,
       new Date(event.createdAt).toLocaleString(),
     ];
   });
@@ -231,8 +237,8 @@ export default function EventsPage() {
               ) : (
                 <>
                   <DataTable
-                    columnContentTypes={["text", "text", "text", "text", "text", "text"]}
-                    headings={["Event", "Page", "Location", "Browser", "Device", "Time"]}
+                    columnContentTypes={["text", "text", "text", "text", "text", "text", "text"]}
+                    headings={["Event", "Page", "Location", "Browser", "Device", "Data", "Time"]}
                     rows={rows}
                   />
                   

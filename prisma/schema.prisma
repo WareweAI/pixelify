@@ -9,11 +9,12 @@ datasource db {
 }
 
 model User {
-   id        String   @id @default(uuid())
-   storeUrl  String   @unique
-   password  String
-   createdAt DateTime @default(now())
-   apps      App[]
+   id             String   @id @default(uuid())
+   storeUrl       String   @unique
+   password       String
+   facebookUserId String?
+   createdAt      DateTime @default(now())
+   apps           App[]
 }
 
 model App {
@@ -165,8 +166,10 @@ model AppSettings {
   recordIp           Boolean @default(true)
   recordLocation     Boolean @default(true)
   recordSession      Boolean @default(true)
+  customEventsEnabled Boolean @default(true)
   metaPixelId        String?
   metaAccessToken    String?
+  metaTokenExpiresAt DateTime?
   metaPixelEnabled   Boolean @default(false)
   metaTestEventCode  String?
   metaVerified       Boolean @default(false)

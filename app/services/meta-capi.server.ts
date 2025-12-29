@@ -1,7 +1,7 @@
 // Meta Conversions API (CAPI) Service
 import * as crypto from "node:crypto";
 
-const META_GRAPH_API_VERSION = "v19.0";
+const META_GRAPH_API_VERSION = "v24.0";
 const META_GRAPH_API_URL = "https://graph.facebook.com";
 
 export interface MetaEventData {
@@ -170,7 +170,18 @@ export async function forwardToMeta(params: {
 }
 
 // Map event names to Meta standard events
+// For custom events, use the event name as-is if it's already a Meta event name
 function mapEventName(eventName: string): string {
+  // If it's already a Meta standard event name, return as-is
+  const metaStandardEvents = [
+    "Purchase", "AddToCart", "ViewContent", "InitiateCheckout", "AddPaymentInfo",
+    "Lead", "CompleteRegistration", "Contact", "Search", "PageView", "CustomEventName"
+  ];
+  
+  if (metaStandardEvents.includes(eventName)) {
+    return eventName;
+  }
+
   const eventNameMap: Record<string, string> = {
     pageview: "PageView",
     page_view: "PageView",

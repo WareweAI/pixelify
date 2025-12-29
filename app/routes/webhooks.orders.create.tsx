@@ -30,7 +30,7 @@ export async function action({ request }: ActionFunctionArgs) {
     
     // Find the shop's pixel
     const user = await prisma.user.findUnique({
-      where: { email: shop || "" },
+      where: { storeUrl: shop || "" },
     });
 
     if (!user) {
@@ -130,7 +130,7 @@ export async function action({ request }: ActionFunctionArgs) {
           },
         };
 
-        await fetch(`https://graph.facebook.com/v18.0/${app.settings.metaPixelId}/events`, {
+        await fetch(`https://graph.facebook.com/v24.0/${app.settings.metaPixelId}/events`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

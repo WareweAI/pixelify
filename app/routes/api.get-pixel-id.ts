@@ -10,7 +10,6 @@ const corsHeaders = {
 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  // Handle OPTIONS preflight
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
@@ -46,7 +45,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     });
 
     if (!user || user.apps.length === 0) {
-      // Try to find any app for this shop
       const anyApp = await prisma.app.findFirst({
         where: {
           user: { storeUrl: shop },
@@ -56,11 +54,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
       });
 
       if (anyApp) {
-        // Fetch custom events for this app
-        const customEvents = await prisma.customEvent.findMany({
+        const customEvents = anyApp.settings?.customEventsEnabled !== false ? await prisma.customEvent.findMany({
           where: { appId: anyApp.id, isActive: true },
           select: { name: true, selector: true, eventType: true, metaEventName: true },
-        });
+        }) : [];
 
         return Response.json(
           {
@@ -87,11 +84,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
     const app = user.apps[0];
     
-    // Fetch custom events for this app
-    const customEvents = await prisma.customEvent.findMany({
+    const customEvents = app.settings?.customEventsEnabled !== false ? await prisma.customEvent.findMany({
       where: { appId: app.id, isActive: true },
       select: { name: true, selector: true, eventType: true, metaEventName: true },
-    });
+    }) : [];
 
     return Response.json(
       {

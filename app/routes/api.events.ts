@@ -47,6 +47,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         country: true,
         browser: true,
         deviceType: true,
+        customData: true,
         createdAt: true,
       },
     });

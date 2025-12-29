@@ -27,7 +27,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shop = session.shop;
 
   const user = await prisma.user.findUnique({
-    where: { email: shop },
+    where: { storeUrl: shop },
   });
 
   if (!user) {
@@ -46,7 +46,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         userId: user.id,
       },
       eventName: {
-        in: ['purchase', 'add_to_cart', 'initiate_checkout', 'add_payment_info', 'view_content']
+        in: ['purchase', 'addToCart', 'initiateCheckout', 'add_payment_info', 'viewContent']
       },
     },
     orderBy: { createdAt: 'desc' },
@@ -69,7 +69,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         userId: user.id,
       },
       eventName: {
-        in: ['purchase', 'add_to_cart', 'initiate_checkout', 'add_payment_info', 'view_content']
+        in: ['purchase', 'addToCart', 'initiateCheckout', 'add_payment_info', 'viewContent']
       },
       createdAt: { gte: last30Days },
     },
@@ -124,17 +124,17 @@ export default function ConversionsPage() {
   // Conversion event mapping
   const eventLabels: Record<string, string> = {
     purchase: "Purchase",
-    add_to_cart: "Add to Cart",
-    initiate_checkout: "Initiate Checkout",
+    addToCart: "Add to Cart",
+    initiateCheckout: "Initiate Checkout",
     add_payment_info: "Add Payment Info",
-    view_content: "View Content",
+    viewContent: "View Content",
   };
 
   // Calculate totals
   const totalPurchases = conversionStats.find(s => s.eventName === 'purchase')?.count || 0;
-  const totalAddToCarts = conversionStats.find(s => s.eventName === 'add_to_cart')?.count || 0;
-  const totalCheckouts = conversionStats.find(s => s.eventName === 'initiate_checkout')?.count || 0;
-  const totalViewContent = conversionStats.find(s => s.eventName === 'view_content')?.count || 0;
+  const totalAddToCarts = conversionStats.find(s => s.eventName === 'addToCart')?.count || 0;
+  const totalCheckouts = conversionStats.find(s => s.eventName === 'initiateCheckout')?.count || 0;
+  const totalViewContent = conversionStats.find(s => s.eventName === 'viewContent')?.count || 0;
 
   // Calculate conversion rate
   const conversionRate = totalViewContent > 0 ? ((totalPurchases / totalViewContent) * 100).toFixed(2) : "0.00";

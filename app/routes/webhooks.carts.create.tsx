@@ -25,7 +25,7 @@ export async function action({ request }: ActionFunctionArgs) {
     const cart = JSON.parse(rawBody);
 
     const user = await prisma.user.findUnique({
-      where: { email: shop || "" },
+      where: { storeUrl: shop || "" },
     });
 
     if (!user) return new Response("OK", { status: 200 });

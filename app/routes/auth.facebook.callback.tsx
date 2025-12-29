@@ -32,12 +32,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
                 },
                 body: JSON.stringify({
                   code: '${code}',
-                  redirectUri: '${url.origin}/api/facebook/callback'
+                  redirectUri: '${url.origin}/auth/facebook/callback'
                 })
               });
-              
+
               const data = await response.json();
-              
+
               if (data.error) {
                 window.opener.postMessage({
                   type: 'FACEBOOK_AUTH_ERROR',
@@ -47,9 +47,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
                 window.opener.postMessage({
                   type: 'FACEBOOK_AUTH_SUCCESS',
                   accessToken: data.accessToken,
-                  pixels: data.pixels || [],
-                  adAccounts: data.adAccounts || [],
-                  warning: data.warning
+                  expiresAt: data.expiresAt,
+                  pixels: data.pixels,
+                  adAccounts: data.adAccounts
                 }, window.location.origin);
               }
               window.close();

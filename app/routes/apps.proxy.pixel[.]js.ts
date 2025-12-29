@@ -123,7 +123,75 @@ export async function loader({ request }: LoaderFunctionArgs) {
   ${trackClicks ? `
   document.addEventListener('click', function(e) {
     var el = e.target.closest('a,button,[role=button]');
-    if (el) track('click', { element: el.tagName, text: (el.innerText || '').slice(0, 50), href: el.href });
+    if (el) {
+      var text = (el.innerText || el.textContent || '').trim().toLowerCase();
+      var eventProps = { element: el.tagName, text: (el.innerText || '').slice(0, 50), href: el.href };
+      
+      // Always trigger the click event first
+      track('click', eventProps);
+      
+      // Check if this is an add to cart action and trigger additional event
+      if (text.includes('add to cart') || 
+          text.includes('add to bag') || 
+          text.includes('buy now') ||
+          el.name === 'add' ||
+          el.getAttribute('name') === 'add' ||
+          el.closest('form[action*="/cart/add"]') ||
+          el.closest('[data-product-form]') ||
+          el.closest('.product-form') ||
+          el.getAttribute('data-action') === 'add-to-cart' ||
+          el.classList.contains('btn-add-to-cart') ||
+          el.classList.contains('add-to-cart') ||
+          el.id === 'AddToCart' ||
+          el.getAttribute('id') === 'AddToCart') {
+        
+        // Try to extract product information
+        var productForm = el.closest('form[action*="/cart/add"]') || el.closest('[data-product-form]') || el.closest('.product-form');
+        var productId = null;
+        var productName = null;
+        var productPrice = null;
+        var quantity = 1;
+        
+        if (productForm) {
+          // Get product ID from form
+          var idInput = productForm.querySelector('input[name="id"]') || productForm.querySelector('[name="id"]');
+          if (idInput) productId = idInput.value;
+          
+          // Get quantity
+          var qtyInput = productForm.querySelector('input[name="quantity"]') || productForm.querySelector('[name="quantity"]');
+          if (qtyInput) quantity = parseInt(qtyInput.value) || 1;
+        }
+        
+        // Try to get product name from page title or product title element
+        if (document.title && document.title.includes('–')) {
+          productName = document.title.split('–')[0].trim();
+        } else {
+          var titleEl = document.querySelector('.product-title, .product__title, h1.product-title, [data-product-title]');
+          if (titleEl) productName = titleEl.textContent.trim();
+        }
+        
+        // Try to get product price
+        var priceEl = document.querySelector('.price, .product-price, .product__price, [data-product-price]');
+        if (priceEl) {
+          var priceText = priceEl.textContent.replace(/[^0-9.,]/g, '');
+          productPrice = parseFloat(priceText.replace(',', '.'));
+        }
+        
+        var addToCartProps = {
+          element: el.tagName,
+          text: (el.innerText || '').slice(0, 50),
+          href: el.href,
+          product_id: productId,
+          product_name: productName,
+          price: productPrice,
+          quantity: quantity,
+          currency: 'USD' // Default currency, could be detected from page
+        };
+        
+        // Trigger the custom add_to_cart event
+        track('add_to_cart', addToCartProps);
+      }
+    }
   }, true);` : ""}
   ${trackScroll ? `
   var scrolled = {};

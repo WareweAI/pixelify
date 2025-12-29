@@ -15,6 +15,8 @@
     var TRACK_SCROLL = {{ block.settings.track_scroll | json }};
     var TRACK_FORMS = {{ block.settings.track_forms | json }};
     var TRACK_ECOMMERCE = {{ block.settings.track_ecommerce | json }};
+    var ENABLE_CUSTOM_EVENTS = {{ block.settings.enable_custom_events | json }};
+    var ENABLED_CUSTOM_EVENTS = '{{ block.settings.enabled_custom_events | strip }}'.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
     
     var PROXY_URL = '/apps/pixel-api';
     
@@ -94,6 +96,15 @@
       window.PIXEL_TRACKER_ID = data.pixelId;
       window.PIXEL_TRACKER_CONFIG = data.config || {};
       window.PIXEL_TRACKER_CUSTOM_EVENTS = data.customEvents || [];
+
+      // Filter custom events based on theme settings
+      if (!ENABLE_CUSTOM_EVENTS) {
+        window.PIXEL_TRACKER_CUSTOM_EVENTS = [];
+      } else if (ENABLED_CUSTOM_EVENTS.length > 0) {
+        window.PIXEL_TRACKER_CUSTOM_EVENTS = window.PIXEL_TRACKER_CUSTOM_EVENTS.filter(function(evt) {
+          return ENABLED_CUSTOM_EVENTS.indexOf(evt.name) !== -1;
+        });
+      }
       
       if (DEBUG) {
         console.log('[PixelTracker] Configuration loaded:', {
@@ -113,31 +124,7 @@
       script.src = PROXY_URL + '/pixel.js?' + params.toString();
       script.onload = function() {
         if (DEBUG) console.log('[PixelTracker] Tracking script loaded successfully');
-        
-        // Setup custom events
-        if (data.customEvents && data.customEvents.length > 0) {
-          setTimeout(function() {
-            data.customEvents.forEach(function(evt) {
-              if (evt.selector && evt.eventType) {
-                try {
-                  document.querySelectorAll(evt.selector).forEach(function(el) {
-                    if (!el._pixelTracked) {
-                      el._pixelTracked = true;
-                      el.addEventListener(evt.eventType, function() {
-                        if (window.PixelAnalytics && window.PixelAnalytics.track) {
-                          window.PixelAnalytics.track(evt.name, { selector: evt.selector });
-                          if (DEBUG) console.log('[PixelTracker] Custom event triggered:', evt.name);
-                        }
-                      });
-                    }
-                  });
-                } catch (eventError) {
-                  if (DEBUG) console.warn('[PixelTracker] Failed to setup custom event:', evt.name, eventError);
-                }
-              }
-            });
-          }, 100); // Small delay to ensure DOM is ready
-        }
+        // Custom events are now handled by the pixel.js script itself
       };
       script.onerror = function() {
         console.error('[PixelTracker] Failed to load tracking script');
@@ -245,6 +232,23 @@
         "id": "track_ecommerce",
         "label": "E-commerce Events",
         "default": true
+      },
+      {
+        "type": "header",
+        "content": "Custom Events"
+      },
+      {
+        "type": "checkbox",
+        "id": "enable_custom_events",
+        "label": "Enable Custom Events",
+        "default": true
+      },
+      {
+        "type": "text",
+        "id": "enabled_custom_events",
+        "label": "Enabled Custom Events (comma-separated)",
+        "placeholder": "wishlist_add, newsletter_signup, product_view",
+        "info": "Enter custom event names to enable (leave empty to enable all)"
       }
     ]
   }

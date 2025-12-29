@@ -305,15 +305,49 @@ export async function action({ request }: ActionFunctionArgs) {
       },
     });
 
-    // Forward to Meta if enabled
+    // Forward ALL events to Meta CAPI (server-side) to bypass adblockers
+    // Both regular events (pageview, click, etc.) and custom events are sent to Facebook CAPI
     if (app.settings?.metaPixelEnabled && app.settings?.metaVerified) {
       try {
+        // Check if this is a custom event to get Meta event mapping
+        const customEvent = await prisma.customEvent.findFirst({
+          where: {
+            appId: app.id,
+            name: eventName,
+            isActive: true,
+          },
+        });
+
+        // Use Meta event name from custom event mapping if available, otherwise map the event name
+        let metaEventName = eventName;
+        if (customEvent?.metaEventName) {
+          metaEventName = customEvent.metaEventName;
+        }
+
+        // Parse event data if provided
+        let eventData = properties || {};
+        if (customEvent?.eventData) {
+          try {
+            const parsedEventData = JSON.parse(customEvent.eventData);
+            eventData = { ...parsedEventData, ...eventData };
+          } catch (e) {
+            console.error('[Track] Error parsing custom event data:', e);
+          }
+        }
+
+        // Add e-commerce data if available
+        if (value) eventData.value = value;
+        if (currency) eventData.currency = currency;
+        if (productId) eventData.product_id = productId;
+        if (productName) eventData.product_name = productName;
+        if (quantity) eventData.quantity = quantity;
+
         await forwardToMeta({
           pixelId: app.settings.metaPixelId!,
           accessToken: app.settings.metaAccessToken!,
           testEventCode: app.settings.metaTestEventCode || undefined,
           event: {
-            eventName,
+            eventName: metaEventName,
             eventTime: Math.floor(Date.now() / 1000),
             eventSourceUrl: url,
             actionSource: 'website',
@@ -322,11 +356,12 @@ export async function action({ request }: ActionFunctionArgs) {
               clientUserAgent: userAgent,
               externalId: fingerprint || visitorId,
             },
-            customData: properties,
+            customData: Object.keys(eventData).length > 0 ? eventData : undefined,
           },
         });
+        console.log(`[Track] Event "${eventName}" sent to Facebook CAPI as "${metaEventName}" (adblocker-proof)`);
       } catch (error) {
-        console.error('Meta forwarding error:', error);
+        console.error('[Track] Meta CAPI forwarding error:', error);
       }
     }
 
