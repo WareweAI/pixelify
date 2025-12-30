@@ -167,6 +167,13 @@ model AppSettings {
   recordLocation     Boolean @default(true)
   recordSession      Boolean @default(true)
   customEventsEnabled Boolean @default(true)
+  
+  // Default E-commerce Events
+  autoTrackViewContent      Boolean @default(true)
+  autoTrackAddToCart        Boolean @default(true)
+  autoTrackInitiateCheckout Boolean @default(true)
+  autoTrackPurchase         Boolean @default(true)
+  
   metaPixelId        String?
   metaAccessToken    String?
   metaTokenExpiresAt DateTime?

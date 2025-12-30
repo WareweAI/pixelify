@@ -15,6 +15,10 @@
     var TRACK_SCROLL = {{ block.settings.track_scroll | json }};
     var TRACK_FORMS = {{ block.settings.track_forms | json }};
     var TRACK_ECOMMERCE = {{ block.settings.track_ecommerce | json }};
+    var TRACK_VIEW_CONTENT = {{ block.settings.track_view_content | json }};
+    var TRACK_ADD_TO_CART = {{ block.settings.track_add_to_cart | json }};
+    var TRACK_INITIATE_CHECKOUT = {{ block.settings.track_initiate_checkout | json }};
+    var TRACK_PURCHASE = {{ block.settings.track_purchase | json }};
     var ENABLE_CUSTOM_EVENTS = {{ block.settings.enable_custom_events | json }};
     var ENABLED_CUSTOM_EVENTS = '{{ block.settings.enabled_custom_events | strip }}'.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
     
@@ -28,6 +32,10 @@
       trackScroll: TRACK_SCROLL,
       trackForms: TRACK_FORMS,
       trackEcommerce: TRACK_ECOMMERCE,
+      trackViewContent: TRACK_VIEW_CONTENT,
+      trackAddToCart: TRACK_ADD_TO_CART,
+      trackInitiateCheckout: TRACK_INITIATE_CHECKOUT,
+      trackPurchase: TRACK_PURCHASE,
       debug: DEBUG
     };
     
@@ -232,6 +240,34 @@
         "id": "track_ecommerce",
         "label": "E-commerce Events",
         "default": true
+      },
+      {
+        "type": "checkbox",
+        "id": "track_view_content",
+        "label": "View Content (Product Views)",
+        "default": true,
+        "info": "Automatically track when customers view product pages"
+      },
+      {
+        "type": "checkbox",
+        "id": "track_add_to_cart",
+        "label": "Add to Cart",
+        "default": true,
+        "info": "Automatically track when customers add items to cart"
+      },
+      {
+        "type": "checkbox",
+        "id": "track_initiate_checkout",
+        "label": "Initiate Checkout",
+        "default": true,
+        "info": "Automatically track when customers start the checkout process"
+      },
+      {
+        "type": "checkbox",
+        "id": "track_purchase",
+        "label": "Purchase (Order Completion)",
+        "default": true,
+        "info": "Automatically track completed orders on thank you pages"
       },
       {
         "type": "header",

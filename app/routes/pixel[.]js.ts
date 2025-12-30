@@ -117,6 +117,10 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
     const trackPageviews = settings?.autoTrackPageviews ?? true;
     const trackClicks = settings?.autoTrackClicks ?? true;
     const trackScroll = settings?.autoTrackScroll ?? true;
+    const trackViewContent = settings?.autoTrackViewContent ?? true;
+    const trackAddToCart = settings?.autoTrackAddToCart ?? true;
+    const trackInitiateCheckout = settings?.autoTrackInitiateCheckout ?? true;
+    const trackPurchase = settings?.autoTrackPurchase ?? true;
 
     // Auto-track events config
     const autoTrackEvents = customEvents
@@ -269,6 +273,223 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
       var elem = e.target.closest('a, button, [role="button"]');
       if (elem) track('click', { element: elem.tagName.toLowerCase(), text: elem.innerText?.substring(0,100)?.trim(), href: elem.href });
     }, true);
+  ` : ''}
+
+  // E-commerce Event Auto-Detection
+  ${trackViewContent ? `
+    // ViewContent: Auto-detect product page views
+    function detectViewContent() {
+      // Shopify product page detection
+      if (window.location.pathname.includes('/products/') || document.querySelector('[data-product-id]') || window.ShopifyAnalytics?.meta?.product) {
+        var productData = {};
+        
+        // Try to get product data from Shopify Analytics
+        if (window.ShopifyAnalytics?.meta?.product) {
+          var product = window.ShopifyAnalytics.meta.product;
+          productData = {
+            product_id: product.id,
+            product_name: product.title,
+            value: product.price / 100, // Shopify stores price in cents
+            currency: window.ShopifyAnalytics.meta.currency || 'USD',
+            category: product.type || product.vendor
+          };
+        } else {
+          // Fallback: try to extract from DOM
+          var productId = document.querySelector('[data-product-id]')?.getAttribute('data-product-id') ||
+                         document.querySelector('meta[property="product:price:amount"]')?.getAttribute('content');
+          var productName = document.querySelector('h1')?.textContent?.trim() ||
+                           document.querySelector('.product-title, .product__title')?.textContent?.trim();
+          var priceElement = document.querySelector('.price, .product-price, [data-price]');
+          var price = priceElement ? parseFloat(priceElement.textContent.replace(/[^0-9.]/g, '')) : null;
+          
+          if (productId || productName) {
+            productData = {
+              product_id: productId,
+              product_name: productName,
+              value: price,
+              currency: 'USD'
+            };
+          }
+        }
+        
+        if (Object.keys(productData).length > 0) {
+          track('viewContent', productData);
+        }
+      }
+    }
+    
+    // Run on page load and for SPA navigation
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', detectViewContent);
+    } else {
+      detectViewContent();
+    }
+  ` : ''}
+
+  ${trackAddToCart ? `
+    // AddToCart: Auto-detect add to cart actions
+    document.addEventListener('click', function(e) {
+      var addToCartBtn = e.target.closest('[name="add"], .btn-product-form, .product-form__cart-submit, [data-add-to-cart], .add-to-cart, .addtocart');
+      if (addToCartBtn) {
+        setTimeout(function() {
+          var productData = {};
+          
+          // Try to get product data from the form or page
+          var form = addToCartBtn.closest('form') || document.querySelector('form[action*="/cart/add"]');
+          if (form) {
+            var variantId = form.querySelector('[name="id"]')?.value;
+            var quantity = parseInt(form.querySelector('[name="quantity"]')?.value || '1');
+            
+            // Get product info from Shopify Analytics or DOM
+            if (window.ShopifyAnalytics?.meta?.product) {
+              var product = window.ShopifyAnalytics.meta.product;
+              var variant = product.variants?.find(v => v.id == variantId) || product.variants?.[0];
+              productData = {
+                product_id: variantId || product.id,
+                product_name: product.title + (variant?.title && variant.title !== 'Default Title' ? ' - ' + variant.title : ''),
+                value: (variant?.price || product.price) / 100,
+                currency: window.ShopifyAnalytics.meta.currency || 'USD',
+                quantity: quantity
+              };
+            } else {
+              // Fallback DOM extraction
+              var productName = document.querySelector('h1, .product-title, .product__title')?.textContent?.trim();
+              var priceElement = document.querySelector('.price, .product-price, [data-price]');
+              var price = priceElement ? parseFloat(priceElement.textContent.replace(/[^0-9.]/g, '')) : null;
+              
+              productData = {
+                product_id: variantId,
+                product_name: productName,
+                value: price,
+                currency: 'USD',
+                quantity: quantity
+              };
+            }
+            
+            if (productData.product_id || productData.product_name) {
+              track('addToCart', productData);
+            }
+          }
+        }, 100); // Small delay to ensure form data is processed
+      }
+    }, true);
+  ` : ''}
+
+  ${trackInitiateCheckout ? `
+    // InitiateCheckout: Auto-detect checkout initiation
+    document.addEventListener('click', function(e) {
+      var checkoutBtn = e.target.closest('.checkout-button, [href*="/checkout"], [href*="/cart"], .cart__checkout, .btn--checkout, [data-checkout]');
+      if (checkoutBtn && (checkoutBtn.href?.includes('checkout') || checkoutBtn.textContent?.toLowerCase().includes('checkout'))) {
+        // Try to get cart data
+        var cartData = {};
+        
+        if (window.ShopifyAnalytics?.meta?.cart) {
+          var cart = window.ShopifyAnalytics.meta.cart;
+          cartData = {
+            value: cart.total_price / 100,
+            currency: window.ShopifyAnalytics.meta.currency || 'USD',
+            products: cart.items?.map(item => ({
+              product_id: item.variant_id,
+              product_name: item.product_title + (item.variant_title !== 'Default Title' ? ' - ' + item.variant_title : ''),
+              quantity: item.quantity,
+              value: item.price / 100
+            }))
+          };
+        } else {
+          // Try to fetch cart via AJAX
+          fetch('/cart.js')
+            .then(res => res.json())
+            .then(cart => {
+              cartData = {
+                value: cart.total_price / 100,
+                currency: cart.currency || 'USD',
+                products: cart.items?.map(item => ({
+                  product_id: item.variant_id,
+                  product_name: item.product_title + (item.variant_title !== 'Default Title' ? ' - ' + item.variant_title : ''),
+                  quantity: item.quantity,
+                  value: item.price / 100
+                }))
+              };
+              track('initiateCheckout', cartData);
+            })
+            .catch(() => {
+              // Fallback without cart details
+              track('initiateCheckout', { value: 0, currency: 'USD' });
+            });
+          return; // Exit early since we're handling async
+        }
+        
+        track('initiateCheckout', cartData);
+      }
+    }, true);
+  ` : ''}
+
+  ${trackPurchase ? `
+    // Purchase: Auto-detect on thank you/order confirmation pages
+    function detectPurchase() {
+      // Shopify thank you page detection
+      if (window.location.pathname.includes('/thank_you') || 
+          window.location.pathname.includes('/orders/') ||
+          document.querySelector('.os-order-number, .order-number, [data-order-id]') ||
+          window.Shopify?.checkout) {
+        
+        var orderData = {};
+        
+        // Try to get order data from Shopify checkout object
+        if (window.Shopify?.checkout) {
+          var checkout = window.Shopify.checkout;
+          orderData = {
+            order_id: checkout.order_id || checkout.id,
+            value: checkout.total_price,
+            currency: checkout.currency,
+            products: checkout.line_items?.map(item => ({
+              product_id: item.variant_id,
+              product_name: item.title,
+              quantity: item.quantity,
+              value: item.price
+            }))
+          };
+        } else if (window.ShopifyAnalytics?.meta?.order) {
+          // Alternative: ShopifyAnalytics order data
+          var order = window.ShopifyAnalytics.meta.order;
+          orderData = {
+            order_id: order.id,
+            value: order.total_price / 100,
+            currency: order.currency,
+            products: order.line_items?.map(item => ({
+              product_id: item.variant_id,
+              product_name: item.title,
+              quantity: item.quantity,
+              value: item.price / 100
+            }))
+          };
+        } else {
+          // Fallback: try to extract from DOM
+          var orderNumber = document.querySelector('.os-order-number, .order-number')?.textContent?.trim();
+          var totalElement = document.querySelector('.total-recap__final-price, .order-summary__emphasis, .total-line__price');
+          var total = totalElement ? parseFloat(totalElement.textContent.replace(/[^0-9.]/g, '')) : null;
+          
+          if (orderNumber || total) {
+            orderData = {
+              order_id: orderNumber,
+              value: total,
+              currency: 'USD'
+            };
+          }
+        }
+        
+        if (Object.keys(orderData).length > 0) {
+          track('purchase', orderData);
+        }
+      }
+    }
+    
+    // Run on page load
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', detectPurchase);
+    } else {
+      detectPurchase();
+    }
   ` : ''}
 
   // Custom events + data attributes + MutationObserver

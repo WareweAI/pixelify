@@ -71,30 +71,33 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const shopify = getShopifyInstance();
-  if (!shopify?.authenticate) {
-    return Response.json({ success: false, error: "Shopify configuration not found" }, { status: 500 });
-  }
-  const { session } = await shopify.authenticate.admin(request);
-  const shop = session.shop;
-  const formData = await request.formData();
-  const action = formData.get("action");
-
   try {
-    const user = await db.user.findUnique({ where: { storeUrl: shop } });
-    if (!user) {
-      return Response.json({ success: false, error: "User not found for this shop" }, { status: 404 });
+    const shopify = getShopifyInstance();
+    if (!shopify?.authenticate) {
+      return Response.json({ success: false, error: "Shopify configuration not found" }, { status: 500 });
     }
+    const { session } = await shopify.authenticate.admin(request);
+    const shop = session.shop;
+    const formData = await request.formData();
+    const action = formData.get("action");
 
-    const appIdFromForm = formData.get("appId") as string | null;
-    const app =
-      appIdFromForm
-        ? await db.app.findFirst({ where: { appId: appIdFromForm, userId: user.id } })
-        : await db.app.findFirst({ where: { userId: user.id }, orderBy: { createdAt: "desc" } });
+    console.log(`[Custom Events] Action: ${action}, Shop: ${shop}`);
 
-    if (!app) {
-      return Response.json({ success: false, error: "App not found for this shop" }, { status: 404 });
-    }
+    try {
+      const user = await db.user.findUnique({ where: { storeUrl: shop } });
+      if (!user) {
+        return Response.json({ success: false, error: "User not found for this shop" }, { status: 404 });
+      }
+
+      const appIdFromForm = formData.get("appId") as string | null;
+      const app =
+        appIdFromForm
+          ? await db.app.findFirst({ where: { appId: appIdFromForm, userId: user.id } })
+          : await db.app.findFirst({ where: { userId: user.id }, orderBy: { createdAt: "desc" } });
+
+      if (!app) {
+        return Response.json({ success: false, error: "App not found for this shop" }, { status: 404 });
+      }
 
     if (action === "create") {
       const name = formData.get("name") as string;
@@ -349,33 +352,41 @@ export async function action({ request }: ActionFunctionArgs) {
       });
     }
 
-  } catch (error) {
-    console.error("Custom events action error:", error);
-    
-    // Handle specific Prisma errors
-    if (error instanceof Error) {
-      if (error.message.includes('P2025')) {
-        return Response.json({ 
-          success: false, 
-          error: "Record not found. The event may have already been deleted." 
-        }, { status: 404 });
+    } catch (error) {
+      console.error("Custom events action error:", error);
+      
+      // Handle specific Prisma errors
+      if (error instanceof Error) {
+        if (error.message.includes('P2025')) {
+          return Response.json({ 
+            success: false, 
+            error: "Record not found. The event may have already been deleted." 
+          }, { status: 404 });
+        }
+        
+        if (error.message.includes('P2002')) {
+          return Response.json({ 
+            success: false, 
+            error: "A custom event with this name already exists." 
+          }, { status: 409 });
+        }
       }
       
-      if (error.message.includes('P2002')) {
-        return Response.json({ 
-          success: false, 
-          error: "A custom event with this name already exists." 
-        }, { status: 409 });
-      }
+      return Response.json({ 
+        success: false, 
+        error: "Failed to process request. Please try again." 
+      }, { status: 500 });
     }
-    
+
+    return Response.json({ success: false, error: "Invalid action" }, { status: 400 });
+  } catch (outerError) {
+    // Catch any authentication or other outer errors
+    console.error("Custom events outer error:", outerError);
     return Response.json({ 
       success: false, 
-      error: "Failed to process request. Please try again." 
+      error: "Authentication or server error. Please try again." 
     }, { status: 500 });
   }
-
-  return Response.json({ success: false, error: "Invalid action" }, { status: 400 });
 }
 
 type LoaderData = {
@@ -597,7 +608,7 @@ export default function CustomEvents() {
     }
   }, [customEvents]);
 
-  const handleBulkAction = useCallback(async (action: string) => {
+  const handleBulkAction = useCallback((action: string) => {
     if (selectedEvents.size === 0) {
       alert("Please select at least one event");
       return;
@@ -611,26 +622,41 @@ export default function CustomEvents() {
 
     if (!confirm(confirmMessage)) return;
 
-    try {
-      const formData = new FormData();
-      formData.append("action", action);
-      formData.append("appId", app.appId);
-      formData.append("eventIds", JSON.stringify(Array.from(selectedEvents)));
-
-      const response = await fetch(window.location.href, {
-        method: "POST",
-        body: formData,
-      });
-
-      const result = await response.json();
-      if (result.success) {
-        window.location.reload(); // Refresh to show updated state
-      } else {
-        alert(result.error || "Bulk action failed");
-      }
-    } catch (error) {
-      alert("Failed to perform bulk action");
-    }
+    // Create a hidden form and submit it using React Router's form submission
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.style.display = 'none';
+    
+    // Add action input
+    const actionInput = document.createElement('input');
+    actionInput.type = 'hidden';
+    actionInput.name = 'action';
+    actionInput.value = action;
+    form.appendChild(actionInput);
+    
+    // Add appId input
+    const appIdInput = document.createElement('input');
+    appIdInput.type = 'hidden';
+    appIdInput.name = 'appId';
+    appIdInput.value = app.appId;
+    form.appendChild(appIdInput);
+    
+    // Add eventIds input
+    const eventIdsInput = document.createElement('input');
+    eventIdsInput.type = 'hidden';
+    eventIdsInput.name = 'eventIds';
+    eventIdsInput.value = JSON.stringify(Array.from(selectedEvents));
+    form.appendChild(eventIdsInput);
+    
+    // Add form to document and submit
+    document.body.appendChild(form);
+    form.submit();
+    
+    // Clean up
+    document.body.removeChild(form);
+    
+    // Clear selected events
+    setSelectedEvents(new Set());
   }, [selectedEvents, app.appId]);
 
   const handleUseTemplate = useCallback((template: any) => {

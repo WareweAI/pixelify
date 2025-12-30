@@ -69,10 +69,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const autoTrackPageviews = formData.get("autoTrackPageviews") === "true";
     const autoTrackClicks = formData.get("autoTrackClicks") === "true";
     const autoTrackScroll = formData.get("autoTrackScroll") === "true";
+    const autoTrackViewContent = formData.get("autoTrackViewContent") === "true";
+    const autoTrackAddToCart = formData.get("autoTrackAddToCart") === "true";
+    const autoTrackInitiateCheckout = formData.get("autoTrackInitiateCheckout") === "true";
+    const autoTrackPurchase = formData.get("autoTrackPurchase") === "true";
 
     await prisma.appSettings.update({
       where: { appId },
-      data: { autoTrackPageviews, autoTrackClicks, autoTrackScroll },
+      data: { 
+        autoTrackPageviews, 
+        autoTrackClicks, 
+        autoTrackScroll,
+        autoTrackViewContent,
+        autoTrackAddToCart,
+        autoTrackInitiateCheckout,
+        autoTrackPurchase
+      },
     });
 
     return { success: true, message: "Tracking settings updated" };
@@ -216,6 +228,10 @@ export default function SettingsPage() {
     autoTrackPageviews: true,
     autoTrackClicks: true,
     autoTrackScroll: true,
+    autoTrackViewContent: true,
+    autoTrackAddToCart: true,
+    autoTrackInitiateCheckout: true,
+    autoTrackPurchase: true,
   });
 
   const [privacySettings, setPrivacySettings] = useState({
@@ -238,6 +254,10 @@ export default function SettingsPage() {
         autoTrackPageviews: settings.autoTrackPageviews ?? true,
         autoTrackClicks: settings.autoTrackClicks ?? true,
         autoTrackScroll: settings.autoTrackScroll ?? true,
+        autoTrackViewContent: settings.autoTrackViewContent ?? true,
+        autoTrackAddToCart: settings.autoTrackAddToCart ?? true,
+        autoTrackInitiateCheckout: settings.autoTrackInitiateCheckout ?? true,
+        autoTrackPurchase: settings.autoTrackPurchase ?? true,
       });
       setPrivacySettings({
         recordIp: settings.recordIp ?? true,
@@ -265,6 +285,10 @@ export default function SettingsPage() {
         autoTrackPageviews: String(trackingSettings.autoTrackPageviews),
         autoTrackClicks: String(trackingSettings.autoTrackClicks),
         autoTrackScroll: String(trackingSettings.autoTrackScroll),
+        autoTrackViewContent: String(trackingSettings.autoTrackViewContent),
+        autoTrackAddToCart: String(trackingSettings.autoTrackAddToCart),
+        autoTrackInitiateCheckout: String(trackingSettings.autoTrackInitiateCheckout),
+        autoTrackPurchase: String(trackingSettings.autoTrackPurchase),
       },
       { method: "POST" }
     );
@@ -393,6 +417,9 @@ export default function SettingsPage() {
                   Configure what events are automatically tracked by the pixel.
                 </Text>
 
+                <Divider />
+                <Text variant="headingSm" as="h3">Basic Events</Text>
+
                 <Checkbox
                   label="Auto-track pageviews"
                   helpText="Automatically track when users view pages"
@@ -417,6 +444,48 @@ export default function SettingsPage() {
                   checked={trackingSettings.autoTrackScroll}
                   onChange={(checked) =>
                     setTrackingSettings((prev) => ({ ...prev, autoTrackScroll: checked }))
+                  }
+                />
+
+                <Divider />
+                <Text variant="headingSm" as="h3">E-commerce Events</Text>
+                <Text as="p" tone="subdued">
+                  Automatically detect and track standard e-commerce events on your Shopify store.
+                </Text>
+
+                <Checkbox
+                  label="View Content (Product Views)"
+                  helpText="Automatically track when customers view product pages"
+                  checked={trackingSettings.autoTrackViewContent}
+                  onChange={(checked) =>
+                    setTrackingSettings((prev) => ({ ...prev, autoTrackViewContent: checked }))
+                  }
+                />
+
+                <Checkbox
+                  label="Add to Cart"
+                  helpText="Automatically track when customers add items to their cart"
+                  checked={trackingSettings.autoTrackAddToCart}
+                  onChange={(checked) =>
+                    setTrackingSettings((prev) => ({ ...prev, autoTrackAddToCart: checked }))
+                  }
+                />
+
+                <Checkbox
+                  label="Initiate Checkout"
+                  helpText="Automatically track when customers start the checkout process"
+                  checked={trackingSettings.autoTrackInitiateCheckout}
+                  onChange={(checked) =>
+                    setTrackingSettings((prev) => ({ ...prev, autoTrackInitiateCheckout: checked }))
+                  }
+                />
+
+                <Checkbox
+                  label="Purchase (Order Completion)"
+                  helpText="Automatically track completed orders on thank you pages"
+                  checked={trackingSettings.autoTrackPurchase}
+                  onChange={(checked) =>
+                    setTrackingSettings((prev) => ({ ...prev, autoTrackPurchase: checked }))
                   }
                 />
 
