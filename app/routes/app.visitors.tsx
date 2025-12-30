@@ -32,10 +32,6 @@ type AppLite = { id: string; appId: string; name: string };
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopify = getShopifyInstance();
-  if (!shopify?.authenticate) {
-    throw new Response("Shopify configuration not found", { status: 500 });
-  }
-
   const { session } = await shopify.authenticate.admin(request);
   const shop = session.shop;
 

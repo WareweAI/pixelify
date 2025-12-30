@@ -24,9 +24,6 @@ import db from "../db.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const shopify = getShopifyInstance();
-  if (!shopify?.authenticate) {
-    throw new Response("Shopify configuration not found", { status: 500 });
-  }
   const { session } = await shopify.authenticate.admin(request);
   const shop = session.shop;
 
@@ -73,9 +70,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
 export async function action({ request }: ActionFunctionArgs) {
   try {
     const shopify = getShopifyInstance();
-    if (!shopify?.authenticate) {
-      return Response.json({ success: false, error: "Shopify configuration not found" }, { status: 500 });
-    }
     const { session } = await shopify.authenticate.admin(request);
     const shop = session.shop;
     const formData = await request.formData();
@@ -382,6 +376,16 @@ export async function action({ request }: ActionFunctionArgs) {
   } catch (outerError) {
     // Catch any authentication or other outer errors
     console.error("Custom events outer error:", outerError);
+    
+    // If it's a Response object (redirect from Shopify auth), return JSON error instead
+    if (outerError instanceof Response) {
+      console.log("Authentication redirect intercepted, returning JSON error");
+      return Response.json({ 
+        success: false, 
+        error: "Authentication required. Please refresh the page." 
+      }, { status: 401 });
+    }
+    
     return Response.json({ 
       success: false, 
       error: "Authentication or server error. Please try again." 

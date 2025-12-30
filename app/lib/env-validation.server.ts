@@ -1,28 +1,47 @@
 
 export function validateProductionEnvironment() {
-  if (process.env.NODE_ENV !== "production") {
-    return; // Skip validation in development
-  }
-
+  // Always run basic validation but be less strict in development
+  const isProduction = process.env.NODE_ENV === "production" || process.env.VERCEL;
+  
   const errors: string[] = [];
   const warnings: string[] = [];
 
   // Check SHOPIFY_APP_URL
   const appUrl = process.env.SHOPIFY_APP_URL;
   if (!appUrl) {
-    errors.push("SHOPIFY_APP_URL is required in production");
+    if (isProduction) {
+      errors.push("SHOPIFY_APP_URL is required in production");
+    } else {
+      warnings.push("SHOPIFY_APP_URL is not set");
+    }
   } else if (appUrl.includes("trycloudflare.com")) {
-    errors.push(`SHOPIFY_APP_URL cannot use tunnel URL in production: ${appUrl}`);
+    if (isProduction) {
+      errors.push(`SHOPIFY_APP_URL cannot use tunnel URL in production: ${appUrl}`);
+    } else {
+      warnings.push(`Using tunnel URL in development: ${appUrl}`);
+    }
   } else if (appUrl.includes("localhost")) {
-    errors.push(`SHOPIFY_APP_URL cannot use localhost in production: ${appUrl}`);
+    if (isProduction) {
+      errors.push(`SHOPIFY_APP_URL cannot use localhost in production: ${appUrl}`);
+    } else {
+      warnings.push(`Using localhost in development: ${appUrl}`);
+    }
   } else if (!appUrl.startsWith("https://")) {
-    errors.push(`SHOPIFY_APP_URL must use HTTPS in production: ${appUrl}`);
+    if (isProduction) {
+      errors.push(`SHOPIFY_APP_URL must use HTTPS in production: ${appUrl}`);
+    } else {
+      warnings.push(`SHOPIFY_APP_URL should use HTTPS: ${appUrl}`);
+    }
   }
 
-  // Check for tunnel URLs in any environment variable
+  // Check for tunnel URLs in any environment variable (only error in production)
   Object.entries(process.env).forEach(([key, value]) => {
     if (value && typeof value === "string" && value.includes("trycloudflare.com")) {
-      errors.push(`Environment variable ${key} contains tunnel URL: ${value}`);
+      if (isProduction) {
+        errors.push(`Environment variable ${key} contains tunnel URL: ${value}`);
+      } else {
+        warnings.push(`Environment variable ${key} contains tunnel URL: ${value}`);
+      }
     }
   });
 
@@ -40,7 +59,11 @@ export function validateProductionEnvironment() {
 
   requiredVars.forEach(varName => {
     if (!process.env[varName]) {
-      errors.push(`Required environment variable missing: ${varName}`);
+      if (isProduction) {
+        errors.push(`Required environment variable missing: ${varName}`);
+      } else {
+        warnings.push(`Required environment variable missing: ${varName}`);
+      }
     }
   });
 
@@ -63,14 +86,14 @@ export function validateProductionEnvironment() {
     // Log errors but don't throw - let the app try to continue
     // This prevents hard 500s when some env vars are missing but app might still work
     console.error("⚠️ Continuing despite validation errors...");
+  } else {
+    console.log("✅ Production environment validation passed");
   }
 
   if (warnings.length > 0) {
-    console.warn("⚠️ PRODUCTION ENVIRONMENT WARNINGS:");
+    console.warn("⚠️ ENVIRONMENT WARNINGS:");
     warnings.forEach(warning => console.warn(`   ⚠️ ${warning}`));
   }
-
-  console.log("✅ Production environment validation passed");
 }
 
 export function sanitizeUrl(url: string): string {
