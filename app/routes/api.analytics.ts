@@ -57,7 +57,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         where: { appId: app.id, createdAt: { gte: startDate } },
         select: { fingerprint: true },
         distinct: ['fingerprint'],
-      }).then(r => r.length),
+      }).then((r: any) => r.length),
       prisma.analyticsSession.count({
         where: { appId: app.id, startTime: { gte: startDate } },
       }),
@@ -75,7 +75,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       _count: true,
       orderBy: { _count: { url: 'desc' } },
       take: 10,
-    }).then(results => results.map(r => ({ url: r.url!, count: r._count })));
+    }).then((results: any) => results.map((r: any) => ({ url: r.url!, count: r._count })));
 
     // Get top countries
     const topCountries = await prisma.event.groupBy({
@@ -88,7 +88,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       _count: true,
       orderBy: { _count: { country: 'desc' } },
       take: 10,
-    }).then(results => results.map(r => ({ country: r.country!, count: r._count })));
+    }).then((results: any) => results.map((r: any) => ({ country: r.country!, count: r._count })));
 
     // Get top browsers
     const topBrowsers = await prisma.event.groupBy({
@@ -101,7 +101,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       _count: true,
       orderBy: { _count: { browser: 'desc' } },
       take: 10,
-    }).then(results => results.map(r => ({ browser: r.browser!, count: r._count })));
+    }).then((results: any) => results.map((r: any) => ({ browser: r.browser!, count: r._count })));
 
     // Get device types
     const deviceTypes = await prisma.event.groupBy({
@@ -113,7 +113,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       },
       _count: true,
       orderBy: { _count: { deviceType: 'desc' } },
-    }).then(results => results.map(r => ({ type: r.deviceType!, count: r._count })));
+    }).then((results: any) => results.map((r: any) => ({ type: r.deviceType!, count: r._count })));
 
     // Get top events (excluding pageview)
     const topEvents = await prisma.event.groupBy({
@@ -126,7 +126,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       _count: true,
       orderBy: { _count: { eventName: 'desc' } },
       take: 10,
-    }).then(results => results.map(r => ({ event: r.eventName, count: r._count })));
+    }).then((results: any) => results.map((r: any) => ({ event: r.eventName, count: r._count })));
 
     // Get top referrers
     const topReferrers = await prisma.event.groupBy({
@@ -138,7 +138,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       _count: true,
       orderBy: { _count: { referrer: 'desc' } },
       take: 10,
-    }).then(results => results.map(r => ({ referrer: r.referrer || 'Direct', count: r._count })));
+    }).then((results: any) => results.map((r: any) => ({ referrer: r.referrer || 'Direct', count: r._count })));
 
     // Get daily stats
     const dailyStats = await prisma.dailyStats.findMany({
@@ -153,7 +153,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         uniqueUsers: true,
         sessions: true,
       },
-    }).then(results => results.map(r => ({
+    }).then((results: any) => results.map((r: any) => ({
       date: r.date.toISOString().split('T')[0],
       pageviews: r.pageviews,
       uniqueUsers: r.uniqueUsers,

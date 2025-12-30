@@ -78,7 +78,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return {
     pixels,
-    conversions: conversions.map(c => ({
+    conversions: conversions.map((c: any) => ({
       id: c.id,
       eventName: c.eventName,
       url: c.url,
@@ -87,7 +87,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       value: c.value,
       currency: c.currency,
     })),
-    conversionStats: conversionStats.map(s => ({
+    conversionStats: conversionStats.map((s: any) => ({
       eventName: s.eventName,
       count: s._count,
     })),
@@ -131,10 +131,10 @@ export default function ConversionsPage() {
   };
 
   // Calculate totals
-  const totalPurchases = conversionStats.find(s => s.eventName === 'purchase')?.count || 0;
-  const totalAddToCarts = conversionStats.find(s => s.eventName === 'addToCart')?.count || 0;
-  const totalCheckouts = conversionStats.find(s => s.eventName === 'initiateCheckout')?.count || 0;
-  const totalViewContent = conversionStats.find(s => s.eventName === 'viewContent')?.count || 0;
+  const totalPurchases = conversionStats.find((s: any) => s.eventName === 'purchase')?.count || 0;
+  const totalAddToCarts = conversionStats.find((s: any) => s.eventName === 'addToCart')?.count || 0;
+  const totalCheckouts = conversionStats.find((s: any) => s.eventName === 'initiateCheckout')?.count || 0;
+  const totalViewContent = conversionStats.find((s: any) => s.eventName === 'viewContent')?.count || 0;
 
   // Calculate conversion rate
   const conversionRate = totalViewContent > 0 ? ((totalPurchases / totalViewContent) * 100).toFixed(2) : "0.00";

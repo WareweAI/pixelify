@@ -7,7 +7,6 @@ import prisma from "~/db.server";
 export const clientLoader = undefined;
 
 export async function action({ request }: ActionFunctionArgs) {
-  // Always reply with JSON (never fall back to HTML error pages)
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "POST, OPTIONS",

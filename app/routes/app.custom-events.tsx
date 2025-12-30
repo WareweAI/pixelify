@@ -18,7 +18,7 @@ import {
   Collapsible,
   Text,
 } from "@shopify/polaris";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { getShopifyInstance } from "~/shopify.server";
 import db from "../db.server";
 
@@ -430,6 +430,31 @@ export default function CustomEvents() {
   const [jsonError, setJsonError] = useState<string>("");
   const [testLoading, setTestLoading] = useState(false);
 
+  // Close modal when event is successfully created/updated
+  useEffect(() => {
+    if (actionData?.success && modalActive) {
+      setModalActive(false);
+      setEditingEvent(null);
+      // Reset form data
+      setFormData({
+        name: "",
+        displayName: "",
+        description: "",
+        pageType: "all",
+        pageUrl: "",
+        eventType: "click",
+        selector: "",
+        metaEventName: "",
+        eventData: JSON.stringify({
+          value: 29.99,
+          currency: "USD",
+          content_name: "Product Name",
+          content_type: "product"
+        }, null, 2)
+      });
+    }
+  }, [actionData, modalActive]);
+
   const EVENT_TEMPLATES = [
     {
       name: "add_to_cart",
@@ -729,7 +754,7 @@ export default function CustomEvents() {
       } else {
         alert(`❌ TEST FAILED\n\nError: ${result.error || 'Unknown error'}\n\n💡 Common issues:\n- Check your Facebook Pixel connection\n- Verify Meta event mapping\n- Ensure JSON data is valid`);
       }
-    } catch (error) {
+    } catch (error: any) {
       alert(`❌ TEST ERROR\n\n${error.message}\n\n💡 Try again or check your internet connection.`);
     } finally {
       setTestLoading(false);
@@ -746,8 +771,7 @@ export default function CustomEvents() {
   const rows = customEvents.map((event: any) => [
     <Checkbox
       checked={selectedEvents.has(event.id)}
-      onChange={(checked) => handleSelectEvent(event.id, checked)}
-    />,
+      onChange={(checked) => handleSelectEvent(event.id, checked)} label={undefined}    />,
     event.displayName,
     event.name,
     (event as any).eventType === "custom" ? "Manual" : "Auto",
@@ -1138,7 +1162,7 @@ export default function CustomEvents() {
                       <div style={{ fontSize: '14px', color: '#64748b' }}>
                         {selectedEvents.size} of {customEvents.length} selected
                       </div>
-                      <Button primary onClick={handleModalToggle} size="slim">
+                      <Button variant="primary" onClick={handleModalToggle} size="slim">
                         ➕ Add Event
                       </Button>
                     </div>
@@ -1157,8 +1181,8 @@ export default function CustomEvents() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                       <Checkbox
+                        label=""
                         checked={selectedEvents.size === customEvents.length && customEvents.length > 0}
-                        indeterminate={selectedEvents.size > 0 && selectedEvents.size < customEvents.length}
                         onChange={handleSelectAll}
                       />
                       <Text variant="bodyMd" as="span" tone={selectedEvents.size > 0 ? "base" : "subdued"}>
@@ -1175,15 +1199,15 @@ export default function CustomEvents() {
                         onClick={() => handleBulkAction('bulk_enable')}
                         tone="success"
                       >
-                        ✅ Enable ({selectedEvents.size})
+                        {`✅ Enable (${selectedEvents.size})`}
                       </Button>
                       <Button
                         size="slim"
                         disabled={selectedEvents.size === 0}
                         onClick={() => handleBulkAction('bulk_disable')}
-                        tone="warning"
+                        tone="critical"
                       >
-                        ⏸️ Disable ({selectedEvents.size})
+                        {`⏸️ Disable (${selectedEvents.size})`}
                       </Button>
                       <Button
                         size="slim"
@@ -1191,7 +1215,7 @@ export default function CustomEvents() {
                         disabled={selectedEvents.size === 0}
                         onClick={() => handleBulkAction('bulk_delete')}
                       >
-                        🗑️ Delete ({selectedEvents.size})
+                        {`🗑️ Delete (${selectedEvents.size})`}
                       </Button>
                     </div>
                   </div>
@@ -1216,14 +1240,18 @@ export default function CustomEvents() {
                     justifyContent: 'center',
                     fontSize: '48px'
                   }}>🎯</div>
-                  <Text variant="headingLg" as="h3" style={{ marginBottom: '12px', color: '#1e293b' }}>
-                    No Custom Events Yet
-                  </Text>
-                  <Text variant="bodyLg" as="p" tone="subdued" style={{ marginBottom: '32px', maxWidth: '500px', margin: '0 auto 32px' }}>
-                    Create your first custom event to start tracking user interactions and sending them to Facebook for better ad optimization.
-                  </Text>
+                  <div style={{ marginBottom: '12px', color: '#1e293b' }}>
+                    <Text variant="headingLg" as="h3">
+                      No Custom Events Yet
+                    </Text>
+                  </div>
+                  <div style={{ marginBottom: '32px', maxWidth: '500px', margin: '0 auto 32px' }}>
+                    <Text variant="bodyLg" as="p" tone="subdued">
+                      Create your first custom event to start tracking user interactions and sending them to Facebook for better ad optimization.
+                    </Text>
+                  </div>
                   <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                    <Button primary onClick={handleModalToggle} size="large">
+                    <Button variant="primary" onClick={handleModalToggle} size="large">
                       🚀 Create Your First Event
                     </Button>
                     <Button onClick={() => setShowTemplates(true)} size="large">
@@ -1311,8 +1339,8 @@ export default function CustomEvents() {
                       <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
                         <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                           <Checkbox
+                            label="Select all events"
                             checked={selectedEvents.size === customEvents.length && customEvents.length > 0}
-                            indeterminate={selectedEvents.size > 0 && selectedEvents.size < customEvents.length}
                             onChange={handleSelectAll}
                           />
                         </th>
@@ -1335,6 +1363,7 @@ export default function CustomEvents() {
                             <Checkbox
                               checked={selectedEvents.has(event.id)}
                               onChange={(checked) => handleSelectEvent(event.id, checked)}
+                              label=""
                             />
                           </td>
                           <td style={{ padding: '20px 24px' }}>
@@ -1433,7 +1462,7 @@ export default function CustomEvents() {
                                 <Button 
                                   submit 
                                   size="slim"
-                                  tone={event.isActive ? "warning" : "success"}
+                                  tone={event.isActive ? "critical" : "success"}
                                 >
                                   {event.isActive ? '⏸️ Disable' : '▶️ Enable'}
                                 </Button>
@@ -1528,7 +1557,6 @@ export default function CustomEvents() {
             onAction: handleModalToggle
           }
         ]}
-        large
       >
         <Modal.Section>
           {/* Template Selector */}
@@ -1553,17 +1581,19 @@ export default function CustomEvents() {
                 }}>
                   <span style={{ color: 'white', fontSize: '16px' }}>🚀</span>
                 </div>
-                <div>
-                  <Text variant="headingMd" as="h4" style={{ margin: 0, color: '#0c4a6e' }}>
+                <div style={{ margin: 0, color: '#0c4a6e' }}>
+                  <Text variant="headingMd" as="h4">
                     Quick Start Templates
                   </Text>
-                  <Text variant="bodySm" as="p" style={{ margin: 0, color: '#0369a1' }}>
+                </div>
+                <div style={{ margin: 0, color: '#0369a1' }}>
+                  <Text variant="bodySm" as="p">
                     Choose from popular e-commerce event templates
                   </Text>
                 </div>
               </div>
               <Button
-                plain
+                variant="plain"
                 onClick={() => setShowTemplates(!showTemplates)}
                 size="slim"
               >
@@ -1571,7 +1601,7 @@ export default function CustomEvents() {
               </Button>
             </div>
 
-            <Collapsible open={showTemplates}>
+            <Collapsible open={showTemplates} id="templates-collapsible">
               <div style={{ marginTop: '16px' }}>
                 <div style={{ 
                   display: 'grid', 
@@ -1604,14 +1634,18 @@ export default function CustomEvents() {
                     >
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
                         <div style={{ flex: 1 }}>
-                          <Text variant="bodyLg" as="p" fontWeight="semibold" style={{ marginBottom: '6px', color: '#1e293b' }}>
-                            {template.displayName}
-                          </Text>
-                          <Text variant="bodySm" as="p" tone="subdued" style={{ marginBottom: '8px', lineHeight: '1.4' }}>
-                            {template.description}
-                          </Text>
+                          <div style={{ marginBottom: '6px', color: '#1e293b' }}>
+                            <Text variant="bodyLg" as="p" fontWeight="semibold">
+                              {template.displayName}
+                            </Text>
+                          </div>
+                          <div style={{ marginBottom: '8px', lineHeight: '1.4' }}>
+                            <Text variant="bodySm" as="p" tone="subdued">
+                              {template.description}
+                            </Text>
+                          </div>
                         </div>
-                        <Button size="slim" onClick={() => handleUseTemplate(template)} primary>
+                        <Button size="slim" onClick={() => handleUseTemplate(template)} variant="primary">
                           Use Template
                         </Button>
                       </div>
@@ -1682,12 +1716,16 @@ export default function CustomEvents() {
                     <span style={{ color: 'white', fontSize: '16px' }}>📝</span>
                   </div>
                   <div>
-                    <Text variant="headingMd" as="h4" style={{ margin: 0, color: '#1e293b' }}>
-                      Basic Information
-                    </Text>
-                    <Text variant="bodySm" as="p" style={{ margin: 0, color: '#64748b' }}>
-                      Give your event a name and description
-                    </Text>
+                    <div style={{ margin: 0, color: '#1e293b' }}>
+                      <Text variant="headingMd" as="h4">
+                        Basic Information
+                      </Text>
+                    </div>
+                    <div style={{ margin: 0, color: '#64748b' }}>
+                      <Text variant="bodySm" as="p">
+                        Give your event a name and description
+                      </Text>
+                    </div>
                   </div>
                 </div>
 
@@ -1780,11 +1818,13 @@ export default function CustomEvents() {
                   }}>
                     <span style={{ color: 'white', fontSize: '16px' }}>⚡</span>
                   </div>
-                  <div>
-                    <Text variant="headingMd" as="h4" style={{ margin: 0, color: '#92400e' }}>
+                  <div style={{ margin: 0, color: '#92400e' }}>
+                    <Text variant="headingMd" as="h4">
                       Trigger Configuration
                     </Text>
-                    <Text variant="bodySm" as="p" style={{ margin: 0, color: '#a16207' }}>
+                  </div>
+                  <div style={{ margin: 0, color: '#a16207' }}>
+                    <Text variant="bodySm" as="p">
                       How should this event be triggered?
                     </Text>
                   </div>
@@ -1846,11 +1886,13 @@ export default function CustomEvents() {
                   }}>
                     <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
                       <span style={{ color: '#10b981', fontSize: '20px', marginTop: '2px' }}>💡</span>
-                      <div>
-                        <Text variant="bodyMd" as="p" style={{ margin: '0 0 8px 0', color: '#065f46', fontWeight: '600' }}>
+                      <div style={{ margin: '0 0 8px 0', color: '#065f46', fontWeight: '600' }}>
+                        <Text variant="bodyMd" as="p">
                           Manual Trigger Setup
                         </Text>
-                        <Text variant="bodySm" as="p" style={{ margin: '0 0 12px 0', color: '#047857' }}>
+                      </div>
+                      <div style={{ margin: '0 0 12px 0', color: '#047857' }}>
+                        <Text variant="bodySm" as="p">
                           Use this code in your theme to trigger the event:
                         </Text>
                         <div style={{ 
@@ -1895,11 +1937,13 @@ export default function CustomEvents() {
                   }}>
                     <span style={{ color: 'white', fontSize: '16px' }}>📘</span>
                   </div>
-                  <div>
-                    <Text variant="headingMd" as="h4" style={{ margin: 0, color: '#0c4a6e' }}>
+                  <div style={{ margin: 0, color: '#0c4a6e' }}>
+                    <Text variant="headingMd" as="h4">
                       Facebook Integration
                     </Text>
-                    <Text variant="bodySm" as="p" style={{ margin: 0, color: '#0369a1' }}>
+                  </div>
+                  <div style={{ margin: 0, color: '#0369a1' }}>
+                    <Text variant="bodySm" as="p">
                       Map to Facebook events for better ad optimization
                     </Text>
                   </div>
@@ -1945,7 +1989,6 @@ export default function CustomEvents() {
                   helpText="Optional data sent to Facebook (value, currency, product info, etc.). Use actual values for testing, not Liquid templates."
                   autoComplete="off"
                   error={jsonError}
-                  tone={jsonError ? "critical" : "default"}
                 />
 
                 {jsonError && (
@@ -1956,9 +1999,11 @@ export default function CustomEvents() {
                     borderRadius: '6px', 
                     border: '1px solid #fecaca' 
                   }}>
-                    <Text variant="bodySm" as="p" style={{ margin: 0, color: '#991b1b' }}>
-                      ❌ JSON Error: {jsonError}
-                    </Text>
+                    <div style={{ margin: 0, color: '#991b1b' }}>
+                      <Text variant="bodySm" as="p">
+                        ❌ JSON Error: {jsonError}
+                      </Text>
+                    </div>
                   </div>
                 )}
 
@@ -1973,15 +2018,21 @@ export default function CustomEvents() {
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
                     <span style={{ color: '#f59e0b', fontSize: '20px', marginTop: '2px' }}>⚠️</span>
                     <div>
-                      <Text variant="bodyMd" as="p" style={{ margin: '0 0 8px 0', color: '#92400e', fontWeight: '600' }}>
-                        Testing vs Production Data
-                      </Text>
-                      <Text variant="bodySm" as="p" style={{ margin: '0 0 8px 0', color: '#a16207' }}>
-                        • <strong>For Testing:</strong> Use actual values like <code style={{ background: '#fbbf24', padding: '2px 4px', borderRadius: '3px', color: '#92400e' }}>29.99</code> and <code style={{ background: '#fbbf24', padding: '2px 4px', borderRadius: '3px', color: '#92400e' }}>"USD"</code>
-                      </Text>
-                      <Text variant="bodySm" as="p" style={{ margin: 0, color: '#a16207' }}>
-                        • <strong>For Production:</strong> Use Liquid templates like <code style={{ background: '#fbbf24', padding: '2px 4px', borderRadius: '3px', color: '#92400e' }}>{`"{{ product.price | money_without_currency }}"`}</code>
-                      </Text>
+                      <div style={{ margin: '0 0 8px 0', color: '#92400e', fontWeight: '600' }}>
+                        <Text variant="bodyMd" as="p">
+                          Testing vs Production Data
+                        </Text>
+                      </div>
+                      <div style={{ margin: '0 0 8px 0', color: '#a16207' }}>
+                        <Text variant="bodySm" as="p">
+                          • <strong>For Testing:</strong> Use actual values like <code style={{ background: '#fbbf24', padding: '2px 4px', borderRadius: '3px', color: '#92400e' }}>29.99</code> and <code style={{ background: '#fbbf24', padding: '2px 4px', borderRadius: '3px', color: '#92400e' }}>"USD"</code>
+                        </Text>
+                      </div>
+                      <div style={{ margin: 0, color: '#a16207' }}>
+                        <Text variant="bodySm" as="p">
+                          • <strong>For Production:</strong> Use Liquid templates like <code style={{ background: '#fbbf24', padding: '2px 4px', borderRadius: '3px', color: '#92400e' }}>{`"{{ product.price | money_without_currency }}"`}</code>
+                        </Text>
+                      </div>
                     </div>
                   </div>
                 </div>

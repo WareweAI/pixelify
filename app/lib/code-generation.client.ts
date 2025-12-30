@@ -40,6 +40,4 @@ export function generateThemeIntegrationCode(
 </script>`;
 }
 
-// Provide a default export to avoid bundler interop issues where the named
-// export might be tree-shaken or imported as default in SSR.
 export default generateThemeIntegrationCode;

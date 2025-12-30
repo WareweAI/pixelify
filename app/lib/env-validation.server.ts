@@ -1,7 +1,3 @@
-/**
- * Environment Validation for Production Deployment
- * Prevents tunnel URLs from being used in production
- */
 
 export function validateProductionEnvironment() {
   if (process.env.NODE_ENV !== "production") {

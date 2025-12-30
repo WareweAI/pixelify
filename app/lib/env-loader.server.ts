@@ -1,4 +1,3 @@
-// lib/env-loader.server.ts - Load environment variables properly
 import { config } from 'dotenv';
 import { resolve } from 'path';
 
@@ -6,7 +5,6 @@ import { resolve } from 'path';
 let envLoadedOnce = false;
 
 export function loadEnv() {
-  // If already loaded in this process, skip (env vars persist)
   if (envLoadedOnce && process.env.SHOPIFY_API_KEY && process.env.SHOPIFY_API_SECRET) {
     return process.env;
   }
@@ -56,9 +54,6 @@ export function loadEnv() {
     console.error('Environment file loaded:', envLoaded);
     console.error('SHOPIFY_API_KEY present:', !!process.env.SHOPIFY_API_KEY);
     console.error('SHOPIFY_API_SECRET present:', !!process.env.SHOPIFY_API_SECRET);
-    // Don't throw error - allow app to continue for Vercel deployment
-    // In Vercel, env vars are injected, so we don't need the file
-    // throw new Error(`Missing environment variables: ${missing.join(', ')}`);
   } else {
     console.log('✅ All required environment variables are present');
   }

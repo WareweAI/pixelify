@@ -28,8 +28,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
     // Return active custom events
     const activeEvents = app.customEvents
-      .filter(event => event.isActive)
-      .map(event => ({
+      .filter((event: any) => event.isActive)
+      .map((event: any) => ({
         id: event.id,
         name: event.name,
         displayName: event.displayName,

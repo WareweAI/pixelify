@@ -65,8 +65,8 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
     const trackScroll = settings?.autoTrackScroll ?? true;
 
     const autoTrackEvents = customEvents
-      .filter(ce => ce.selector)
-      .map(ce => ({
+      .filter((ce: any) => ce.selector)
+      .map((ce: any) => ({
         name: ce.name,
         selector: ce.selector,
         eventType: ce.eventType,
