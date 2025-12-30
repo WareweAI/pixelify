@@ -768,41 +768,6 @@ export default function CustomEvents() {
     }
   }, [validateJson]);
 
-  const rows = customEvents.map((event: any) => [
-    <Checkbox
-      checked={selectedEvents.has(event.id)}
-      onChange={(checked) => handleSelectEvent(event.id, checked)} label={undefined}    />,
-    event.displayName,
-    event.name,
-    (event as any).eventType === "custom" ? "Manual" : "Auto",
-    (event as any).selector || "-",
-    (event as any).pageType || "all",
-    event.metaEventName || "-",
-    <Badge tone={event.isActive ? "success" : "critical"}>
-      {event.isActive ? "Active" : "Inactive"}
-    </Badge>,
-    <ButtonGroup>
-      <Button size="slim" onClick={() => handleEditEvent(event)}>
-        Edit
-      </Button>
-      <Form method="post">
-        <input type="hidden" name="action" value="toggle" />
-        <input type="hidden" name="eventId" value={event.id} />
-        <input type="hidden" name="isActive" value={event.isActive.toString()} />
-        <Button submit size="slim">
-          {event.isActive ? "Disable" : "Enable"}
-        </Button>
-      </Form>
-      <Form method="post">
-        <input type="hidden" name="action" value="delete" />
-        <input type="hidden" name="eventId" value={event.id} />
-        <Button submit tone="critical" size="slim">
-          Delete
-        </Button>
-      </Form>
-    </ButtonGroup>
-  ]);
-
   return (
     <Page
       title="Custom Events"

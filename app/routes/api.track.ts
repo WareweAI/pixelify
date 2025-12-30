@@ -318,10 +318,52 @@ export async function action({ request }: ActionFunctionArgs) {
           },
         });
 
-        // Use Meta event name from custom event mapping if available, otherwise map the event name
+        // Default event name mapping for standard e-commerce events
+        const defaultEventMapping: Record<string, string> = {
+          // Page tracking
+          'pageview': 'PageView',
+          'page_view': 'PageView',
+          'PageView': 'PageView',
+          
+          // E-commerce events
+          'viewContent': 'ViewContent',
+          'view_content': 'ViewContent',
+          'ViewContent': 'ViewContent',
+          
+          'addToCart': 'AddToCart',
+          'add_to_cart': 'AddToCart',
+          'AddToCart': 'AddToCart',
+          
+          'initiateCheckout': 'InitiateCheckout',
+          'initiate_checkout': 'InitiateCheckout',
+          'InitiateCheckout': 'InitiateCheckout',
+          
+          'purchase': 'Purchase',
+          'Purchase': 'Purchase',
+          
+          'addPaymentInfo': 'AddPaymentInfo',
+          'add_payment_info': 'AddPaymentInfo',
+          'AddPaymentInfo': 'AddPaymentInfo',
+          
+          // Lead generation
+          'lead': 'Lead',
+          'Lead': 'Lead',
+          'contact': 'Contact',
+          'Contact': 'Contact',
+          
+          // Engagement
+          'search': 'Search',
+          'Search': 'Search',
+        };
+
+        // Use Meta event name from custom event mapping if available, 
+        // otherwise use default mapping, 
+        // otherwise use the original event name
         let metaEventName = eventName;
         if (customEvent?.metaEventName) {
           metaEventName = customEvent.metaEventName;
+        } else if (defaultEventMapping[eventName]) {
+          metaEventName = defaultEventMapping[eventName];
         }
 
         // Parse event data if provided
@@ -342,6 +384,11 @@ export async function action({ request }: ActionFunctionArgs) {
         if (productName) eventData.product_name = productName;
         if (quantity) eventData.quantity = quantity;
 
+        // Add custom data from the request
+        if (customData) {
+          eventData = { ...eventData, ...customData };
+        }
+
         await forwardToMeta({
           pixelId: app.settings.metaPixelId!,
           accessToken: app.settings.metaAccessToken!,
@@ -359,10 +406,14 @@ export async function action({ request }: ActionFunctionArgs) {
             customData: Object.keys(eventData).length > 0 ? eventData : undefined,
           },
         });
-        console.log(`[Track] Event "${eventName}" sent to Facebook CAPI as "${metaEventName}" (adblocker-proof)`);
+        
+        const eventType = customEvent ? 'CUSTOM' : 'DEFAULT';
+        console.log(`[Track] ${eventType} Event "${eventName}" sent to Facebook CAPI as "${metaEventName}" (adblocker-proof)`);
       } catch (error) {
         console.error('[Track] Meta CAPI forwarding error:', error);
       }
+    } else {
+      console.log(`[Track] Meta CAPI not enabled or not verified for app ${app.id}`);
     }
 
     console.log(

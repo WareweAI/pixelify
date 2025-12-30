@@ -63,6 +63,12 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
     const trackPageviews = settings?.autoTrackPageviews ?? true;
     const trackClicks = settings?.autoTrackClicks ?? true;
     const trackScroll = settings?.autoTrackScroll ?? true;
+    
+    // Default e-commerce tracking settings
+    const trackViewContent = settings?.autoTrackViewContent ?? true;
+    const trackAddToCart = settings?.autoTrackAddToCart ?? true;
+    const trackInitiateCheckout = settings?.autoTrackInitiateCheckout ?? true;
+    const trackPurchase = settings?.autoTrackPurchase ?? true;
 
     const autoTrackEvents = customEvents
       .filter((ce: any) => ce.selector)
@@ -205,6 +211,104 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
       var elem = e.target.closest('a, button, [role="button"]');
       if (elem) track('click', { element: elem.tagName.toLowerCase(), text: (elem.innerText || '').substring(0,100).trim(), href: elem.href });
     }, true);
+  ` : ''}
+
+  // Default E-commerce Event Auto-tracking
+  ${trackViewContent ? `
+    // Auto-track ViewContent on product pages
+    if (window.location.pathname.includes('/products/') || document.querySelector('.product-single, .product-page, [data-product-id]')) {
+      var productId = document.querySelector('[data-product-id]')?.getAttribute('data-product-id') || 
+                     document.querySelector('meta[property="product:retailer_item_id"]')?.getAttribute('content') ||
+                     window.location.pathname.split('/products/')[1]?.split('?')[0];
+      var productName = document.querySelector('h1.product-title, .product-name, h1')?.innerText?.trim() ||
+                       document.querySelector('meta[property="og:title"]')?.getAttribute('content') ||
+                       document.title;
+      var productPrice = document.querySelector('.price, .product-price, [data-price]')?.innerText?.replace(/[^0-9.]/g, '') ||
+                        document.querySelector('meta[property="product:price:amount"]')?.getAttribute('content');
+      
+      setTimeout(function() {
+        track('viewContent', {
+          product_id: productId,
+          product_name: productName,
+          value: productPrice ? parseFloat(productPrice) : undefined,
+          content_type: 'product'
+        });
+      }, 500);
+    }
+  ` : ''}
+  
+  ${trackAddToCart ? `
+    // Auto-track AddToCart events
+    function setupAddToCartTracking() {
+      var selectors = [
+        '.add-to-cart', '.product-form__cart-submit', '[name="add"]', '.btn-add-to-cart',
+        '.product-form button[type="submit"]', '.shopify-product-form button[type="submit"]',
+        '.product-add-to-cart', '.add-to-bag', '.buy-now'
+      ];
+      
+      selectors.forEach(function(selector) {
+        document.querySelectorAll(selector).forEach(function(btn) {
+          if (btn._addToCartTracked) return;
+          btn._addToCartTracked = true;
+          
+          btn.addEventListener('click', function(e) {
+            var form = btn.closest('form') || btn.closest('.product-form');
+            var productId = form?.querySelector('[name="id"], [data-product-id]')?.value ||
+                           form?.querySelector('[name="id"], [data-product-id]')?.getAttribute('data-product-id') ||
+                           document.querySelector('[data-product-id]')?.getAttribute('data-product-id');
+            var productName = document.querySelector('h1.product-title, .product-name, h1')?.innerText?.trim();
+            var quantity = form?.querySelector('[name="quantity"]')?.value || 1;
+            var price = document.querySelector('.price, .product-price')?.innerText?.replace(/[^0-9.]/g, '');
+            
+            track('addToCart', {
+              product_id: productId,
+              product_name: productName,
+              quantity: parseInt(quantity) || 1,
+              value: price ? parseFloat(price) * (parseInt(quantity) || 1) : undefined,
+              currency: 'USD'
+            });
+          });
+        });
+      });
+    }
+    
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupAddToCartTracking);
+    else setupAddToCartTracking();
+  ` : ''}
+  
+  ${trackInitiateCheckout ? `
+    // Auto-track InitiateCheckout on checkout page
+    if (window.location.pathname.includes('/checkout') || window.location.pathname.includes('/cart')) {
+      setTimeout(function() {
+        var cartValue = document.querySelector('.cart-total, .total-price, [data-cart-total]')?.innerText?.replace(/[^0-9.]/g, '');
+        track('initiateCheckout', {
+          value: cartValue ? parseFloat(cartValue) : undefined,
+          currency: 'USD'
+        });
+      }, 1000);
+    }
+  ` : ''}
+  
+  ${trackPurchase ? `
+    // Auto-track Purchase on thank you/order confirmation pages
+    if (window.location.pathname.includes('/thank_you') || 
+        window.location.pathname.includes('/orders/') ||
+        document.querySelector('.order-confirmation, .thank-you')) {
+      setTimeout(function() {
+        var orderValue = document.querySelector('.order-total, .total-price, [data-order-total]')?.innerText?.replace(/[^0-9.]/g, '') ||
+                        window.Shopify?.checkout?.total_price;
+        var orderId = window.Shopify?.checkout?.order_id ||
+                     document.querySelector('[data-order-id]')?.getAttribute('data-order-id') ||
+                     window.location.pathname.match(/orders\/([^\/]+)/)?.[1];
+        
+        track('purchase', {
+          value: orderValue ? parseFloat(orderValue) / 100 : undefined, // Shopify prices are in cents
+          currency: window.Shopify?.checkout?.currency || 'USD',
+          order_id: orderId,
+          transaction_id: orderId
+        });
+      }, 1000);
+    }
   ` : ''}
 
   // Custom events

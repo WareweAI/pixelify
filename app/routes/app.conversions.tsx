@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 import { getShopifyInstance } from "../shopify.server";
@@ -14,7 +14,6 @@ import {
   Badge,
   EmptyState,
   DataTable,
-  Box,
   Divider,
 } from "@shopify/polaris";
 
@@ -46,7 +45,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         userId: user.id,
       },
       eventName: {
-        in: ['purchase', 'addToCart', 'initiateCheckout', 'add_payment_info', 'viewContent']
+        in: [
+          'purchase', 'Purchase',
+          'addToCart', 'add_to_cart', 'AddToCart', 
+          'initiateCheckout', 'initiate_checkout', 'InitiateCheckout',
+          'add_payment_info', 'AddPaymentInfo',
+          'viewContent', 'view_content', 'ViewContent',
+          'pageview', 'page_view'
+        ]
       },
     },
     orderBy: { createdAt: 'desc' },
@@ -69,7 +75,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         userId: user.id,
       },
       eventName: {
-        in: ['purchase', 'addToCart', 'initiateCheckout', 'add_payment_info', 'viewContent']
+        in: [
+          'purchase', 'Purchase',
+          'addToCart', 'add_to_cart', 'AddToCart', 
+          'initiateCheckout', 'initiate_checkout', 'InitiateCheckout',
+          'add_payment_info', 'AddPaymentInfo',
+          'viewContent', 'view_content', 'ViewContent',
+          'pageview', 'page_view'
+        ]
       },
       createdAt: { gte: last30Days },
     },
@@ -81,15 +94,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     conversions: conversions.map((c: any) => ({
       id: c.id,
       eventName: c.eventName,
-      url: c.url,
-      pixelName: c.app.name,
+      url: c.url || '',
+      pixelName: c.app?.name || 'Unknown',
       createdAt: c.createdAt,
-      value: c.value,
-      currency: c.currency,
+      value: c.value || null,
+      currency: c.currency || null,
     })),
     conversionStats: conversionStats.map((s: any) => ({
       eventName: s.eventName,
-      count: s._count,
+      count: s._count || 0,
     })),
   };
 };
@@ -113,39 +126,64 @@ export default function ConversionsPage() {
     { label: "Last 90 days", value: "90d" },
   ];
 
-  // Filter conversions based on selected pixel
   const filteredConversions = selectedPixel === "all"
-    ? conversions
-    : conversions.filter((c: any) => {
+    ? conversions || []
+    : (conversions || []).filter((c: any) => {
       const pixel = pixels.find((p: any) => p.name === c.pixelName);
       return pixel?.appId === selectedPixel;
     });
 
-  // Conversion event mapping
+  // Conversion event mapping (handle multiple variations)
   const eventLabels: Record<string, string> = {
     purchase: "Purchase",
+    Purchase: "Purchase",
     addToCart: "Add to Cart",
+    add_to_cart: "Add to Cart", 
+    AddToCart: "Add to Cart",
     initiateCheckout: "Initiate Checkout",
+    initiate_checkout: "Initiate Checkout",
+    InitiateCheckout: "Initiate Checkout",
     add_payment_info: "Add Payment Info",
+    AddPaymentInfo: "Add Payment Info",
     viewContent: "View Content",
+    view_content: "View Content",
+    ViewContent: "View Content",
+    pageview: "Page View",
+    page_view: "Page View",
   };
 
-  // Calculate totals
-  const totalPurchases = conversionStats.find((s: any) => s.eventName === 'purchase')?.count || 0;
-  const totalAddToCarts = conversionStats.find((s: any) => s.eventName === 'addToCart')?.count || 0;
-  const totalCheckouts = conversionStats.find((s: any) => s.eventName === 'initiateCheckout')?.count || 0;
-  const totalViewContent = conversionStats.find((s: any) => s.eventName === 'viewContent')?.count || 0;
+  // Calculate totals (handle multiple event name variations)
+  const purchaseEvents = ['purchase', 'Purchase'];
+  const addToCartEvents = ['addToCart', 'add_to_cart', 'AddToCart'];
+  const checkoutEvents = ['initiateCheckout', 'initiate_checkout', 'InitiateCheckout'];
+  const viewContentEvents = ['viewContent', 'view_content', 'ViewContent', 'pageview', 'page_view'];
 
-  // Calculate conversion rate
+  const totalPurchases = conversionStats
+    .filter((s: any) => purchaseEvents.includes(s.eventName))
+    .reduce((sum: number, s: any) => sum + (s.count || 0), 0);
+    
+  const totalAddToCarts = conversionStats
+    .filter((s: any) => addToCartEvents.includes(s.eventName))
+    .reduce((sum: number, s: any) => sum + (s.count || 0), 0);
+    
+  const totalCheckouts = conversionStats
+    .filter((s: any) => checkoutEvents.includes(s.eventName))
+    .reduce((sum: number, s: any) => sum + (s.count || 0), 0);
+    
+  const totalViewContent = conversionStats
+    .filter((s: any) => viewContentEvents.includes(s.eventName))
+    .reduce((sum: number, s: any) => sum + (s.count || 0), 0);
+
+  // Calculate conversion rate (ensure no division by zero)
   const conversionRate = totalViewContent > 0 ? ((totalPurchases / totalViewContent) * 100).toFixed(2) : "0.00";
 
   // Prepare data for table
-  const tableRows = filteredConversions.map((conversion: any) => [
+  const tableRows = (filteredConversions || []).map((conversion: any) => [
     eventLabels[conversion.eventName] || conversion.eventName,
-    conversion.pixelName,
+    conversion.pixelName || 'Unknown',
     conversion.url ? new URL(conversion.url).pathname : "-",
     conversion.value ? `${conversion.currency || 'USD'} ${conversion.value}` : "-",
-    new Date(conversion.createdAt).toLocaleString(),
+    conversion.createdAt ? new Date(conversion.createdAt).toISOString().replace('T', ' ').split('.')[0] : "-",
   ]);
 
   return (
@@ -298,6 +336,44 @@ export default function ConversionsPage() {
                   <Text as="p" fontWeight="bold">{totalPurchases.toLocaleString()}</Text>
                 </InlineStack>
               </BlockStack>
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+
+        {/* Debug Section - Show what events are in database */}
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="400">
+              <Text variant="headingMd" as="h2">🔍 Debug: Events in Database</Text>
+              <Text variant="bodySm" as="p" tone="subdued">
+                This shows what events are actually being tracked. If you don't see conversions above, check if the event names match.
+              </Text>
+              
+              {conversionStats.length > 0 ? (
+                <div>
+                  <Text variant="bodyMd" as="p" fontWeight="bold">Event Types Found:</Text>
+                  <div style={{ marginTop: '8px' }}>
+                    {conversionStats.map((stat: any, index: number) => (
+                      <div key={index} style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        padding: '4px 0',
+                        borderBottom: index < conversionStats.length - 1 ? '1px solid #e2e8f0' : 'none'
+                      }}>
+                        <Text as="span" variant="bodySm">{stat.eventName}</Text>
+                        <Badge>{`${stat.count} events`}</Badge>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <EmptyState
+                  heading="No events found"
+                  image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+                >
+                  <p>No conversion events have been tracked yet. Make sure your pixel is installed and events are being sent.</p>
+                </EmptyState>
+              )}
             </BlockStack>
           </Card>
         </Layout.Section>
