@@ -1,21 +1,23 @@
-import type { LoaderFunctionArgs } from "react-router";
+import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import prisma from "~/db.server";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
   "Access-Control-Max-Age": "86400",
   "X-Content-Type-Options": "nosniff",
 };
 
-export async function loader({ request }: LoaderFunctionArgs) {
+// Handle OPTIONS preflight requests for CORS
+export async function action({ request }: ActionFunctionArgs) {
   if (request.method === "OPTIONS") {
-    return new Response(null, {
-      status: 204,
-      headers: corsHeaders,
-    });
+    return new Response(null, { status: 204, headers: corsHeaders });
   }
+  return new Response("Method not allowed", { status: 405, headers: corsHeaders });
+}
+
+export async function loader({ request }: LoaderFunctionArgs) {
 
   const url = new URL(request.url);
   const id = url.searchParams.get('id');
