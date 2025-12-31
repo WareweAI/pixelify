@@ -414,6 +414,7 @@ export default function DashboardPage() {
   const { apps, hasPixels, stats, recentEvents } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
   const [searchParams] = useSearchParams();
+  const [mounted, setMounted] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
   const [inputMethod, setInputMethod] = useState("auto");
   const [showFacebookModal, setShowFacebookModal] = useState(false);
@@ -428,6 +429,14 @@ export default function DashboardPage() {
   const [facebookError, setFacebookError] = useState("");
   const [facebookUser, setFacebookUser] = useState<{id: string, name: string, picture?: string | null} | null>(null);
   const [isRefreshingToken, setIsRefreshingToken] = useState(false);
+  
+  // Pixel validation state
+  const [isValidatingPixel, setIsValidatingPixel] = useState(false);
+  const [pixelValidationResult, setPixelValidationResult] = useState<{
+    valid: boolean;
+    pixelName?: string;
+    error?: string;
+  } | null>(null);
   
   const [pixelForm, setPixelForm] = useState({
     pixelName: "",
@@ -455,33 +464,244 @@ export default function DashboardPage() {
 
   const isLoading = fetcher.state !== "idle";
 
-  // Load Facebook connection state from localStorage
+  // Mark component as mounted to prevent hydration mismatch
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const savedToken = localStorage.getItem("facebook_access_token");
-      const savedUser = localStorage.getItem("facebook_user");
-      const savedPixels = localStorage.getItem("facebook_pixels");
+    setMounted(true);
+  }, []);
+
+  // Function to fetch pixels using Facebook SDK (3-step approach)
+  const fetchPixelsWithSDK = useCallback((accessToken: string) => {
+    const FB = (window as any).FB;
+    if (!FB) {
+      console.log('[Facebook SDK] SDK not available for pixel fetch');
+      return;
+    }
+
+    console.log('[Facebook SDK] Step 1: Fetching user info (/me)...');
+    
+    // Step 1: Get user ID
+    FB.api('/me', 'GET', { fields: 'id,name,picture.type(small)' }, function(userResponse: any) {
+      if (userResponse.error) {
+        console.error('[Facebook SDK] Error fetching user:', userResponse.error);
+        return;
+      }
       
-      if (savedToken && savedUser) {
-        setFacebookAccessToken(savedToken);
-        setFacebookUser(JSON.parse(savedUser));
-        setIsConnectedToFacebook(true);
-        
-        if (savedPixels) {
-          setFacebookPixels(JSON.parse(savedPixels));
-        } else {
-          // Auto-fetch pixels if we have token but no cached pixels
-          fetcher.submit(
-            {
-              intent: "fetch-facebook-pixels",
-              accessToken: savedToken,
-            },
-            { method: "POST" }
-          );
+      console.log('[Facebook SDK] User ID:', userResponse.id);
+      console.log('[Facebook SDK] User Name:', userResponse.name);
+      
+      // Save user data
+      const userData = {
+        id: userResponse.id,
+        name: userResponse.name,
+        picture: userResponse.picture?.data?.url || null
+      };
+      setFacebookUser(userData);
+      localStorage.setItem("facebook_user", JSON.stringify(userData));
+      
+      // Step 2: Get businesses
+      console.log('[Facebook SDK] Step 2: Fetching businesses (/me/businesses)...');
+      
+      FB.api('/me/businesses', 'GET', {}, function(businessResponse: any) {
+        if (businessResponse.error) {
+          console.error('[Facebook SDK] Error fetching businesses:', businessResponse.error);
+          // Try fallback to ad accounts
+          fetchPixelsFromAdAccounts(FB, accessToken);
+          return;
         }
+        
+        console.log('[Facebook SDK] Businesses found:', businessResponse.data?.length || 0);
+        
+        if (!businessResponse.data || businessResponse.data.length === 0) {
+          console.log('[Facebook SDK] No businesses found, trying ad accounts fallback...');
+          fetchPixelsFromAdAccounts(FB, accessToken);
+          return;
+        }
+        
+        const allPixels: Array<{id: string, name: string, accountName: string}> = [];
+        let businessesProcessed = 0;
+        
+        // Step 3: For each business, get owned_pixels
+        businessResponse.data.forEach((business: any) => {
+          console.log(`[Facebook SDK] Step 3: Fetching pixels for business: ${business.name} (${business.id})`);
+          
+          FB.api(`/${business.id}/owned_pixels`, 'GET', { fields: 'id,name' }, function(pixelResponse: any) {
+            businessesProcessed++;
+            
+            if (pixelResponse.error) {
+              console.error(`[Facebook SDK] Error fetching pixels for business ${business.id}:`, pixelResponse.error);
+            } else if (pixelResponse.data) {
+              console.log(`[Facebook SDK] Found ${pixelResponse.data.length} pixels in ${business.name}`);
+              
+              pixelResponse.data.forEach((pixel: any) => {
+                allPixels.push({
+                  id: pixel.id,
+                  name: pixel.name,
+                  accountName: business.name
+                });
+              });
+            }
+            
+            // When all businesses are processed, update state
+            if (businessesProcessed === businessResponse.data.length) {
+              console.log(`[Facebook SDK] Total pixels found: ${allPixels.length}`);
+              console.log('[Facebook SDK] Pixels:', allPixels);
+              
+              if (allPixels.length > 0) {
+                setFacebookPixels(allPixels);
+                localStorage.setItem("facebook_pixels", JSON.stringify(allPixels));
+              } else {
+                // Fallback to ad accounts if no pixels found via businesses
+                fetchPixelsFromAdAccounts(FB, accessToken);
+              }
+            }
+          });
+        });
+      });
+    });
+  }, []);
+
+  // Fallback: Fetch pixels from ad accounts
+  const fetchPixelsFromAdAccounts = useCallback((FB: any, accessToken: string) => {
+    console.log('[Facebook SDK] Fallback: Fetching from ad accounts (/me/adaccounts)...');
+    
+    FB.api('/me/adaccounts', 'GET', { fields: 'id,name' }, function(adAccountsResponse: any) {
+      if (adAccountsResponse.error) {
+        console.error('[Facebook SDK] Error fetching ad accounts:', adAccountsResponse.error);
+        return;
+      }
+      
+      console.log('[Facebook SDK] Ad accounts found:', adAccountsResponse.data?.length || 0);
+      
+      if (!adAccountsResponse.data || adAccountsResponse.data.length === 0) {
+        console.log('[Facebook SDK] No ad accounts found');
+        return;
+      }
+      
+      const allPixels: Array<{id: string, name: string, accountName: string}> = [];
+      let accountsProcessed = 0;
+      
+      adAccountsResponse.data.forEach((account: any) => {
+        console.log(`[Facebook SDK] Fetching pixels for ad account: ${account.name} (${account.id})`);
+        
+        FB.api(`/${account.id}/adspixels`, 'GET', { fields: 'id,name' }, function(pixelResponse: any) {
+          accountsProcessed++;
+          
+          if (pixelResponse.error) {
+            console.error(`[Facebook SDK] Error fetching pixels for account ${account.id}:`, pixelResponse.error);
+          } else if (pixelResponse.data) {
+            console.log(`[Facebook SDK] Found ${pixelResponse.data.length} pixels in ${account.name}`);
+            
+            pixelResponse.data.forEach((pixel: any) => {
+              allPixels.push({
+                id: pixel.id,
+                name: pixel.name,
+                accountName: account.name
+              });
+            });
+          }
+          
+          // When all accounts are processed, update state
+          if (accountsProcessed === adAccountsResponse.data.length) {
+            console.log(`[Facebook SDK] Total pixels found (via ad accounts): ${allPixels.length}`);
+            console.log('[Facebook SDK] Pixels:', allPixels);
+            
+            if (allPixels.length > 0) {
+              setFacebookPixels(allPixels);
+              localStorage.setItem("facebook_pixels", JSON.stringify(allPixels));
+            }
+          }
+        });
+      });
+    });
+  }, []);
+
+  // Initialize Facebook SDK and check login status
+  useEffect(() => {
+    if (!mounted) return;
+
+    // Load Facebook SDK
+    const loadFacebookSDK = () => {
+      // Define fbAsyncInit before loading SDK
+      (window as any).fbAsyncInit = function() {
+        (window as any).FB.init({
+          appId: '881927951248648',
+          cookie: true,
+          xfbml: true,
+          version: 'v24.0'
+        });
+
+        // Check login status after SDK is initialized
+        (window as any).FB.getLoginStatus(function(response: any) {
+          console.log('[Facebook SDK] Login status:', response.status);
+          if (response.status === 'connected') {
+            console.log('[Facebook SDK] User is CONNECTED');
+            console.log('[Facebook SDK] User ID:', response.authResponse.userID);
+            console.log('[Facebook SDK] Access Token:', response.authResponse.accessToken ? 'Present' : 'Missing');
+            
+            // User is logged in and has authorized the app
+            const accessToken = response.authResponse.accessToken;
+            setFacebookAccessToken(accessToken);
+            setIsConnectedToFacebook(true);
+            localStorage.setItem("facebook_access_token", accessToken);
+            
+            // Fetch pixels using 3-step approach
+            fetchPixelsWithSDK(accessToken);
+            
+          } else if (response.status === 'not_authorized') {
+            console.log('[Facebook SDK] User is NOT AUTHORIZED - logged into Facebook but not the app');
+          } else {
+            console.log('[Facebook SDK] User is NOT CONNECTED to Facebook');
+          }
+        });
+      };
+
+      // Load the SDK asynchronously
+      if (!document.getElementById('facebook-jssdk')) {
+        const js = document.createElement('script');
+        js.id = 'facebook-jssdk';
+        js.src = 'https://connect.facebook.net/en_US/sdk.js';
+        js.async = true;
+        js.defer = true;
+        const fjs = document.getElementsByTagName('script')[0];
+        fjs.parentNode?.insertBefore(js, fjs);
+      } else if ((window as any).FB) {
+        // SDK already loaded, just check status
+        (window as any).FB.getLoginStatus(function(response: any) {
+          console.log('[Facebook SDK] Login status (cached):', response.status);
+        });
+      }
+    };
+
+    loadFacebookSDK();
+  }, [mounted, fetchPixelsWithSDK]);
+
+  // Load Facebook connection state from localStorage (only after mount)
+  useEffect(() => {
+    if (!mounted) return;
+    
+    const savedToken = localStorage.getItem("facebook_access_token");
+    const savedUser = localStorage.getItem("facebook_user");
+    const savedPixels = localStorage.getItem("facebook_pixels");
+    
+    if (savedToken && savedUser) {
+      setFacebookAccessToken(savedToken);
+      setFacebookUser(JSON.parse(savedUser));
+      setIsConnectedToFacebook(true);
+      
+      if (savedPixels) {
+        setFacebookPixels(JSON.parse(savedPixels));
+      } else {
+        // Auto-fetch pixels if we have token but no cached pixels
+        fetcher.submit(
+          {
+            intent: "fetch-facebook-pixels",
+            accessToken: savedToken,
+          },
+          { method: "POST" }
+        );
       }
     }
-  }, [fetcher]);
+  }, [mounted, fetcher]);
 
   // Handle Facebook OAuth callback
   useEffect(() => {
@@ -529,83 +749,114 @@ export default function DashboardPage() {
   }, [fetcher, pixelForm, inputMethod, facebookAccessToken]);
 
   const handleConnectToFacebook = useCallback(() => {
-    // Open Facebook OAuth popup
-    const facebookAppId = "881927951248648"; // Your Facebook App ID
-    const redirectUri = encodeURIComponent(`${window.location.origin}/api/facebook/callback`);
-    const scope = "ads_read,business_management,ads_management,pages_show_list,pages_read_engagement"; // Required permissions for pixel access
+    const scope = "ads_read,business_management,ads_management,pages_show_list,pages_read_engagement";
     
-    const oauthUrl = `https://www.facebook.com/v24.0/dialog/oauth?client_id=${facebookAppId}&redirect_uri=${redirectUri}&scope=${scope}&response_type=code&state=${Date.now()}`;
-    
-    const popup = window.open(
-      oauthUrl,
-      'facebook-oauth',
-      'width=600,height=600,scrollbars=yes,resizable=yes'
-    );
-
-    // Listen for messages from the popup
-    const handleMessage = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
-
-      if (event.data.type === 'FACEBOOK_AUTH_SUCCESS') {
-        setFacebookAccessToken(event.data.accessToken);
+    // Check if Facebook SDK is loaded
+    if ((window as any).FB) {
+      console.log('[Dashboard] Using Facebook SDK for login...');
+      
+      (window as any).FB.login(function(response: any) {
+        console.log('[Dashboard] FB.login response:', response.status);
         
-        // Set user profile if available
-        if (event.data.user) {
-          setFacebookUser(event.data.user);
-          if (typeof window !== "undefined") {
+        if (response.status === 'connected') {
+          console.log('[Dashboard] Facebook user CONNECTED via SDK!');
+          const accessToken = response.authResponse.accessToken;
+          
+          setFacebookAccessToken(accessToken);
+          setIsConnectedToFacebook(true);
+          localStorage.setItem("facebook_access_token", accessToken);
+          
+          // Fetch pixels using 3-step approach (user -> businesses -> owned_pixels)
+          fetchPixelsWithSDK(accessToken);
+          
+          setShowFacebookModal(false);
+        } else if (response.status === 'not_authorized') {
+          console.log('[Dashboard] Facebook user NOT AUTHORIZED');
+          setFacebookError('You need to authorize the app to access your Facebook data.');
+        } else {
+          console.log('[Dashboard] Facebook user NOT CONNECTED');
+          setFacebookError('Facebook login was cancelled or failed.');
+        }
+      }, { scope: scope });
+      
+    } else {
+      // Fallback to OAuth popup if SDK not loaded
+      console.log('[Dashboard] Facebook SDK not loaded, using OAuth popup...');
+      
+      const facebookAppId = "881927951248648";
+      const redirectUri = encodeURIComponent(`${window.location.origin}/auth/facebook/callback`);
+      
+      const oauthUrl = `https://www.facebook.com/v24.0/dialog/oauth?client_id=${facebookAppId}&redirect_uri=${redirectUri}&scope=${scope}&response_type=code&state=${Date.now()}`;
+      
+      const popup = window.open(
+        oauthUrl,
+        'facebook-oauth',
+        'width=600,height=600,scrollbars=yes,resizable=yes'
+      );
+
+      // Listen for messages from the popup
+      const handleMessage = (event: MessageEvent) => {
+        if (event.origin !== window.location.origin) return;
+
+        if (event.data.type === 'FACEBOOK_AUTH_SUCCESS') {
+          console.log('[Dashboard] Facebook user CONNECTED!');
+          console.log('[Dashboard] User:', event.data.user?.name || 'Unknown');
+          console.log('[Dashboard] Access Token:', event.data.accessToken ? 'Received' : 'Missing');
+          console.log('[Dashboard] Pixels:', event.data.pixels?.length || 0);
+          
+          setFacebookAccessToken(event.data.accessToken);
+          
+          // Set user profile if available
+          if (event.data.user) {
+            setFacebookUser(event.data.user);
             localStorage.setItem("facebook_user", JSON.stringify(event.data.user));
           }
-        }
-        
-        // Set pixels if they were fetched
-        if (event.data.pixels && event.data.pixels.length > 0) {
-          setFacebookPixels(event.data.pixels);
-          if (typeof window !== "undefined") {
+          
+          // Set pixels if they were fetched
+          if (event.data.pixels && event.data.pixels.length > 0) {
+            setFacebookPixels(event.data.pixels);
             localStorage.setItem("facebook_pixels", JSON.stringify(event.data.pixels));
           }
-        }
-        
-        setIsConnectedToFacebook(true);
-        
-        // Save token to localStorage
-        if (typeof window !== "undefined") {
+          
+          setIsConnectedToFacebook(true);
           localStorage.setItem("facebook_access_token", event.data.accessToken);
+          
+          // Show warning if any
+          if (event.data.warning) {
+            setFacebookError(event.data.warning);
+          }
+          
+          setShowFacebookModal(false);
+          window.removeEventListener('message', handleMessage);
+          
+          // If no pixels were fetched automatically, try to fetch them
+          if (!event.data.pixels || event.data.pixels.length === 0) {
+            fetcher.submit(
+              {
+                intent: "fetch-facebook-pixels",
+                accessToken: event.data.accessToken,
+              },
+              { method: "POST" }
+            );
+          }
+        } else if (event.data.type === 'FACEBOOK_AUTH_ERROR') {
+          console.log('[Dashboard] Facebook user NOT connected - error:', event.data.error);
+          setFacebookError(event.data.error);
+          window.removeEventListener('message', handleMessage);
         }
-        
-        // Show warning if any
-        if (event.data.warning) {
-          setFacebookError(event.data.warning);
-        }
-        
-        setShowFacebookModal(false);
-        window.removeEventListener('message', handleMessage);
-        
-        // If no pixels were fetched automatically, try to fetch them
-        if (!event.data.pixels || event.data.pixels.length === 0) {
-          fetcher.submit(
-            {
-              intent: "fetch-facebook-pixels",
-              accessToken: event.data.accessToken,
-            },
-            { method: "POST" }
-          );
-        }
-      } else if (event.data.type === 'FACEBOOK_AUTH_ERROR') {
-        setFacebookError(event.data.error);
-        window.removeEventListener('message', handleMessage);
-      }
-    };
+      };
 
-    window.addEventListener('message', handleMessage);
+      window.addEventListener('message', handleMessage);
 
-    // Clean up if popup is closed manually
-    const checkClosed = setInterval(() => {
-      if (popup?.closed) {
-        window.removeEventListener('message', handleMessage);
-        clearInterval(checkClosed);
-      }
-    }, 1000);
-  }, [fetcher]);
+      // Clean up if popup is closed manually
+      const checkClosed = setInterval(() => {
+        if (popup?.closed) {
+          window.removeEventListener('message', handleMessage);
+          clearInterval(checkClosed);
+        }
+      }, 1000);
+    }
+  }, [fetcher, fetchPixelsWithSDK]);
 
   const handleSelectFacebookPixel = useCallback(() => {
     const selectedPixel = facebookPixels.find(p => p.id === selectedFacebookPixel);
@@ -671,6 +922,7 @@ export default function DashboardPage() {
     setIsConnectedToFacebook(false);
     setSelectedFacebookPixel("");
     setFacebookError("");
+    setPixelValidationResult(null);
     
     // Clear localStorage
     if (typeof window !== "undefined") {
@@ -679,6 +931,83 @@ export default function DashboardPage() {
       localStorage.removeItem("facebook_pixels");
     }
   }, []);
+
+  // Validate pixel using Facebook SDK
+  const validatePixelWithSDK = useCallback((pixelId: string, accessToken: string) => {
+    const FB = (window as any).FB;
+    
+    setIsValidatingPixel(true);
+    setPixelValidationResult(null);
+    
+    console.log(`[Facebook SDK] Validating pixel: ${pixelId}`);
+    
+    if (FB) {
+      // Use Facebook SDK to validate
+      FB.api(`/${pixelId}`, 'GET', { fields: 'id,name,creation_time,last_fired_time' }, function(response: any) {
+        setIsValidatingPixel(false);
+        
+        if (response.error) {
+          console.log(`[Facebook SDK] Pixel validation FAILED:`, response.error.message);
+          setPixelValidationResult({
+            valid: false,
+            error: response.error.message
+          });
+        } else {
+          console.log(`[Facebook SDK] Pixel validation SUCCESS!`);
+          console.log(`[Facebook SDK] Pixel Name: ${response.name}`);
+          console.log(`[Facebook SDK] Pixel ID: ${response.id}`);
+          console.log(`[Facebook SDK] Last Fired: ${response.last_fired_time || 'Never'}`);
+          
+          setPixelValidationResult({
+            valid: true,
+            pixelName: response.name
+          });
+        }
+      });
+    } else {
+      // Fallback to server-side validation
+      console.log(`[Dashboard] Facebook SDK not available, using server validation...`);
+      
+      fetch(`https://graph.facebook.com/v24.0/${pixelId}?fields=id,name&access_token=${accessToken}`)
+        .then(res => res.json())
+        .then(data => {
+          setIsValidatingPixel(false);
+          
+          if (data.error) {
+            console.log(`[Dashboard] Pixel validation FAILED:`, data.error.message);
+            setPixelValidationResult({
+              valid: false,
+              error: data.error.message
+            });
+          } else {
+            console.log(`[Dashboard] Pixel validation SUCCESS!`);
+            console.log(`[Dashboard] Pixel Name: ${data.name}`);
+            
+            setPixelValidationResult({
+              valid: true,
+              pixelName: data.name
+            });
+          }
+        })
+        .catch(err => {
+          setIsValidatingPixel(false);
+          console.log(`[Dashboard] Pixel validation error:`, err);
+          setPixelValidationResult({
+            valid: false,
+            error: 'Failed to validate pixel'
+          });
+        });
+    }
+  }, []);
+
+  // Auto-validate when pixel is selected
+  useEffect(() => {
+    if (selectedFacebookPixel && selectedFacebookPixel !== "manual" && facebookAccessToken) {
+      validatePixelWithSDK(selectedFacebookPixel, facebookAccessToken);
+    } else {
+      setPixelValidationResult(null);
+    }
+  }, [selectedFacebookPixel, facebookAccessToken, validatePixelWithSDK]);
 
   const handleEnhancedCreate = useCallback(() => {
     const pixelId = selectedFacebookPixel && selectedFacebookPixel !== "manual" 
@@ -781,11 +1110,11 @@ export default function DashboardPage() {
         }}
         secondaryActions={[
           {
-            content: isConnectedToFacebook 
+            content: mounted && isConnectedToFacebook 
               ? `Connected: ${facebookUser?.name || 'Facebook'}` 
               : "Connect Facebook",
             icon: ConnectIcon,
-            onAction: isConnectedToFacebook ? handleRefreshFacebookData : handleConnectToFacebook,
+            onAction: mounted && isConnectedToFacebook ? handleRefreshFacebookData : handleConnectToFacebook,
             loading: isRefreshingToken,
           }
         ]}
@@ -808,7 +1137,7 @@ export default function DashboardPage() {
           )}
 
           {/* Facebook Connection Status Card */}
-          {isConnectedToFacebook && facebookUser && (
+          {mounted && isConnectedToFacebook && facebookUser && (
             <Layout.Section>
               <Card>
                 <InlineStack align="space-between" blockAlign="center">
@@ -996,16 +1325,19 @@ export default function DashboardPage() {
             setShowEnhancedCreateModal(false);
             setEnhancedCreateForm({ appName: "", pixelId: "", accessToken: "" });
             setSelectedFacebookPixel("");
+            setPixelValidationResult(null);
           }}
           title="Create New Pixel"
           primaryAction={{
-            content: "Create Pixel",
+            content: isValidatingPixel ? "Validating..." : "Create Pixel",
             onAction: handleEnhancedCreate,
-            loading: isLoading,
+            loading: isLoading || isValidatingPixel,
             disabled: 
               !enhancedCreateForm.appName || 
               (!enhancedCreateForm.pixelId && !selectedFacebookPixel) ||
-              apps.some((app: any) => app.settings?.metaPixelId === (enhancedCreateForm.pixelId || selectedFacebookPixel)),
+              apps.some((app: any) => app.settings?.metaPixelId === (enhancedCreateForm.pixelId || selectedFacebookPixel)) ||
+              (selectedFacebookPixel && selectedFacebookPixel !== "manual" && !pixelValidationResult?.valid) ||
+              isValidatingPixel,
           }}
           secondaryActions={[
             {
@@ -1014,6 +1346,7 @@ export default function DashboardPage() {
                 setShowEnhancedCreateModal(false);
                 setEnhancedCreateForm({ appName: "", pixelId: "", accessToken: "" });
                 setSelectedFacebookPixel("");
+                setPixelValidationResult(null);
               },
             },
           ]}
@@ -1021,7 +1354,7 @@ export default function DashboardPage() {
           <Modal.Section>
             <BlockStack gap="400">
               {/* Facebook Connection Status */}
-              {isConnectedToFacebook && facebookUser ? (
+              {mounted && isConnectedToFacebook && facebookUser ? (
                 <Card background="bg-surface-success">
                   <InlineStack align="space-between" blockAlign="center">
                     <InlineStack gap="200" blockAlign="center">
@@ -1122,7 +1455,7 @@ export default function DashboardPage() {
               </div>
 
               {/* Pixel Selection - Omega Style */}
-              {isConnectedToFacebook && facebookPixels.length > 0 ? (
+              {mounted && isConnectedToFacebook && facebookPixels.length > 0 ? (
                 <div>
                   <Text as="p" variant="bodyMd" fontWeight="medium">
                     Select Facebook Pixel <Text as="span" tone="critical">*</Text>
@@ -1181,7 +1514,7 @@ export default function DashboardPage() {
               ) : null}
 
               {/* Manual Pixel ID Input */}
-              {(!isConnectedToFacebook || selectedFacebookPixel === "manual") && (
+              {(!mounted || !isConnectedToFacebook || selectedFacebookPixel === "manual") && (
                 <div>
                   <Text as="p" variant="bodyMd" fontWeight="medium">
                     Pixel ID (Dataset ID) <Text as="span" tone="critical">*</Text>
@@ -1221,7 +1554,7 @@ export default function DashboardPage() {
               )}
 
               {/* Access Token - Only for manual entry */}
-              {(!isConnectedToFacebook || selectedFacebookPixel === "manual") && (
+              {(!mounted || !isConnectedToFacebook || selectedFacebookPixel === "manual") && (
                 <div>
                   <Text as="p" variant="bodyMd" fontWeight="medium">
                     Access Token (Optional)
@@ -1239,16 +1572,55 @@ export default function DashboardPage() {
                   <Text as="p" variant="bodySm" tone="subdued">
                     Generate in Meta Events Manager → Settings → Conversions API → Generate Access Token
                   </Text>
+                  
+                  {/* Validate Button for manual entry */}
+                  {enhancedCreateForm.pixelId && enhancedCreateForm.accessToken && (
+                    <div style={{ marginTop: "12px" }}>
+                      <Button
+                        onClick={() => validatePixelWithSDK(enhancedCreateForm.pixelId, enhancedCreateForm.accessToken)}
+                        loading={isValidatingPixel}
+                      >
+                        Validate Pixel
+                      </Button>
+                    </div>
+                  )}
+                  
+                  {/* Manual validation result */}
+                  {pixelValidationResult && (
+                    <div style={{ marginTop: "12px" }}>
+                      {pixelValidationResult.valid ? (
+                        <Banner tone="success">
+                          <p>✅ Pixel validated! Name: <strong>{pixelValidationResult.pixelName}</strong></p>
+                        </Banner>
+                      ) : (
+                        <Banner tone="critical">
+                          <p>❌ Validation failed: {pixelValidationResult.error}</p>
+                        </Banner>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Token Validation Status */}
-              {isConnectedToFacebook && selectedFacebookPixel && selectedFacebookPixel !== "manual" && (
-                <Banner tone="success">
-                  <p>
-                    ✅ Pixel validated with your Facebook account. Access token will be automatically refreshed.
-                  </p>
-                </Banner>
+              {/* Pixel Validation Status - Auto validation for SDK-selected pixels */}
+              {mounted && isConnectedToFacebook && selectedFacebookPixel && selectedFacebookPixel !== "manual" && (
+                <>
+                  {isValidatingPixel ? (
+                    <Banner tone="info">
+                      <p>🔄 Validating pixel with Facebook...</p>
+                    </Banner>
+                  ) : pixelValidationResult?.valid ? (
+                    <Banner tone="success">
+                      <p>
+                        ✅ Pixel validated successfully! Name: <strong>{pixelValidationResult.pixelName}</strong>
+                      </p>
+                    </Banner>
+                  ) : pixelValidationResult?.error ? (
+                    <Banner tone="critical">
+                      <p>❌ Pixel validation failed: {pixelValidationResult.error}</p>
+                    </Banner>
+                  ) : null}
+                </>
               )}
             </BlockStack>
           </Modal.Section>
@@ -1716,7 +2088,7 @@ export default function DashboardPage() {
                       </Banner>
                     )}
                     
-                    {!isConnectedToFacebook ? (
+                    {!mounted || !isConnectedToFacebook ? (
                       <Card background="bg-surface-secondary">
                         <BlockStack gap="300">
                           <InlineStack gap="200" blockAlign="center">
