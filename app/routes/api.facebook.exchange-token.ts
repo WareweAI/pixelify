@@ -49,6 +49,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     // Fetch pixels after successful token exchange
     try {
+      // First, fetch the user's profile
+      const userResponse = await fetch(
+        `https://graph.facebook.com/v24.0/me?fields=id,name,picture.type(small)&access_token=${accessToken}`
+      );
+      
+      let userData = null;
+      if (userResponse.ok) {
+        userData = await userResponse.json();
+        console.log("[Exchange Token] User profile fetched:", userData.name);
+      }
+
       // Fetch ad accounts first
       const adAccountsResponse = await fetch(
         `https://graph.facebook.com/v24.0/me/adaccounts?fields=id,name&access_token=${accessToken}`
@@ -108,7 +119,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         expiresIn,
         expiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(),
         pixels,
-        adAccounts: adAccountsData.data || []
+        adAccounts: adAccountsData.data || [],
+        user: userData ? {
+          id: userData.id,
+          name: userData.name,
+          picture: userData.picture?.data?.url || null
+        } : null
       });
 
     } catch (pixelFetchError) {

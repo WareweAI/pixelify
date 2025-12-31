@@ -49,6 +49,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
                   accessToken: data.accessToken,
                   pixels: data.pixels || [],
                   adAccounts: data.adAccounts || [],
+                  user: data.user || null,
                   warning: data.warning
                 }, window.location.origin);
               }

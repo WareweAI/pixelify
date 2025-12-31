@@ -426,7 +426,7 @@ export default function DashboardPage() {
   const [facebookPixels, setFacebookPixels] = useState<Array<{id: string, name: string, accountName: string}>>([]);
   const [isConnectedToFacebook, setIsConnectedToFacebook] = useState(false);
   const [facebookError, setFacebookError] = useState("");
-  const [facebookUser, setFacebookUser] = useState<{id: string, name: string} | null>(null);
+  const [facebookUser, setFacebookUser] = useState<{id: string, name: string, picture?: string | null} | null>(null);
   const [isRefreshingToken, setIsRefreshingToken] = useState(false);
   
   const [pixelForm, setPixelForm] = useState({
@@ -549,10 +549,27 @@ export default function DashboardPage() {
       if (event.data.type === 'FACEBOOK_AUTH_SUCCESS') {
         setFacebookAccessToken(event.data.accessToken);
         
+        // Set user profile if available
+        if (event.data.user) {
+          setFacebookUser(event.data.user);
+          if (typeof window !== "undefined") {
+            localStorage.setItem("facebook_user", JSON.stringify(event.data.user));
+          }
+        }
+        
         // Set pixels if they were fetched
         if (event.data.pixels && event.data.pixels.length > 0) {
           setFacebookPixels(event.data.pixels);
-          setIsConnectedToFacebook(true);
+          if (typeof window !== "undefined") {
+            localStorage.setItem("facebook_pixels", JSON.stringify(event.data.pixels));
+          }
+        }
+        
+        setIsConnectedToFacebook(true);
+        
+        // Save token to localStorage
+        if (typeof window !== "undefined") {
+          localStorage.setItem("facebook_access_token", event.data.accessToken);
         }
         
         // Show warning if any
@@ -790,6 +807,63 @@ export default function DashboardPage() {
             </Layout.Section>
           )}
 
+          {/* Facebook Connection Status Card */}
+          {isConnectedToFacebook && facebookUser && (
+            <Layout.Section>
+              <Card>
+                <InlineStack align="space-between" blockAlign="center">
+                  <InlineStack gap="300" blockAlign="center">
+                    {facebookUser.picture ? (
+                      <img 
+                        src={facebookUser.picture} 
+                        alt={facebookUser.name}
+                        style={{
+                          width: "48px",
+                          height: "48px",
+                          borderRadius: "50%",
+                          objectFit: "cover",
+                          border: "3px solid #1877f2"
+                        }}
+                      />
+                    ) : (
+                      <div style={{
+                        width: "48px",
+                        height: "48px",
+                        borderRadius: "50%",
+                        backgroundColor: "#1877f2",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "white",
+                        fontWeight: "bold",
+                        fontSize: "20px"
+                      }}>
+                        {facebookUser.name.charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                    <BlockStack gap="100">
+                      <InlineStack gap="200" blockAlign="center">
+                        <Text variant="headingMd" as="h3">Facebook Connected</Text>
+                        <Badge tone="success">Active</Badge>
+                      </InlineStack>
+                      <Text variant="bodySm" tone="subdued" as="p">
+                        Logged in as {facebookUser.name} • {facebookPixels.length} pixel(s) available
+                      </Text>
+                    </BlockStack>
+                  </InlineStack>
+                  <InlineStack gap="200">
+                    <Button onClick={handleRefreshFacebookData} loading={isRefreshingToken}>
+                      Refresh
+                    </Button>
+                    <Button variant="plain" tone="critical" onClick={handleDisconnectFacebook}>
+                      Disconnect
+                    </Button>
+                  </InlineStack>
+                </InlineStack>
+              </Card>
+            </Layout.Section>
+          )}
+
           {/* Dashboard Overview Stats */}
           <Layout.Section>
             <BlockStack gap="400">
@@ -951,20 +1025,34 @@ export default function DashboardPage() {
                 <Card background="bg-surface-success">
                   <InlineStack align="space-between" blockAlign="center">
                     <InlineStack gap="200" blockAlign="center">
-                      <div style={{
-                        width: "32px",
-                        height: "32px",
-                        borderRadius: "50%",
-                        backgroundColor: "#1877f2",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        color: "white",
-                        fontWeight: "bold",
-                        fontSize: "14px"
-                      }}>
-                        {facebookUser.name.charAt(0).toUpperCase()}
-                      </div>
+                      {facebookUser.picture ? (
+                        <img 
+                          src={facebookUser.picture} 
+                          alt={facebookUser.name}
+                          style={{
+                            width: "40px",
+                            height: "40px",
+                            borderRadius: "50%",
+                            objectFit: "cover",
+                            border: "2px solid #1877f2"
+                          }}
+                        />
+                      ) : (
+                        <div style={{
+                          width: "40px",
+                          height: "40px",
+                          borderRadius: "50%",
+                          backgroundColor: "#1877f2",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          color: "white",
+                          fontWeight: "bold",
+                          fontSize: "16px"
+                        }}>
+                          {facebookUser.name.charAt(0).toUpperCase()}
+                        </div>
+                      )}
                       <BlockStack gap="050">
                         <Text variant="bodyMd" fontWeight="medium" as="span">
                           Connected to Facebook
