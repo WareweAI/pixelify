@@ -108,7 +108,7 @@ export function sanitizeUrl(url: string): string {
   // In production, never allow tunnel URLs
   if (process.env.NODE_ENV === "production" && cleanUrl.includes("trycloudflare.com")) {
     console.error("🚨 CRITICAL: Tunnel URL detected in production, using fallback");
-    return process.env.SHOPIFY_APP_URL || "https://pixel-warewe.vercel.app";
+    return process.env.SHOPIFY_APP_URL || "https://pixelify-red.vercel.app";
   }
 
   return cleanUrl;

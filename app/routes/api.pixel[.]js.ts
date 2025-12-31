@@ -82,7 +82,7 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
       }));
 
     // Get the base URL for API calls
-    const baseUrl = process.env.SHOPIFY_APP_URL || "https://pixel-warewe.vercel.app";
+    const baseUrl = process.env.SHOPIFY_APP_URL || "https://pixelify-red.vercel.app";
     
     const script = `
 (function() {
@@ -217,65 +217,231 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
 
   // Default E-commerce Event Auto-tracking
   ${trackViewContent ? `
-    // Auto-track ViewContent on product pages
-    if (window.location.pathname.includes('/products/') || document.querySelector('.product-single, .product-page, [data-product-id]')) {
-      var productId = document.querySelector('[data-product-id]')?.getAttribute('data-product-id') || 
-                     document.querySelector('meta[property="product:retailer_item_id"]')?.getAttribute('content') ||
-                     window.location.pathname.split('/products/')[1]?.split('?')[0];
-      var productName = document.querySelector('h1.product-title, .product-name, h1')?.innerText?.trim() ||
-                       document.querySelector('meta[property="og:title"]')?.getAttribute('content') ||
-                       document.title;
-      var productPrice = document.querySelector('.price, .product-price, [data-price]')?.innerText?.replace(/[^0-9.]/g, '') ||
-                        document.querySelector('meta[property="product:price:amount"]')?.getAttribute('content');
+    // Enhanced Auto-track ViewContent on product pages with better debugging
+    function setupViewContentTracking() {
+      var isProductPage = window.location.pathname.includes('/products/') || 
+                         document.querySelector('.product-single, .product-page, [data-product-id], .product-form') ||
+                         document.querySelector('meta[property="product:retailer_item_id"]');
       
-      setTimeout(function() {
-        track('viewContent', {
+      if (DEBUG) console.log('[PixelAnalytics] ViewContent check - isProductPage:', isProductPage);
+      
+      if (isProductPage) {
+        var productId = null;
+        var productName = null;
+        var productPrice = null;
+        
+        // Try multiple ways to get product ID
+        var productIdSources = [
+          document.querySelector('[data-product-id]')?.getAttribute('data-product-id'),
+          document.querySelector('meta[property="product:retailer_item_id"]')?.getAttribute('content'),
+          document.querySelector('[name="id"]')?.value,
+          window.location.pathname.split('/products/')[1]?.split('?')[0]?.split('/')[0]
+        ];
+        
+        for (var i = 0; i < productIdSources.length; i++) {
+          if (productIdSources[i]) {
+            productId = productIdSources[i];
+            break;
+          }
+        }
+        
+        // Try multiple ways to get product name
+        var nameSelectors = [
+          'h1.product-title', '.product-name', '.product__title', 'h1', 
+          '.product-single__title', '.product-meta__title'
+        ];
+        
+        for (var i = 0; i < nameSelectors.length; i++) {
+          var nameEl = document.querySelector(nameSelectors[i]);
+          if (nameEl && nameEl.innerText && nameEl.innerText.trim()) {
+            productName = nameEl.innerText.trim();
+            break;
+          }
+        }
+        
+        // Fallback to meta tag or page title
+        if (!productName) {
+          productName = document.querySelector('meta[property="og:title"]')?.getAttribute('content') ||
+                       document.title;
+        }
+        
+        // Try multiple ways to get price
+        var priceSources = [
+          document.querySelector('.price')?.innerText?.replace(/[^0-9.]/g, ''),
+          document.querySelector('.product-price')?.innerText?.replace(/[^0-9.]/g, ''),
+          document.querySelector('[data-price]')?.innerText?.replace(/[^0-9.]/g, ''),
+          document.querySelector('.price__current')?.innerText?.replace(/[^0-9.]/g, ''),
+          document.querySelector('.money')?.innerText?.replace(/[^0-9.]/g, ''),
+          document.querySelector('meta[property="product:price:amount"]')?.getAttribute('content')
+        ];
+        
+        for (var i = 0; i < priceSources.length; i++) {
+          if (priceSources[i]) {
+            productPrice = parseFloat(priceSources[i]);
+            break;
+          }
+        }
+        
+        var eventData = {
           product_id: productId,
           product_name: productName,
-          value: productPrice ? parseFloat(productPrice) : undefined,
-          content_type: 'product'
-        });
-      }, 500);
+          value: productPrice,
+          content_type: 'product',
+          currency: 'USD'
+        };
+        
+        if (DEBUG) {
+          console.log('[PixelAnalytics] ViewContent event data:', eventData);
+          console.log('[PixelAnalytics] Product detection sources:', {
+            productIdSources: productIdSources,
+            nameSelectors: nameSelectors.map(function(sel) { 
+              return { selector: sel, found: !!document.querySelector(sel) }; 
+            }),
+            priceSources: priceSources
+          });
+        }
+        
+        setTimeout(function() {
+          track('viewContent', eventData);
+        }, 500);
+      }
     }
+    
+    setupViewContentTracking();
   ` : ''}
   
   ${trackAddToCart ? `
-    // Auto-track AddToCart events
+    // Enhanced Auto-track AddToCart events with better debugging
     function setupAddToCartTracking() {
       var selectors = [
         '.add-to-cart', '.product-form__cart-submit', '[name="add"]', '.btn-add-to-cart',
         '.product-form button[type="submit"]', '.shopify-product-form button[type="submit"]',
-        '.product-add-to-cart', '.add-to-bag', '.buy-now'
+        '.product-add-to-cart', '.add-to-bag', '.buy-now', '.product-form__buttons button',
+        '.product-form-submit', '.add-to-cart-button', '.cart-submit', '.product-submit',
+        '.btn-product-add', '.btn-cart', '.add-cart', '.addtocart', '.add_to_cart'
       ];
       
+      if (DEBUG) console.log('[PixelAnalytics] Setting up AddToCart tracking with selectors:', selectors);
+      
+      var foundButtons = [];
       selectors.forEach(function(selector) {
-        document.querySelectorAll(selector).forEach(function(btn) {
+        var buttons = document.querySelectorAll(selector);
+        if (buttons.length > 0) {
+          foundButtons.push({ selector: selector, count: buttons.length });
+          if (DEBUG) console.log('[PixelAnalytics] Found', buttons.length, 'buttons for selector:', selector);
+        }
+        
+        buttons.forEach(function(btn) {
           if (btn._addToCartTracked) return;
           btn._addToCartTracked = true;
           
+          if (DEBUG) console.log('[PixelAnalytics] Attaching AddToCart listener to button:', btn, 'selector:', selector);
+          
           btn.addEventListener('click', function(e) {
-            var form = btn.closest('form') || btn.closest('.product-form');
-            var productId = form?.querySelector('[name="id"], [data-product-id]')?.value ||
-                           form?.querySelector('[name="id"], [data-product-id]')?.getAttribute('data-product-id') ||
-                           document.querySelector('[data-product-id]')?.getAttribute('data-product-id');
-            var productName = document.querySelector('h1.product-title, .product-name, h1')?.innerText?.trim();
-            var quantity = form?.querySelector('[name="quantity"]')?.value || 1;
-            var price = document.querySelector('.price, .product-price')?.innerText?.replace(/[^0-9.]/g, '');
+            if (DEBUG) console.log('[PixelAnalytics] AddToCart button clicked:', btn);
             
-            track('addToCart', {
+            var form = btn.closest('form') || btn.closest('.product-form') || btn.closest('.shopify-product-form');
+            var productId = null;
+            var productName = null;
+            var quantity = 1;
+            var price = null;
+            
+            // Try multiple ways to get product ID
+            if (form) {
+              var idInput = form.querySelector('[name="id"]');
+              if (idInput) productId = idInput.value;
+              
+              var quantityInput = form.querySelector('[name="quantity"]');
+              if (quantityInput) quantity = parseInt(quantityInput.value) || 1;
+            }
+            
+            // Fallback product ID detection
+            if (!productId) {
+              var productIdEl = document.querySelector('[data-product-id]');
+              if (productIdEl) productId = productIdEl.getAttribute('data-product-id');
+            }
+            
+            // Try multiple ways to get product name
+            var nameSelectors = ['h1.product-title', '.product-name', '.product__title', 'h1', '.product-single__title'];
+            for (var i = 0; i < nameSelectors.length; i++) {
+              var nameEl = document.querySelector(nameSelectors[i]);
+              if (nameEl && nameEl.innerText && nameEl.innerText.trim()) {
+                productName = nameEl.innerText.trim();
+                break;
+              }
+            }
+            
+            // Try multiple ways to get price
+            var priceSelectors = ['.price', '.product-price', '.price__current', '.product__price', '.money'];
+            for (var i = 0; i < priceSelectors.length; i++) {
+              var priceEl = document.querySelector(priceSelectors[i]);
+              if (priceEl && priceEl.innerText) {
+                var priceText = priceEl.innerText.replace(/[^0-9.]/g, '');
+                if (priceText) {
+                  price = parseFloat(priceText);
+                  break;
+                }
+              }
+            }
+            
+            var eventData = {
               product_id: productId,
               product_name: productName,
-              quantity: parseInt(quantity) || 1,
-              value: price ? parseFloat(price) * (parseInt(quantity) || 1) : undefined,
-              currency: 'USD'
-            });
+              quantity: quantity,
+              value: price ? price * quantity : undefined,
+              currency: 'USD',
+              content_type: 'product',
+              selector_used: selector,
+              button_text: btn.innerText ? btn.innerText.trim().substring(0, 50) : '',
+              form_found: !!form
+            };
+            
+            if (DEBUG) {
+              console.log('[PixelAnalytics] AddToCart event data:', eventData);
+              console.log('[PixelAnalytics] Form element:', form);
+              console.log('[PixelAnalytics] Product ID sources checked:', {
+                formInput: form ? form.querySelector('[name="id"]') : null,
+                dataAttribute: document.querySelector('[data-product-id]')
+              });
+            }
+            
+            track('addToCart', eventData);
           });
         });
       });
+      
+      if (DEBUG) {
+        console.log('[PixelAnalytics] AddToCart setup complete. Found buttons:', foundButtons);
+        if (foundButtons.length === 0) {
+          console.warn('[PixelAnalytics] WARNING: No AddToCart buttons found! Check your theme selectors.');
+          console.log('[PixelAnalytics] Available buttons on page:', document.querySelectorAll('button').length);
+          console.log('[PixelAnalytics] Available forms on page:', document.querySelectorAll('form').length);
+        }
+      }
     }
     
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupAddToCartTracking);
-    else setupAddToCartTracking();
+    // Setup with retry mechanism
+    function setupAddToCartWithRetry() {
+      setupAddToCartTracking();
+      
+      // Retry after 2 seconds in case elements load dynamically
+      setTimeout(function() {
+        if (DEBUG) console.log('[PixelAnalytics] Retrying AddToCart setup after 2s...');
+        setupAddToCartTracking();
+      }, 2000);
+      
+      // Final retry after 5 seconds
+      setTimeout(function() {
+        if (DEBUG) console.log('[PixelAnalytics] Final AddToCart setup retry after 5s...');
+        setupAddToCartTracking();
+      }, 5000);
+    }
+    
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', setupAddToCartWithRetry);
+    } else {
+      setupAddToCartWithRetry();
+    }
   ` : ''}
   
   ${trackInitiateCheckout ? `
@@ -313,19 +479,75 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
     }
   ` : ''}
 
-  // Custom events
+  // Enhanced Custom events with better debugging
   function setupCustomTracking() {
+    if (DEBUG) console.log('[PixelAnalytics] Setting up custom events:', CUSTOM_EVENTS);
+    
     CUSTOM_EVENTS.forEach(function(ce) {
-      if (!ce.selector) return;
-      document.querySelectorAll(ce.selector).forEach(function(el) {
+      if (!ce.selector) {
+        if (DEBUG) console.warn('[PixelAnalytics] Custom event missing selector:', ce);
+        return;
+      }
+      
+      var elements = document.querySelectorAll(ce.selector);
+      if (DEBUG) console.log('[PixelAnalytics] Custom event "' + ce.name + '" found', elements.length, 'elements for selector:', ce.selector);
+      
+      if (elements.length === 0) {
+        if (DEBUG) console.warn('[PixelAnalytics] No elements found for custom event:', ce.name, 'selector:', ce.selector);
+      }
+      
+      elements.forEach(function(el) {
         if (el._pixelTracked) return;
         el._pixelTracked = true;
-        el.addEventListener(ce.eventType || 'click', function() { track(ce.name, { selector: ce.selector }); });
+        
+        var eventType = ce.eventType || 'click';
+        if (DEBUG) console.log('[PixelAnalytics] Attaching', eventType, 'listener to element for event:', ce.name);
+        
+        el.addEventListener(eventType, function(e) {
+          if (DEBUG) console.log('[PixelAnalytics] Custom event triggered:', ce.name, 'element:', el);
+          
+          var eventData = { 
+            selector: ce.selector,
+            element_type: el.tagName.toLowerCase(),
+            element_text: (el.innerText || '').substring(0, 100).trim(),
+            custom_event: true
+          };
+          
+          // Add meta event name if specified
+          if (ce.meta) {
+            eventData.meta_event = ce.meta;
+          }
+          
+          track(ce.name, eventData);
+        });
       });
     });
+    
+    if (DEBUG) {
+      var totalCustomEvents = CUSTOM_EVENTS.length;
+      var activeCustomEvents = CUSTOM_EVENTS.filter(function(ce) { 
+        return ce.selector && document.querySelectorAll(ce.selector).length > 0; 
+      }).length;
+      console.log('[PixelAnalytics] Custom events setup complete:', activeCustomEvents + '/' + totalCustomEvents, 'events have matching elements');
+    }
   }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupCustomTracking);
-  else setupCustomTracking();
+  
+  // Setup custom events with retry mechanism
+  function setupCustomTrackingWithRetry() {
+    setupCustomTracking();
+    
+    // Retry after 2 seconds for dynamically loaded content
+    setTimeout(function() {
+      if (DEBUG) console.log('[PixelAnalytics] Retrying custom events setup after 2s...');
+      setupCustomTracking();
+    }, 2000);
+  }
+  
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupCustomTrackingWithRetry);
+  } else {
+    setupCustomTrackingWithRetry();
+  }
 
   // Data attribute tracking
   ['click', 'submit', 'change'].forEach(function(evt) {
@@ -338,14 +560,131 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
     }, true);
   });
 
-  if (DEBUG) console.log('[PixelAnalytics] Initialized:', APP_ID);
+  // Enhanced debugging and diagnostics
+  if (DEBUG) {
+    console.log('[PixelAnalytics] Initialized:', APP_ID);
+    console.log('[PixelAnalytics] Configuration:', {
+      trackPageviews: ${trackPageviews},
+      trackClicks: ${trackClicks},
+      trackScroll: ${trackScroll},
+      trackViewContent: ${trackViewContent},
+      trackAddToCart: ${trackAddToCart},
+      trackInitiateCheckout: ${trackInitiateCheckout},
+      trackPurchase: ${trackPurchase},
+      customEventsCount: CUSTOM_EVENTS.length
+    });
+    
+    // Page analysis for debugging
+    setTimeout(function() {
+      console.log('[PixelAnalytics] Page Analysis:');
+      console.log('- URL:', window.location.href);
+      console.log('- Page type detection:', {
+        isProductPage: window.location.pathname.includes('/products/') || !!document.querySelector('.product-single, .product-page, [data-product-id]'),
+        isCartPage: window.location.pathname.includes('/cart'),
+        isCheckoutPage: window.location.pathname.includes('/checkout'),
+        isThankYouPage: window.location.pathname.includes('/thank_you') || window.location.pathname.includes('/orders/')
+      });
+      console.log('- Available buttons:', document.querySelectorAll('button').length);
+      console.log('- Available forms:', document.querySelectorAll('form').length);
+      console.log('- Product elements:', {
+        productForms: document.querySelectorAll('.product-form, .shopify-product-form').length,
+        addToCartButtons: document.querySelectorAll('.add-to-cart, .product-form__cart-submit, [name="add"], .btn-add-to-cart').length,
+        productTitles: document.querySelectorAll('h1.product-title, .product-name, .product__title').length,
+        priceElements: document.querySelectorAll('.price, .product-price, .money').length
+      });
+      
+      // Test if we can find common e-commerce elements
+      var commonSelectors = [
+        '.add-to-cart', '.product-form__cart-submit', '[name="add"]', '.btn-add-to-cart',
+        '.product-form button[type="submit"]', '.shopify-product-form button[type="submit"]'
+      ];
+      
+      console.log('- Add to Cart selector analysis:');
+      commonSelectors.forEach(function(selector) {
+        var elements = document.querySelectorAll(selector);
+        if (elements.length > 0) {
+          console.log('  ✅', selector, '- Found', elements.length, 'element(s)');
+        } else {
+          console.log('  ❌', selector, '- Not found');
+        }
+      });
+      
+      // Custom events analysis
+      if (CUSTOM_EVENTS.length > 0) {
+        console.log('- Custom events analysis:');
+        CUSTOM_EVENTS.forEach(function(ce) {
+          var elements = document.querySelectorAll(ce.selector || '');
+          console.log('  Event:', ce.name, '| Selector:', ce.selector, '| Found:', elements.length, 'elements');
+        });
+      }
+    }, 1000);
+    
+    // Expose debugging functions globally
+    window.PixelAnalytics.debug = {
+      testAddToCart: function() {
+        console.log('[PixelAnalytics] Testing AddToCart event...');
+        track('addToCart', {
+          product_id: 'test-product-123',
+          product_name: 'Test Product',
+          value: 29.99,
+          currency: 'USD',
+          quantity: 1,
+          test_event: true
+        });
+        console.log('[PixelAnalytics] AddToCart test event sent!');
+      },
+      testCustomEvent: function(eventName) {
+        console.log('[PixelAnalytics] Testing custom event:', eventName);
+        track(eventName || 'test_custom_event', {
+          test_event: true,
+          timestamp: new Date().toISOString()
+        });
+        console.log('[PixelAnalytics] Custom event test sent!');
+      },
+      analyzeSelectors: function() {
+        console.log('[PixelAnalytics] Analyzing page selectors...');
+        var analysis = {
+          buttons: Array.from(document.querySelectorAll('button')).map(function(btn) {
+            return {
+              text: btn.innerText.trim().substring(0, 50),
+              classes: btn.className,
+              id: btn.id,
+              type: btn.type,
+              name: btn.name
+            };
+          }),
+          forms: Array.from(document.querySelectorAll('form')).map(function(form) {
+            return {
+              action: form.action,
+              method: form.method,
+              classes: form.className,
+              id: form.id,
+              inputs: Array.from(form.querySelectorAll('input')).map(function(input) {
+                return { name: input.name, type: input.type, value: input.value };
+              })
+            };
+          })
+        };
+        console.table(analysis.buttons);
+        console.table(analysis.forms);
+        return analysis;
+      }
+    };
+    
+    console.log('[PixelAnalytics] Debug functions available:');
+    console.log('- PixelAnalytics.debug.testAddToCart() - Test add to cart tracking');
+    console.log('- PixelAnalytics.debug.testCustomEvent("event_name") - Test custom event');
+    console.log('- PixelAnalytics.debug.analyzeSelectors() - Analyze page elements');
+  }
 })();
     `;
 
     return new Response(script, {
       headers: {
         "Content-Type": "application/javascript; charset=utf-8",
-        "Cache-Control": "public, max-age=60, must-revalidate",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
         "Vary": "Origin",
         ...corsHeaders,
       },

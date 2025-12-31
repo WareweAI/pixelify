@@ -2,7 +2,7 @@ import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const baseUrl = process.env.SHOPIFY_APP_URL || "https://pixel-warewe.vercel.app";
+  const baseUrl = process.env.SHOPIFY_APP_URL || "https://pixelify-red.vercel.app";
   return { baseUrl };
 };
 

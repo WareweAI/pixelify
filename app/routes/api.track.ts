@@ -389,6 +389,16 @@ export async function action({ request }: ActionFunctionArgs) {
           eventData = { ...eventData, ...customData };
         }
 
+        console.log(`[Track] Preparing to send to Facebook CAPI:`, {
+          originalEvent: eventName,
+          metaEvent: metaEventName,
+          pixelId: app.settings.metaPixelId,
+          hasAccessToken: !!app.settings.metaAccessToken,
+          eventDataKeys: Object.keys(eventData),
+          isCustomEvent: !!customEvent,
+          mappingUsed: customEvent?.metaEventName ? 'custom' : (defaultEventMapping[eventName] ? 'default' : 'none')
+        });
+
         await forwardToMeta({
           pixelId: app.settings.metaPixelId!,
           accessToken: app.settings.metaAccessToken!,
@@ -408,12 +418,29 @@ export async function action({ request }: ActionFunctionArgs) {
         });
         
         const eventType = customEvent ? 'CUSTOM' : 'DEFAULT';
-        console.log(`[Track] ${eventType} Event "${eventName}" sent to Facebook CAPI as "${metaEventName}" (adblocker-proof)`);
+        console.log(`[Track] ✅ SUCCESS: ${eventType} Event "${eventName}" sent to Facebook CAPI as "${metaEventName}" (adblocker-proof)`);
       } catch (error) {
-        console.error('[Track] Meta CAPI forwarding error:', error);
+        console.error(`[Track] ❌ FAILED: Meta CAPI forwarding error for event "${eventName}":`, error);
+        
+        // Log detailed error information for debugging
+        console.error('[Track] Meta CAPI Error Details:', {
+          eventName,
+          pixelId: app.settings?.metaPixelId,
+          hasAccessToken: !!app.settings?.metaAccessToken,
+          metaVerified: app.settings?.metaVerified,
+          metaPixelEnabled: app.settings?.metaPixelEnabled,
+          errorMessage: error instanceof Error ? error.message : 'Unknown error',
+          errorStack: error instanceof Error ? error.stack : undefined
+        });
       }
     } else {
-      console.log(`[Track] Meta CAPI not enabled or not verified for app ${app.id}`);
+      const reasons = [];
+      if (!app.settings?.metaPixelEnabled) reasons.push('Meta Pixel not enabled');
+      if (!app.settings?.metaVerified) reasons.push('Meta Pixel not verified');
+      if (!app.settings?.metaPixelId) reasons.push('No Meta Pixel ID');
+      if (!app.settings?.metaAccessToken) reasons.push('No Meta Access Token');
+      
+      console.log(`[Track] ⚠️ SKIPPED: Meta CAPI not sent for event "${eventName}" - Reasons: ${reasons.join(', ')}`);
     }
 
     console.log(

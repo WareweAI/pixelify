@@ -26,7 +26,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
     console.log("[Custom Events API] Found app with", app.customEvents.length, "custom events");
 
-    // Return active custom events
     const activeEvents = app.customEvents
       .filter((event: any) => event.isActive)
       .map((event: any) => ({

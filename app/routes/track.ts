@@ -237,13 +237,11 @@ export async function action({ request }: ActionFunctionArgs) {
         productId: productId || null,
         productName: productName || null,
         quantity: quantity ? parseInt(quantity) : null,
-        // Geo data
         city: geoData?.city || null,
         region: geoData?.region || null,
         country: geoData?.country || null,
         countryCode: geoData?.countryCode || null,
         timezone: geoData?.timezone || null,
-        // Custom data
         customData: customData || properties ? JSON.parse(JSON.stringify(customData || properties)) : null,
       },
     });

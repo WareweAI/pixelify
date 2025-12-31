@@ -10,14 +10,17 @@ function createPrismaClient() {
   // In development, use direct connection for better performance
   let databaseUrl;
   
-  if (process.env.NODE_ENV === "production") {
-    // Use pooled connection in production for better reliability
+  // Check if we're on Vercel (serverless)
+  const isVercel = process.env.VERCEL || process.env.VERCEL_URL || process.env.VERCEL_ENV;
+
+  if (isVercel || process.env.NODE_ENV === "production") {
+    // Use pooled connection on Vercel or production for better reliability
     databaseUrl = process.env.DATABASE_URL;
-    console.log("[DB] Using pooled connection for production");
+    console.log("[DB] Using pooled connection for Vercel/production");
   } else {
-    // Use direct connection in development
+    // Use direct connection in local development
     databaseUrl = process.env.DIRECT_URL || process.env.DATABASE_URL;
-    console.log("[DB] Using direct connection for development");
+    console.log("[DB] Using direct connection for local development");
   }
   
   return new PrismaClient({

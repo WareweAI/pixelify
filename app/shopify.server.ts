@@ -30,7 +30,6 @@ export const login = shopify.login;
 export const registerWebhooks = shopify.registerWebhooks;
 export const sessionStorage = shopify.sessionStorage;
 
-// Keep the instance function for backward compatibility
 export function getShopifyInstance() {
   return shopify;
 }

@@ -145,7 +145,7 @@ export default function App() {
                     }
                     
                     // Redirect to their specific store's app installation page
-                    const installUrl = `https://${shopDomain}.myshopify.com/admin/oauth/authorize?client_id=360b03eee304490f2fd1986a55ed0dd8&scope=read_analytics,read_customers,read_orders,read_products,read_checkouts,read_themes&redirect_uri=https://pixel-warewe.vercel.app/auth&state=${Date.now()}`;
+                    const installUrl = `https://${shopDomain}.myshopify.com/admin/oauth/authorize?client_id=360b03eee304490f2fd1986a55ed0dd8&scope=read_analytics,read_customers,read_orders,read_products,read_checkouts,read_themes&redirect_uri=https://pixelify-red.vercel.app/auth&state=${Date.now()}`;
                     window.open(installUrl, '_blank');
                   } else {
                     alert('Please enter your Shopify store domain');

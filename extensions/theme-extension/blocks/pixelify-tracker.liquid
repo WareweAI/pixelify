@@ -22,6 +22,7 @@
     var ENABLE_CUSTOM_EVENTS = {{ block.settings.enable_custom_events | json }};
     var ENABLED_CUSTOM_EVENTS = '{{ block.settings.enabled_custom_events | strip }}'.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
     
+    // Use Shopify app proxy to avoid CORS issues
     var PROXY_URL = '/apps/pixel-api';
     
     if (DEBUG) console.log('[PixelTracker] Starting for shop:', SHOP);
@@ -48,8 +49,7 @@
       return fetch(PROXY_URL + '/get-pixel-id?shop=' + encodeURIComponent(SHOP), {
         method: 'GET',
         headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json'
+          'Accept': 'application/json'
         }
       })
       .then(function(res) {

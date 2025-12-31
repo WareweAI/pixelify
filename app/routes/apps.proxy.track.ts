@@ -11,6 +11,26 @@ export async function action({ request }: ActionFunctionArgs) {
 
   console.log(`[App Proxy] POST track, shop: ${shop}`);
 
+  // Quick database health check with timeout
+  try {
+    await Promise.race([
+      prisma.$queryRaw`SELECT 1`,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('DB timeout')), 3000))
+    ]);
+  } catch (dbError) {
+    console.error('[App Proxy track] Database connection error:', dbError);
+    return Response.json(
+      { success: false, error: 'Database temporarily unavailable' },
+      { 
+        status: 503,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Retry-After': '5'
+        }
+      }
+    );
+  }
+
   try {
     const body = await request.json();
     const { appId, eventName } = body;
@@ -28,6 +48,14 @@ export async function action({ request }: ActionFunctionArgs) {
 
     if (!app) {
       console.log(`[App Proxy track] App not found: ${appId}`);
+
+      // Log available apps for debugging
+      const allApps = await prisma.app.findMany({
+        select: { appId: true, name: true },
+        take: 10,
+      });
+      console.log(`[App Proxy track] Available apps:`, allApps.map(a => `${a.appId} (${a.name})`).join(', '));
+
       return Response.json({ error: "App not found" }, { status: 404 });
     }
 
@@ -186,6 +214,22 @@ export async function action({ request }: ActionFunctionArgs) {
     return Response.json({ success: true, eventId: event.id });
   } catch (error) {
     console.error("[App Proxy track] Error:", error);
+    
+    // Check if it's a connection pool error
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (errorMessage.includes('connection pool') || errorMessage.includes('MaxClientsInSessionMode')) {
+      return Response.json(
+        { success: false, error: 'Database temporarily unavailable' },
+        { 
+          status: 503,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Retry-After': '5'
+          }
+        }
+      );
+    }
+    
     return Response.json({ error: "Failed to track event" }, { status: 500 });
   }
 }
@@ -193,4 +237,3 @@ export async function action({ request }: ActionFunctionArgs) {
 export default function AppsProxyTrack() {
   return null;
 }
-

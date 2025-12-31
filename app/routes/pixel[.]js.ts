@@ -110,7 +110,7 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
     // Fetch active custom events
     const customEvents = await prisma.customEvent.findMany({
       where: { appId: app.id, isActive: true },
-      select: { name: true, displayName: true, selector: true, eventType: true, metaEventName: true, hasProductId: true },
+      select: { name: true, displayName: true, selector: true, eventType: true, metaEventName: true },
     });
 
     const settings = app.settings;
@@ -133,7 +133,7 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
       }));
 
     // Get the base URL for API calls
-    const baseUrl = process.env.SHOPIFY_APP_URL || "https://pixel-warewe.vercel.app";
+    const baseUrl = process.env.SHOPIFY_APP_URL || "https://pixelify-red.vercel.app";
     
     // CORB-PROOF SCRIPT
     const script = `
@@ -329,17 +329,17 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
   ${trackAddToCart ? `
     // AddToCart: Auto-detect add to cart actions
     document.addEventListener('click', function(e) {
-      var addToCartBtn = e.target.closest('[name="add"], .btn-product-form, .product-form__cart-submit, [data-add-to-cart], .add-to-cart, .addtocart');
+      var addToCartBtn = e.target.closest('[name="add"], .btn-product-form, .product-form__cart-submit, [data-add-to-cart], .add-to-cart, .addtocart, .btn-add-to-cart, .add-to-cart-btn, .product-submit, .shopify-payment-button__button, [type="submit"][form*="cart"], button[type="submit"]');
       if (addToCartBtn) {
         setTimeout(function() {
           var productData = {};
-          
+
           // Try to get product data from the form or page
           var form = addToCartBtn.closest('form') || document.querySelector('form[action*="/cart/add"]');
           if (form) {
             var variantId = form.querySelector('[name="id"]')?.value;
             var quantity = parseInt(form.querySelector('[name="quantity"]')?.value || '1');
-            
+
             // Get product info from Shopify Analytics or DOM
             if (window.ShopifyAnalytics?.meta?.product) {
               var product = window.ShopifyAnalytics.meta.product;
@@ -356,7 +356,7 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
               var productName = document.querySelector('h1, .product-title, .product__title')?.textContent?.trim();
               var priceElement = document.querySelector('.price, .product-price, [data-price]');
               var price = priceElement ? parseFloat(priceElement.textContent.replace(/[^0-9.]/g, '')) : null;
-              
+
               productData = {
                 product_id: variantId,
                 product_name: productName,
@@ -365,12 +365,35 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
                 quantity: quantity
               };
             }
-            
+
             if (productData.product_id || productData.product_name) {
               track('addToCart', productData);
             }
           }
         }, 100); // Small delay to ensure form data is processed
+      }
+    }, true);
+
+    // Also listen for form submissions to /cart/add
+    document.addEventListener('submit', function(e) {
+      var form = e.target;
+      if (form && form.action && form.action.includes('/cart/add')) {
+        setTimeout(function() {
+          var variantId = form.querySelector('[name="id"]')?.value;
+          var quantity = parseInt(form.querySelector('[name="quantity"]')?.value || '1');
+
+          if (window.ShopifyAnalytics?.meta?.product) {
+            var product = window.ShopifyAnalytics.meta.product;
+            var variant = product.variants?.find(v => v.id == variantId) || product.variants?.[0];
+            track('addToCart', {
+              product_id: variantId || product.id,
+              product_name: product.title + (variant?.title && variant.title !== 'Default Title' ? ' - ' + variant.title : ''),
+              value: (variant?.price || product.price) / 100,
+              currency: window.ShopifyAnalytics.meta.currency || 'USD',
+              quantity: quantity
+            });
+          }
+        }, 200);
       }
     }, true);
   ` : ''}
