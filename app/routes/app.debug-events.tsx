@@ -151,32 +151,30 @@ export default function DebugEvents() {
   }, null, 2));
   const [showInstructions, setShowInstructions] = useState(false);
 
-  const handleTestEvent = useCallback((eventName: string, eventData?: any) => {
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.style.display = 'none';
-    
-    const actionInput = document.createElement('input');
-    actionInput.type = 'hidden';
-    actionInput.name = 'action';
-    actionInput.value = 'test_event';
-    form.appendChild(actionInput);
-    
-    const nameInput = document.createElement('input');
-    nameInput.type = 'hidden';
-    nameInput.name = 'eventName';
-    nameInput.value = eventName;
-    form.appendChild(nameInput);
-    
-    const dataInput = document.createElement('input');
-    dataInput.type = 'hidden';
-    dataInput.name = 'eventData';
-    dataInput.value = eventData ? JSON.stringify(eventData) : testEventData;
-    form.appendChild(dataInput);
-    
-    document.body.appendChild(form);
-    form.submit();
-    document.body.removeChild(form);
+  const handleTestEvent = useCallback(async (eventName: string, eventData?: any) => {
+    try {
+      const response = await fetch('/app/debug-events', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          action: 'test_event',
+          eventName,
+          eventData: eventData ? JSON.stringify(eventData) : testEventData,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        alert(`✅ SUCCESS!\n\nTest event "${eventName}" created successfully!\n\n📍 Check your Events page to see the test event.`);
+      } else {
+        alert(`❌ FAILED\n\n${result.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      alert(`❌ ERROR\n\nFailed to send test event: ${error}`);
+    }
   }, [testEventData]);
 
   return (
@@ -189,7 +187,7 @@ export default function DebugEvents() {
         {/* Success/Error Messages */}
         {actionData?.success && (
           <Layout.Section>
-            <Banner status="success" title="Success">
+            <Banner tone="success" title="Success">
               <p>{actionData.message}</p>
             </Banner>
           </Layout.Section>
@@ -197,7 +195,7 @@ export default function DebugEvents() {
 
         {actionData?.error && (
           <Layout.Section>
-            <Banner status="critical" title="Error">
+            <Banner tone="critical" title="Error">
               <p>{actionData.error}</p>
             </Banner>
           </Layout.Section>
@@ -315,9 +313,11 @@ export default function DebugEvents() {
           <Card>
             <div style={{ padding: '20px' }}>
               <Text variant="headingMd" as="h2">⚡ Quick Event Tests</Text>
-              <Text variant="bodyMd" as="p" tone="subdued" style={{ marginBottom: '20px' }}>
-                Test common e-commerce events instantly
-              </Text>
+              <div style={{ marginBottom: '20px' }}>
+                <Text variant="bodyMd" as="p" tone="subdued">
+                  Test common e-commerce events instantly
+                </Text>
+              </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '16px' }}>
                 <Button 
@@ -374,9 +374,11 @@ export default function DebugEvents() {
           <Card>
             <div style={{ padding: '20px' }}>
               <Text variant="headingMd" as="h2">🎯 Custom Event Test</Text>
-              <Text variant="bodyMd" as="p" tone="subdued" style={{ marginBottom: '20px' }}>
-                Test any custom event with custom data
-              </Text>
+              <div style={{ marginBottom: '20px' }}>
+                <Text variant="bodyMd" as="p" tone="subdued">
+                  Test any custom event with custom data
+                </Text>
+              </div>
 
               <div style={{ display: 'grid', gap: '16px' }}>
                 <TextField
@@ -384,6 +386,7 @@ export default function DebugEvents() {
                   value={testEventName}
                   onChange={setTestEventName}
                   placeholder="e.g., wishlist_add, newsletter_signup"
+                  autoComplete="off"
                 />
 
                 <TextField
@@ -392,6 +395,7 @@ export default function DebugEvents() {
                   onChange={setTestEventData}
                   multiline={6}
                   placeholder='{"value": 29.99, "currency": "USD"}'
+                  autoComplete="off"
                 />
 
                 <Button 
@@ -410,50 +414,52 @@ export default function DebugEvents() {
           <Card>
             <div style={{ padding: '20px' }}>
               <Text variant="headingMd" as="h2">📋 Active Events Summary</Text>
-              <Text variant="bodyMd" as="p" tone="subdued" style={{ marginBottom: '20px' }}>
-                Current tracking configuration for {shop}
-              </Text>
+              <div style={{ marginBottom: '20px' }}>
+                <Text variant="bodyMd" as="p" tone="subdued">
+                  Current tracking configuration for {shop}
+                </Text>
+              </div>
 
               <div style={{ display: 'grid', gap: '12px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: '#f8fafc', borderRadius: '6px' }}>
                   <span>Page Views</span>
-                  <Badge status={app.settings?.autoTrackPageviews !== false ? 'success' : 'critical'}>
+                  <Badge tone={app.settings?.autoTrackPageviews !== false ? 'success' : 'critical'}>
                     {app.settings?.autoTrackPageviews !== false ? 'Enabled' : 'Disabled'}
                   </Badge>
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: '#f8fafc', borderRadius: '6px' }}>
                   <span>View Content</span>
-                  <Badge status={app.settings?.autoTrackViewContent !== false ? 'success' : 'critical'}>
+                  <Badge tone={app.settings?.autoTrackViewContent !== false ? 'success' : 'critical'}>
                     {app.settings?.autoTrackViewContent !== false ? 'Enabled' : 'Disabled'}
                   </Badge>
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: '#f8fafc', borderRadius: '6px' }}>
                   <span>Add to Cart</span>
-                  <Badge status={app.settings?.autoTrackAddToCart !== false ? 'success' : 'critical'}>
+                  <Badge tone={app.settings?.autoTrackAddToCart !== false ? 'success' : 'critical'}>
                     {app.settings?.autoTrackAddToCart !== false ? 'Enabled' : 'Disabled'}
                   </Badge>
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: '#f8fafc', borderRadius: '6px' }}>
                   <span>Initiate Checkout</span>
-                  <Badge status={app.settings?.autoTrackInitiateCheckout !== false ? 'success' : 'critical'}>
+                  <Badge tone={app.settings?.autoTrackInitiateCheckout !== false ? 'success' : 'critical'}>
                     {app.settings?.autoTrackInitiateCheckout !== false ? 'Enabled' : 'Disabled'}
                   </Badge>
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: '#f8fafc', borderRadius: '6px' }}>
                   <span>Purchase</span>
-                  <Badge status={app.settings?.autoTrackPurchase !== false ? 'success' : 'critical'}>
+                  <Badge tone={app.settings?.autoTrackPurchase !== false ? 'success' : 'critical'}>
                     {app.settings?.autoTrackPurchase !== false ? 'Enabled' : 'Disabled'}
                   </Badge>
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: '#f8fafc', borderRadius: '6px' }}>
                   <span>Custom Events</span>
-                  <Badge status={app.customEvents?.length > 0 ? 'success' : 'attention'}>
-                    {app.customEvents?.length || 0} Active
+                  <Badge tone={app.customEvents?.length > 0 ? 'success' : 'attention'}>
+                    {`${app.customEvents?.length || 0} Active`}
                   </Badge>
                 </div>
               </div>

@@ -24,6 +24,9 @@ import db from "../db.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const shopify = getShopifyInstance();
+  if (!shopify?.authenticate) {
+    throw new Response("Shopify configuration not found", { status: 500 });
+  }
   const { session } = await shopify.authenticate.admin(request);
   const shop = session.shop;
 
@@ -70,6 +73,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
 export async function action({ request }: ActionFunctionArgs) {
   try {
     const shopify = getShopifyInstance();
+    if (!shopify?.authenticate) {
+      return Response.json({ success: false, error: "Shopify configuration not found" }, { status: 500 });
+    }
     const { session } = await shopify.authenticate.admin(request);
     const shop = session.shop;
     const formData = await request.formData();
@@ -376,16 +382,6 @@ export async function action({ request }: ActionFunctionArgs) {
   } catch (outerError) {
     // Catch any authentication or other outer errors
     console.error("Custom events outer error:", outerError);
-    
-    // If it's a Response object (redirect from Shopify auth), return JSON error instead
-    if (outerError instanceof Response) {
-      console.log("Authentication redirect intercepted, returning JSON error");
-      return Response.json({ 
-        success: false, 
-        error: "Authentication required. Please refresh the page." 
-      }, { status: 401 });
-    }
-    
     return Response.json({ 
       success: false, 
       error: "Authentication or server error. Please try again." 
@@ -771,6 +767,41 @@ export default function CustomEvents() {
       validateJson(value);
     }
   }, [validateJson]);
+
+  const rows = customEvents.map((event: any) => [
+    <Checkbox
+      checked={selectedEvents.has(event.id)}
+      onChange={(checked) => handleSelectEvent(event.id, checked)} label={undefined}    />,
+    event.displayName,
+    event.name,
+    (event as any).eventType === "custom" ? "Manual" : "Auto",
+    (event as any).selector || "-",
+    (event as any).pageType || "all",
+    event.metaEventName || "-",
+    <Badge tone={event.isActive ? "success" : "critical"}>
+      {event.isActive ? "Active" : "Inactive"}
+    </Badge>,
+    <ButtonGroup>
+      <Button size="slim" onClick={() => handleEditEvent(event)}>
+        Edit
+      </Button>
+      <Form method="post">
+        <input type="hidden" name="action" value="toggle" />
+        <input type="hidden" name="eventId" value={event.id} />
+        <input type="hidden" name="isActive" value={event.isActive.toString()} />
+        <Button submit size="slim">
+          {event.isActive ? "Disable" : "Enable"}
+        </Button>
+      </Form>
+      <Form method="post">
+        <input type="hidden" name="action" value="delete" />
+        <input type="hidden" name="eventId" value={event.id} />
+        <Button submit tone="critical" size="slim">
+          Delete
+        </Button>
+      </Form>
+    </ButtonGroup>
+  ]);
 
   return (
     <Page

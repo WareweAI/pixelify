@@ -121,6 +121,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { success: true, message: "Meta integration updated" };
   }
 
+  if (intent === "update-timezone") {
+    const appId = formData.get("appId") as string;
+    const timezone = formData.get("timezone") as string;
+
+    await prisma.appSettings.update({
+      where: { appId },
+      data: {
+        timezone: timezone || "GMT+0",
+      },
+    });
+
+    return { success: true, message: "Timezone updated successfully" };
+  }
+
 
 
   if (intent === "disconnect-meta") {
@@ -244,6 +258,48 @@ export default function SettingsPage() {
     metaPixelEnabled: false,
   });
 
+  const [timezoneSettings, setTimezoneSettings] = useState({
+    timezone: "GMT+0",
+  });
+
+  // Comprehensive timezone options
+  const timezoneOptions = [
+    { label: "(GMT+0:00) UTC - Coordinated Universal Time", value: "GMT+0" },
+    { label: "(GMT+0:00) London, Dublin, Lisbon", value: "GMT+0" },
+    { label: "(GMT+1:00) Paris, Berlin, Rome, Madrid", value: "GMT+1" },
+    { label: "(GMT+2:00) Cairo, Athens, Helsinki, Kyiv", value: "GMT+2" },
+    { label: "(GMT+3:00) Moscow, Istanbul, Riyadh, Nairobi", value: "GMT+3" },
+    { label: "(GMT+3:30) Tehran", value: "GMT+3:30" },
+    { label: "(GMT+4:00) Dubai, Baku, Tbilisi", value: "GMT+4" },
+    { label: "(GMT+4:30) Kabul", value: "GMT+4:30" },
+    { label: "(GMT+5:00) Karachi, Tashkent", value: "GMT+5" },
+    { label: "(GMT+5:30) Mumbai, New Delhi, Kolkata", value: "GMT+5:30" },
+    { label: "(GMT+5:45) Kathmandu", value: "GMT+5:45" },
+    { label: "(GMT+6:00) Dhaka, Almaty", value: "GMT+6" },
+    { label: "(GMT+6:30) Yangon", value: "GMT+6:30" },
+    { label: "(GMT+7:00) Bangkok, Jakarta, Hanoi", value: "GMT+7" },
+    { label: "(GMT+8:00) Singapore, Hong Kong, Beijing, Perth", value: "GMT+8" },
+    { label: "(GMT+9:00) Tokyo, Seoul", value: "GMT+9" },
+    { label: "(GMT+9:30) Adelaide, Darwin", value: "GMT+9:30" },
+    { label: "(GMT+10:00) Sydney, Melbourne, Brisbane", value: "GMT+10" },
+    { label: "(GMT+11:00) Solomon Islands, New Caledonia", value: "GMT+11" },
+    { label: "(GMT+12:00) Auckland, Fiji", value: "GMT+12" },
+    { label: "(GMT+13:00) Samoa, Tonga", value: "GMT+13" },
+    { label: "(GMT-1:00) Azores, Cape Verde", value: "GMT-1" },
+    { label: "(GMT-2:00) Mid-Atlantic", value: "GMT-2" },
+    { label: "(GMT-3:00) São Paulo, Buenos Aires", value: "GMT-3" },
+    { label: "(GMT-3:30) Newfoundland", value: "GMT-3:30" },
+    { label: "(GMT-4:00) Atlantic Time, Caracas", value: "GMT-4" },
+    { label: "(GMT-5:00) Eastern Time (US & Canada)", value: "GMT-5" },
+    { label: "(GMT-6:00) Central Time (US & Canada), Mexico City", value: "GMT-6" },
+    { label: "(GMT-7:00) Mountain Time (US & Canada)", value: "GMT-7" },
+    { label: "(GMT-8:00) Pacific Time (US & Canada)", value: "GMT-8" },
+    { label: "(GMT-9:00) Alaska", value: "GMT-9" },
+    { label: "(GMT-10:00) Hawaii", value: "GMT-10" },
+    { label: "(GMT-11:00) Midway Island, Samoa", value: "GMT-11" },
+    { label: "(GMT-12:00) International Date Line West", value: "GMT-12" },
+  ];
+
   // Update local state when app changes
   useEffect(() => {
     if (settings) {
@@ -266,6 +322,9 @@ export default function SettingsPage() {
         metaAccessToken: settings.metaAccessToken || "",
         metaTestEventCode: settings.metaTestEventCode || "",
         metaPixelEnabled: settings.metaPixelEnabled ?? false,
+      });
+      setTimezoneSettings({
+        timezone: settings.timezone || "GMT+0",
       });
     }
   }, [settings]);
@@ -315,6 +374,17 @@ export default function SettingsPage() {
       { method: "POST" }
     );
   }, [fetcher, selectedAppId, metaSettings]);
+
+  const handleSaveTimezone = useCallback(() => {
+    fetcher.submit(
+      {
+        intent: "update-timezone",
+        appId: selectedAppId,
+        timezone: timezoneSettings.timezone,
+      },
+      { method: "POST" }
+    );
+  }, [fetcher, selectedAppId, timezoneSettings]);
 
 
 
@@ -531,6 +601,49 @@ export default function SettingsPage() {
 
                 <Button onClick={handleSavePrivacy} loading={isLoading}>
                   Save Privacy Settings
+                </Button>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+
+          {/* Timezone Settings */}
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="400">
+                <Text variant="headingMd" as="h2">Timezone Settings</Text>
+                <Text as="p" tone="subdued">
+                  Set the timezone for tracking events. This affects how events are timestamped and reported.
+                </Text>
+
+                <Select
+                  label="Select Timezone"
+                  options={timezoneOptions}
+                  value={timezoneSettings.timezone}
+                  onChange={(value) =>
+                    setTimezoneSettings((prev) => ({ ...prev, timezone: value }))
+                  }
+                  helpText="Choose the timezone that matches your business location or target audience"
+                />
+
+                <Box padding="400" background="bg-surface-secondary" borderRadius="200">
+                  <BlockStack gap="200">
+                    <Text variant="headingSm" as="h3">Current Selection</Text>
+                    <InlineStack gap="200" blockAlign="center">
+                      <div style={{
+                        width: "10px",
+                        height: "10px",
+                        borderRadius: "50%",
+                        backgroundColor: "#10b981"
+                      }}></div>
+                      <Text variant="bodyMd" fontWeight="medium">
+                        {timezoneOptions.find(tz => tz.value === timezoneSettings.timezone)?.label || timezoneSettings.timezone}
+                      </Text>
+                    </InlineStack>
+                  </BlockStack>
+                </Box>
+
+                <Button onClick={handleSaveTimezone} loading={isLoading}>
+                  Save Timezone
                 </Button>
               </BlockStack>
             </Card>

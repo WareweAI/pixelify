@@ -20,9 +20,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const isShopifyUserAgent = userAgent.includes("Shopify");
   
   // Check if this is an embedded app context (Shopify admin)
-  const isEmbeddedContext = 
+  const isEmbeddedContext =
     hostname.includes("admin.shopify.com") ||
-    hostname.endsWith(".myshopify.com") ||
     shopDomain ||
     hasAppLoadId ||
     hasShopParam ||
@@ -36,11 +35,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     request.headers.get("x-shopify-api-request-failure-reauthorize") ||
     request.headers.get("x-shopify-hmac-sha256");
   
-  // If this is a Shopify admin context, redirect to /app dashboard
+  // If this is a Shopify admin context, redirect to /app pricing
   if (isEmbeddedContext) {
     // Preserve any query parameters that might be needed for authentication
     const searchParams = url.searchParams.toString();
-    const redirectUrl = searchParams ? `/app/dashboard?${searchParams}` : "/app/dashboard";
+    const redirectUrl = searchParams ? `/app/pricing?${searchParams}` : "/app/pricing";
     return redirect(redirectUrl);
   }
   
@@ -145,7 +144,7 @@ export default function App() {
                     }
                     
                     // Redirect to their specific store's app installation page
-                    const installUrl = `https://${shopDomain}.myshopify.com/admin/oauth/authorize?client_id=360b03eee304490f2fd1986a55ed0dd8&scope=read_analytics,read_customers,read_orders,read_products,read_checkouts,read_themes&redirect_uri=https://pixelify-red.vercel.app/auth&state=${Date.now()}`;
+                    const installUrl = `https://${shopDomain}.myshopify.com/admin/oauth/authorize?client_id=22e1740803c975ae11fd5bc9b23c7dd4&scope=read_analytics,read_customers,read_orders,read_products,read_checkouts,read_themes,write_script_tags&redirect_uri=https://pixelify-red.vercel.app/auth&state=${Date.now()}`;
                     window.open(installUrl, '_blank');
                   } else {
                     alert('Please enter your Shopify store domain');

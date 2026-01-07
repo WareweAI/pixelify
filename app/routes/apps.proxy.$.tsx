@@ -195,76 +195,14 @@ export async function action({ request, params }: ActionFunctionArgs) {
           },
         });
 
-        // Forward ALL events to Meta CAPI (both default and custom events)
+        // Forward to Meta CAPI if enabled
         if (app.settings?.metaPixelEnabled && app.settings?.metaPixelId && app.settings?.metaAccessToken) {
           try {
-            // Check if this is a custom event to get Meta event mapping
-            const customEvent = await prisma.customEvent.findFirst({
-              where: {
-                appId: app.id,
-                name: eventName,
-                isActive: true,
-              },
-            });
-
-            // Default event name mapping for standard e-commerce events
-            const defaultEventMapping: Record<string, string> = {
-              'pageview': 'PageView',
-              'page_view': 'PageView',
-              'viewContent': 'ViewContent',
-              'view_content': 'ViewContent',
-              'addToCart': 'AddToCart',
-              'add_to_cart': 'AddToCart',
-              'initiateCheckout': 'InitiateCheckout',
-              'initiate_checkout': 'InitiateCheckout',
-              'purchase': 'Purchase',
-              'addPaymentInfo': 'AddPaymentInfo',
-              'add_payment_info': 'AddPaymentInfo',
-              'lead': 'Lead',
-              'contact': 'Contact',
-              'search': 'Search',
-              'click': 'Click',
-              'scroll': 'Scroll',
-            };
-
-            // Priority: custom event mapping > default mapping > original name
-            let metaEventName = eventName;
-            if (customEvent?.metaEventName) {
-              metaEventName = customEvent.metaEventName;
-            } else if (defaultEventMapping[eventName]) {
-              metaEventName = defaultEventMapping[eventName];
-            }
-
-            // Build event data
-            let eventData: Record<string, any> = {};
-            
-            // Add custom event data if defined
-            if (customEvent?.eventData) {
-              try {
-                eventData = { ...eventData, ...JSON.parse(customEvent.eventData) };
-              } catch (e) {
-                console.error("[App Proxy] Error parsing custom event data:", e);
-              }
-            }
-
-            // Add e-commerce data from request
-            if (body.customData) eventData = { ...eventData, ...body.customData };
-            if (body.properties) eventData = { ...eventData, ...body.properties };
-            if (body.product_id) eventData.content_ids = [body.product_id];
-            if (body.product_name) eventData.content_name = body.product_name;
-            if (body.value || body.price) eventData.value = body.value || body.price;
-            if (body.quantity) eventData.num_items = body.quantity;
-            if (body.currency) eventData.currency = body.currency;
-
-            const eventType = customEvent ? 'CUSTOM' : 'DEFAULT';
-            console.log(`[App Proxy] Sending ${eventType} event "${eventName}" to CAPI as "${metaEventName}"`);
-
             await forwardToMeta({
               pixelId: app.settings.metaPixelId,
               accessToken: app.settings.metaAccessToken,
-              testEventCode: app.settings.metaTestEventCode || undefined,
               event: {
-                eventName: metaEventName,
+                eventName,
                 eventTime: Math.floor(Date.now() / 1000),
                 eventSourceUrl: body.url,
                 actionSource: "website",
@@ -273,20 +211,21 @@ export async function action({ request, params }: ActionFunctionArgs) {
                   clientUserAgent: userAgent,
                   externalId: body.visitorId,
                 },
-                customData: Object.keys(eventData).length > 0 ? eventData : undefined,
+                customData: {
+                  ...body.customData,
+                  ...body.properties,
+                  ...(body.product_id && { content_ids: [body.product_id] }),
+                  ...(body.product_name && { content_name: body.product_name }),
+                  ...(body.price && { value: body.price }),
+                  ...(body.quantity && { num_items: body.quantity }),
+                  ...(body.currency && { currency: body.currency }),
+                },
               },
             });
-            
-            console.log(`[App Proxy] ✅ ${eventType} Event "${eventName}" sent to Facebook CAPI as "${metaEventName}"`);
+            console.log(`[App Proxy] Event "${eventName}" forwarded to Meta CAPI`);
           } catch (metaError) {
-            console.error("[App Proxy] ❌ Meta CAPI forwarding error:", metaError);
+            console.error("[App Proxy] Meta CAPI forwarding error:", metaError);
           }
-        } else {
-          const reasons = [];
-          if (!app.settings?.metaPixelEnabled) reasons.push('Meta Pixel not enabled');
-          if (!app.settings?.metaPixelId) reasons.push('No Meta Pixel ID');
-          if (!app.settings?.metaAccessToken) reasons.push('No Meta Access Token');
-          console.log(`[App Proxy] ⚠️ CAPI skipped for "${eventName}" - ${reasons.join(', ')}`);
         }
 
         return createJsonResponse({ success: true, eventId: event.id });

@@ -22,6 +22,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const url = new URL(request.url);
   const shop = url.searchParams.get("shop");
+  const selectedPixelId = url.searchParams.get("pixelId"); // Optional: specific pixel to use
 
   if (!shop) {
     return Response.json(
@@ -34,85 +35,83 @@ export async function loader({ request }: LoaderFunctionArgs) {
     // Find user by shop domain
     const user = await prisma.user.findUnique({
       where: { storeUrl: shop },
-      include: {
-        apps: {
-          where: {
-            settings: {
-              metaPixelEnabled: true,
-            },
-          },
-          include: {
-            settings: true,
-          },
-          orderBy: { createdAt: "desc" },
-          take: 1,
-        },
-      },
     });
 
-    if (!user || user.apps.length === 0) {
-      const anyApp = await prisma.app.findFirst({
-        where: {
-          user: { storeUrl: shop },
-        },
-        include: { settings: true },
-        orderBy: { createdAt: "desc" },
-      });
-
-      if (anyApp) {
-        const customEvents = anyApp.settings?.customEventsEnabled !== false ? await prisma.customEvent.findMany({
-          where: { appId: anyApp.id, isActive: true },
-          select: { name: true, selector: true, eventType: true, metaEventName: true },
-        }) : [];
-
-        return Response.json(
-          {
-            pixelId: anyApp.appId,
-            appName: anyApp.name,
-            metaPixelId: anyApp.settings?.metaPixelId || null,
-            enabled: anyApp.settings?.metaPixelEnabled ?? true,
-            config: {
-              autoPageviews: anyApp.settings?.autoTrackPageviews ?? true,
-              autoClicks: anyApp.settings?.autoTrackClicks ?? true,
-              autoScroll: anyApp.settings?.autoTrackScroll ?? false,
-              autoViewContent: anyApp.settings?.autoTrackViewContent ?? true,
-              autoAddToCart: anyApp.settings?.autoTrackAddToCart ?? true,
-              autoInitiateCheckout: anyApp.settings?.autoTrackInitiateCheckout ?? true,
-              autoPurchase: anyApp.settings?.autoTrackPurchase ?? true,
-            },
-            customEvents: customEvents,
-          },
-          { headers: corsHeaders }
-        );
-      }
-
+    if (!user) {
+      console.log(`[API Get Pixel ID] User not found for shop: ${shop}`);
       return Response.json(
         { error: "No pixel found for this shop", shop },
         { status: 404, headers: corsHeaders }
       );
     }
 
-    const app = user.apps[0];
-    
-    const customEvents = app.settings?.customEventsEnabled !== false ? await prisma.customEvent.findMany({
-      where: { appId: app.id, isActive: true },
+    let finalApp;
+
+    // If a specific pixel ID is requested, use that
+    if (selectedPixelId) {
+      finalApp = await prisma.app.findFirst({
+        where: { 
+          userId: user.id,
+          appId: selectedPixelId,
+        },
+        include: { settings: true },
+      });
+      
+      if (finalApp) {
+        console.log(`[API Get Pixel ID] Using selected pixel: ${finalApp.appId} (${finalApp.name})`);
+      }
+    }
+
+    // If no specific pixel or not found, get the most recent enabled app
+    if (!finalApp) {
+      finalApp = await prisma.app.findFirst({
+        where: { 
+          userId: user.id,
+          enabled: true,
+        },
+        include: { settings: true },
+        orderBy: { createdAt: "desc" },
+      });
+    }
+
+    // If still no app, try to get any app
+    if (!finalApp) {
+      finalApp = await prisma.app.findFirst({
+        where: { userId: user.id },
+        include: { settings: true },
+        orderBy: { createdAt: "desc" },
+      });
+    }
+
+    if (!finalApp) {
+      console.log(`[API Get Pixel ID] No app found for user: ${user.id}`);
+      return Response.json(
+        { error: "No pixel found for this shop", shop },
+        { status: 404, headers: corsHeaders }
+      );
+    }
+
+    console.log(`[API Get Pixel ID] Returning app: ${finalApp.appId} (${finalApp.name}) for shop: ${shop}`);
+
+    const customEvents = finalApp.settings?.customEventsEnabled !== false ? await prisma.customEvent.findMany({
+      where: { appId: finalApp.id, isActive: true },
       select: { name: true, selector: true, eventType: true, metaEventName: true },
     }) : [];
 
     return Response.json(
       {
-        pixelId: app.appId,
-        appName: app.name,
-        metaPixelId: app.settings?.metaPixelId || null,
-        enabled: app.settings?.metaPixelEnabled ?? true,
+        pixelId: finalApp.appId,
+        appName: finalApp.name,
+        metaPixelId: finalApp.settings?.metaPixelId || null,
+        enabled: finalApp.settings?.metaPixelEnabled ?? true,
         config: {
-          autoPageviews: app.settings?.autoTrackPageviews ?? true,
-          autoClicks: app.settings?.autoTrackClicks ?? true,
-          autoScroll: app.settings?.autoTrackScroll ?? false,
-          autoViewContent: app.settings?.autoTrackViewContent ?? true,
-          autoAddToCart: app.settings?.autoTrackAddToCart ?? true,
-          autoInitiateCheckout: app.settings?.autoTrackInitiateCheckout ?? true,
-          autoPurchase: app.settings?.autoTrackPurchase ?? true,
+          autoPageviews: finalApp.settings?.autoTrackPageviews ?? true,
+          autoClicks: finalApp.settings?.autoTrackClicks ?? true,
+          autoScroll: finalApp.settings?.autoTrackScroll ?? false,
+          autoViewContent: finalApp.settings?.autoTrackViewContent ?? true,
+          autoAddToCart: finalApp.settings?.autoTrackAddToCart ?? true,
+          autoInitiateCheckout: finalApp.settings?.autoTrackInitiateCheckout ?? true,
+          autoPurchase: finalApp.settings?.autoTrackPurchase ?? true,
         },
         customEvents: customEvents,
       },

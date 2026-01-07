@@ -12,7 +12,6 @@ A comprehensive guide to creating, managing, and implementing custom events in P
 6. [API Reference](#api-reference)
 7. [Advanced Configuration](#advanced-configuration)
 8. [Best Practices](#best-practices)
-
 ---
 
 ## 🎯 Current Status Analysis

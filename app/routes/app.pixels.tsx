@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
-import { useLoaderData, useSubmit, useNavigation } from "react-router";
+import { useLoaderData, useSubmit, useNavigation, useActionData } from "react-router";
 import {
   Page,
   Layout,
@@ -158,6 +158,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
 export default function PixelsPage() {
   const { app, settings, shop } = useLoaderData<typeof loader>();
+  const actionData = useActionData<any>();
   const submit = useSubmit();
   const navigation = useNavigation();
   const isLoading = navigation.state === "submitting";
@@ -165,8 +166,7 @@ export default function PixelsPage() {
   const [metaPixelId, setMetaPixelId] = useState(settings?.metaPixelId || "");
   const [metaAccessToken, setMetaAccessToken] = useState(settings?.metaAccessToken || "");
   const [showMetaModal, setShowMetaModal] = useState(false);
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
-
+  
   const handleValidateMeta = useCallback(() => {
     const formData = new FormData();
     formData.append("action", "validate-meta");
@@ -195,6 +195,18 @@ export default function PixelsPage() {
       <Layout>
         <Layout.Section>
           <BlockStack gap="400">
+            {/* Success/Error Messages */}
+            {actionData?.success && (
+              <Banner tone="success">
+                <p>{actionData.message}</p>
+              </Banner>
+            )}
+            {actionData?.error && (
+              <Banner tone="critical">
+                <p>{actionData.error}</p>
+              </Banner>
+            )}
+
             {/* Pixel Info Card */}
             <Card>
               <BlockStack gap="400">
@@ -212,10 +224,10 @@ export default function PixelsPage() {
               <BlockStack gap="400">
                 <InlineStack align="space-between">
                   <Text as="h2" variant="headingMd">Meta (Facebook) Pixel</Text>
-                  {settings?.metaVerified ? (
+                  {settings?.metaPixelEnabled && settings?.metaPixelId && settings?.metaAccessToken ? (
                     <Badge tone="success">Connected</Badge>
                   ) : (
-                    <Badge>Not Connected</Badge>
+                    <Badge tone="critical">Not Connected</Badge>
                   )}
                 </InlineStack>
                 
@@ -223,7 +235,7 @@ export default function PixelsPage() {
                   Connect your Meta Pixel to send events via the Conversions API (CAPI) for better tracking accuracy.
                 </Text>
 
-                {settings?.metaPixelId && settings?.metaVerified ? (
+                {settings?.metaPixelEnabled && settings?.metaPixelId && settings?.metaAccessToken ? (
                   <BlockStack gap="200">
                     <InlineStack gap="200">
                       <Text as="span" variant="bodyMd">Meta Pixel ID:</Text>
@@ -233,15 +245,21 @@ export default function PixelsPage() {
                       <Text as="span" variant="bodyMd">CAPI Status:</Text>
                       <Badge tone="success">Enabled</Badge>
                     </InlineStack>
+                    <InlineStack gap="200">
+                      <Text as="span" variant="bodyMd">Access Token:</Text>
+                      <Text as="span" variant="bodyMd" fontWeight="semibold">
+                        {settings.metaAccessToken ? `${settings.metaAccessToken.substring(0, 10)}...` : 'Not set'}
+                      </Text>
+                    </InlineStack>
                   </BlockStack>
                 ) : (
                   <Banner tone="info">
-                    <p>Connect your Meta Pixel to enable server-side tracking via Conversions API.</p>
+                    <p>🔗 Connect your Meta Pixel to enable server-side tracking via Conversions API.</p>
                   </Banner>
                 )}
 
                 <Button onClick={() => setShowMetaModal(true)}>
-                  {settings?.metaVerified ? "Edit Meta Pixel" : "Connect Meta Pixel"}
+                  {settings?.metaPixelEnabled && settings?.metaPixelId && settings?.metaAccessToken ? "Edit Meta Pixel" : "Connect Meta Pixel"}
                 </Button>
               </BlockStack>
             </Card>
@@ -270,9 +288,10 @@ export default function PixelsPage() {
         onClose={() => setShowMetaModal(false)}
         title="Connect Meta Pixel"
         primaryAction={{
-          content: "Validate & Save",
+          content: "Validate & Connect",
           onAction: handleValidateMeta,
           loading: isLoading,
+          disabled: !metaPixelId || !metaAccessToken,
         }}
         secondaryActions={[
           {
@@ -282,25 +301,57 @@ export default function PixelsPage() {
         ]}
       >
         <Modal.Section>
-          <FormLayout>
-            <TextField
-              label="Meta Pixel ID (Dataset ID)"
-              value={metaPixelId}
-              onChange={setMetaPixelId}
-              placeholder="123456789012345"
-              helpText="Find this in Meta Events Manager → Data Sources"
-              autoComplete="off"
-            />
-            <TextField
-              label="Conversions API Access Token"
-              value={metaAccessToken}
-              onChange={setMetaAccessToken}
-              placeholder="EAAxxxxxxx..."
-              helpText="Generate in Meta Events Manager → Settings → Conversions API"
-              autoComplete="off"
-              type="password"
-            />
-          </FormLayout>
+          <BlockStack gap="400">
+            {/* Current Status */}
+            {settings?.metaPixelEnabled && settings?.metaPixelId && settings?.metaAccessToken && (
+              <Banner tone="success">
+                <p>✅ Currently connected to Meta Pixel ID: <strong>{settings.metaPixelId}</strong></p>
+              </Banner>
+            )}
+            
+            <FormLayout>
+              <TextField
+                label="Meta Pixel ID (Dataset ID)"
+                value={metaPixelId}
+                onChange={setMetaPixelId}
+                placeholder="123456789012345"
+                helpText="Find this in Meta Events Manager → Data Sources → Select your dataset → Dataset ID"
+                autoComplete="off"
+                requiredIndicator
+              />
+              <TextField
+                label="Conversions API Access Token"
+                value={metaAccessToken}
+                onChange={setMetaAccessToken}
+                placeholder="EAAxxxxxxx..."
+                helpText="Generate in Meta Events Manager → Settings → Conversions API → Generate Access Token"
+                autoComplete="off"
+                type="password"
+                requiredIndicator
+              />
+            </FormLayout>
+
+            <Banner tone="info">
+              <BlockStack gap="100">
+                <Text as="p" variant="bodyMd" fontWeight="medium">How to get your credentials:</Text>
+                <Text as="p" variant="bodySm">
+                  1. Go to <a href="https://business.facebook.com/events_manager2" target="_blank" rel="noopener noreferrer" style={{color: "#2563eb"}}>Meta Events Manager</a>
+                </Text>
+                <Text as="p" variant="bodySm">
+                  2. Select your pixel → Data Sources → Copy the Dataset ID
+                </Text>
+                <Text as="p" variant="bodySm">
+                  3. Go to Settings → Conversions API → Generate Access Token
+                </Text>
+              </BlockStack>
+            </Banner>
+
+            {(!metaPixelId || !metaAccessToken) && (
+              <Banner tone="warning">
+                <p>Both Pixel ID and Access Token are required to establish connection.</p>
+              </Banner>
+            )}
+          </BlockStack>
         </Modal.Section>
       </Modal>
     </Page>

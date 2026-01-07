@@ -1,292 +1,154 @@
 {% comment %}
   Pixel Tracker - Theme App Extension (App Embed)
-  Injects tracking script into storefront
+  Dynamically fetches and uses real pixel IDs from your Pixelify dashboard
 {% endcomment %}
 
 {% if block.settings.enable_tracking %}
-  <script>
-  (function() {
-    'use strict';
+<script>
+(function() {
+  'use strict';
+  
+  var SHOP = '{{ shop.permanent_domain }}';
+  var DEBUG = {{ block.settings.debug_mode | json }};
+  var PROXY_URL = '/apps/pixel-api';
+  
+  if (DEBUG) console.log('[PixelTracker] Starting for shop:', SHOP);
+
+  // Retry logic
+  var retryCount = 0;
+  var maxRetries = 3;
+  var retryDelay = 1000;
+  
+  function fetchPixelConfig() {
+    // Fetch the pixel configuration from the API
+    return fetch(PROXY_URL + '/get-pixel-id?shop=' + encodeURIComponent(SHOP), {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' }
+    })
+    .then(function(res) {
+      var contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        return res.text().then(function(text) {
+          if (DEBUG) console.error('[PixelTracker] Non-JSON response:', text.substring(0, 200));
+          throw new Error('Server returned non-JSON response');
+        });
+      }
+      if (!res.ok) {
+        return res.json().then(function(data) {
+          throw new Error(data.error || 'API request failed');
+        });
+      }
+      return res.json();
+    });
+  }
+  
+  function initializeTracker(data) {
+    if (data.error) {
+      console.warn('[PixelTracker] API error:', data.error);
+      return;
+    }
     
-    var SHOP = '{{ shop.permanent_domain }}';
-    var DEBUG = {{ block.settings.debug_mode | json }};
-    var TRACK_PAGEVIEWS = {{ block.settings.track_pageviews | json }};
-    var TRACK_CLICKS = {{ block.settings.track_clicks | json }};
-    var TRACK_SCROLL = {{ block.settings.track_scroll | json }};
-    var TRACK_FORMS = {{ block.settings.track_forms | json }};
-    var TRACK_ECOMMERCE = {{ block.settings.track_ecommerce | json }};
-    var TRACK_VIEW_CONTENT = {{ block.settings.track_view_content | json }};
-    var TRACK_ADD_TO_CART = {{ block.settings.track_add_to_cart | json }};
-    var TRACK_INITIATE_CHECKOUT = {{ block.settings.track_initiate_checkout | json }};
-    var TRACK_PURCHASE = {{ block.settings.track_purchase | json }};
-    var ENABLE_CUSTOM_EVENTS = {{ block.settings.enable_custom_events | json }};
-    var ENABLED_CUSTOM_EVENTS = '{{ block.settings.enabled_custom_events | strip }}'.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
-    
-    // Use Shopify app proxy to avoid CORS issues
-    var PROXY_URL = '/apps/pixel-api';
-    
-    if (DEBUG) console.log('[PixelTracker] Starting for shop:', SHOP);
-    
-    window.PIXEL_TRACKER_SETTINGS = {
-      trackPageviews: TRACK_PAGEVIEWS,
-      trackClicks: TRACK_CLICKS,
-      trackScroll: TRACK_SCROLL,
-      trackForms: TRACK_FORMS,
-      trackEcommerce: TRACK_ECOMMERCE,
-      trackViewContent: TRACK_VIEW_CONTENT,
-      trackAddToCart: TRACK_ADD_TO_CART,
-      trackInitiateCheckout: TRACK_INITIATE_CHECKOUT,
-      trackPurchase: TRACK_PURCHASE,
-      debug: DEBUG
-    };
-    
-    // Enhanced error handling and retry logic
-    var retryCount = 0;
-    var maxRetries = 3;
-    var retryDelay = 1000; // 1 second
-    
-    function fetchPixelConfig() {
-      return fetch(PROXY_URL + '/get-pixel-id?shop=' + encodeURIComponent(SHOP), {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json'
-        }
-      })
-      .then(function(res) {
-        // Enhanced response validation
-        const contentType = res.headers.get('content-type') || '';
-        const isJson = contentType.includes('application/json');
-        
-        if (!isJson) {
-          return res.text().then(function(text) {
-            var errorDetails = {
-              status: res.status,
-              statusText: res.statusText,
-              contentType: contentType,
-              url: res.url,
-              bodyPreview: text.substring(0, 300),
-              timestamp: new Date().toISOString()
-            };
-            
-            if (DEBUG) {
-              console.error('[PixelTracker] Non-JSON response:', errorDetails);
-            }
-            
-            // Check if this looks like an authentication redirect
-            if (text.includes('<html') && text.includes('login')) {
-              throw new Error('Authentication required - received login page instead of API response');
-            }
-            
-            throw new Error('Server returned ' + contentType + ' instead of JSON. Status: ' + res.status);
-          });
-        }
-        
-        if (!res.ok) {
-          return res.json().then(function(data) {
-            throw new Error(data.error || 'API request failed with status ' + res.status);
-          }).catch(function() {
-            // If JSON parsing fails, create a generic error
-            throw new Error('API request failed with status ' + res.status + ' (' + res.statusText + ')');
-          });
-        }
-        
-        return res.json();
+    // Store configuration globally
+    window.PIXEL_TRACKER_ID = data.pixelId;
+    window.PIXEL_TRACKER_NAME = data.appName;
+    window.PIXEL_TRACKER_CONFIG = data.config || {};
+    window.PIXEL_TRACKER_CUSTOM_EVENTS = data.customEvents || [];
+
+    if (DEBUG) {
+      console.log('[PixelTracker] ✅ Pixel loaded:', {
+        name: data.appName,
+        pixelId: data.pixelId,
+        metaPixelId: data.metaPixelId,
+        enabled: data.enabled
       });
     }
     
-    function initializeTracker(data) {
-      if (data.error) {
-        console.warn('[PixelTracker] API returned error:', data.error);
-        return;
-      }
-      
-      // Store configuration globally
-      window.PIXEL_TRACKER_ID = data.pixelId;
-      window.PIXEL_TRACKER_CONFIG = data.config || {};
-      window.PIXEL_TRACKER_CUSTOM_EVENTS = data.customEvents || [];
-
-      // Filter custom events based on theme settings
-      if (!ENABLE_CUSTOM_EVENTS) {
-        window.PIXEL_TRACKER_CUSTOM_EVENTS = [];
-      } else if (ENABLED_CUSTOM_EVENTS.length > 0) {
-        window.PIXEL_TRACKER_CUSTOM_EVENTS = window.PIXEL_TRACKER_CUSTOM_EVENTS.filter(function(evt) {
-          return ENABLED_CUSTOM_EVENTS.indexOf(evt.name) !== -1;
-        });
-      }
-      
-      if (DEBUG) {
-        console.log('[PixelTracker] Configuration loaded:', {
-          pixelId: data.pixelId,
-          config: data.config,
-          customEventsCount: (data.customEvents || []).length
-        });
-      }
-      
-      // Load tracking script
-      var params = new URLSearchParams();
-      params.set('id', data.pixelId);
-      params.set('shop', SHOP);
-      
-      var script = document.createElement('script');
-      script.async = true;
-      script.src = PROXY_URL + '/pixel.js?' + params.toString();
-      script.onload = function() {
-        if (DEBUG) console.log('[PixelTracker] Tracking script loaded successfully');
-        // Custom events are now handled by the pixel.js script itself
-      };
-      script.onerror = function() {
-        console.error('[PixelTracker] Failed to load tracking script');
-      };
-      document.head.appendChild(script);
-      
-      // Load Facebook Pixel if configured
-      if (data.metaPixelId && data.enabled) {
-        try {
-          !function(f,b,e,v,n,t,s)
-          {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
-          n.callMethod.apply(n,arguments):n.queue.push(arguments)};
-          if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
-          n.queue=[];t=b.createElement(e);t.async=!0;
-          t.src=v;s=b.getElementsByTagName(e)[0];
-          s.parentNode.insertBefore(t,s)}(window, document,'script',
-          'https://connect.facebook.net/en_US/fbevents.js');
-          fbq('init', data.metaPixelId);
-          fbq('track', 'PageView');
-          if (DEBUG) console.log('[PixelTracker] Facebook Pixel initialized:', data.metaPixelId);
-        } catch (fbError) {
-          if (DEBUG) console.warn('[PixelTracker] Facebook Pixel initialization failed:', fbError);
-        }
+    // Load tracking script with the real pixel ID
+    var params = new URLSearchParams();
+    params.set('id', data.pixelId);
+    params.set('shop', SHOP);
+    
+    var script = document.createElement('script');
+    script.async = true;
+    script.src = PROXY_URL + '/pixel.js?' + params.toString();
+    script.onload = function() {
+      if (DEBUG) console.log('[PixelTracker] Tracking script loaded for:', data.appName);
+    };
+    script.onerror = function() {
+      console.error('[PixelTracker] Failed to load tracking script');
+    };
+    document.head.appendChild(script);
+    
+    // Initialize Facebook Pixel if configured
+    if (data.metaPixelId && data.enabled) {
+      try {
+        !function(f,b,e,v,n,t,s)
+        {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+        n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+        if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+        n.queue=[];t=b.createElement(e);t.async=!0;
+        t.src=v;s=b.getElementsByTagName(e)[0];
+        s.parentNode.insertBefore(t,s)}(window, document,'script',
+        'https://connect.facebook.net/en_US/fbevents.js');
+        fbq('init', data.metaPixelId);
+        fbq('track', 'PageView');
+        if (DEBUG) console.log('[PixelTracker] ✅ Facebook Pixel initialized:', data.metaPixelId);
+      } catch (fbError) {
+        if (DEBUG) console.warn('[PixelTracker] Facebook Pixel error:', fbError);
       }
     }
-    
-    function attemptInitialization() {
-      fetchPixelConfig()
-        .then(initializeTracker)
-        .catch(function(err) {
-          retryCount++;
-          console.error('[PixelTracker] Initialization failed (attempt ' + retryCount + '/' + maxRetries + '):', err.message);
-          
-          if (retryCount < maxRetries) {
-            if (DEBUG) console.log('[PixelTracker] Retrying in ' + retryDelay + 'ms...');
-            setTimeout(attemptInitialization, retryDelay);
-            retryDelay *= 2; // Exponential backoff
-          } else {
-            console.error('[PixelTracker] Failed to initialize after ' + maxRetries + ' attempts. Tracking disabled.');
-            // Still try to load basic pageview tracking without server config
-            if (TRACK_PAGEVIEWS && DEBUG) {
-              console.log('[PixelTracker] Attempting fallback pageview tracking');
-            }
-          }
-        });
-    }
-    
-    // Start initialization
-    attemptInitialization();
-  })();
-  </script>
-  {% endif %}
-  
-  {% schema %}
-  {
-    "name": "Pixel Tracker",
-    "target": "body",
-    "settings": [
-      {
-        "type": "header",
-        "content": "Tracking Settings"
-      },
-      {
-        "type": "checkbox",
-        "id": "enable_tracking",
-        "label": "Enable Tracking",
-        "default": true
-      },
-      {
-        "type": "checkbox",
-        "id": "debug_mode",
-        "label": "Debug Mode",
-        "default": false
-      },
-      {
-        "type": "header",
-        "content": "Events"
-      },
-      {
-        "type": "checkbox",
-        "id": "track_pageviews",
-        "label": "Page Views",
-        "default": true
-      },
-      {
-        "type": "checkbox",
-        "id": "track_clicks",
-        "label": "Clicks",
-        "default": true
-      },
-      {
-        "type": "checkbox",
-        "id": "track_scroll",
-        "label": "Scroll Depth",
-        "default": false
-      },
-      {
-        "type": "checkbox",
-        "id": "track_forms",
-        "label": "Form Submissions",
-        "default": true
-      },
-      {
-        "type": "checkbox",
-        "id": "track_ecommerce",
-        "label": "E-commerce Events",
-        "default": true
-      },
-      {
-        "type": "checkbox",
-        "id": "track_view_content",
-        "label": "View Content (Product Views)",
-        "default": true,
-        "info": "Automatically track when customers view product pages"
-      },
-      {
-        "type": "checkbox",
-        "id": "track_add_to_cart",
-        "label": "Add to Cart",
-        "default": true,
-        "info": "Automatically track when customers add items to cart"
-      },
-      {
-        "type": "checkbox",
-        "id": "track_initiate_checkout",
-        "label": "Initiate Checkout",
-        "default": true,
-        "info": "Automatically track when customers start the checkout process"
-      },
-      {
-        "type": "checkbox",
-        "id": "track_purchase",
-        "label": "Purchase (Order Completion)",
-        "default": true,
-        "info": "Automatically track completed orders on thank you pages"
-      },
-      {
-        "type": "header",
-        "content": "Custom Events"
-      },
-      {
-        "type": "checkbox",
-        "id": "enable_custom_events",
-        "label": "Enable Custom Events",
-        "default": true
-      },
-      {
-        "type": "text",
-        "id": "enabled_custom_events",
-        "label": "Enabled Custom Events (comma-separated)",
-        "placeholder": "wishlist_add, newsletter_signup, product_view",
-        "info": "Enter custom event names to enable (leave empty to enable all)"
-      }
-    ]
   }
-  {% endschema %}
   
+  function attemptInitialization() {
+    fetchPixelConfig()
+      .then(initializeTracker)
+      .catch(function(err) {
+        retryCount++;
+        console.error('[PixelTracker] Init failed (attempt ' + retryCount + '/' + maxRetries + '):', err.message);
+        
+        if (retryCount < maxRetries) {
+          if (DEBUG) console.log('[PixelTracker] Retrying in ' + retryDelay + 'ms...');
+          setTimeout(attemptInitialization, retryDelay);
+          retryDelay *= 2;
+        } else {
+          console.error('[PixelTracker] Failed after ' + maxRetries + ' attempts. Tracking disabled.');
+        }
+      });
+  }
+  
+  // Start initialization
+  attemptInitialization();
+})();
+</script>
+{% endif %}
+
+{% schema %}
+{
+  "name": "Pixel Tracker",
+  "target": "body",
+  "settings": [
+    {
+      "type": "header",
+      "content": "🎯 Pixel Tracking"
+    },
+    {
+      "type": "paragraph",
+      "content": "This extension automatically uses your active pixel from the Pixelify dashboard. Manage your pixels at: /admin/apps/pixelify"
+    },
+    {
+      "type": "checkbox",
+      "id": "enable_tracking",
+      "label": "Enable Tracking",
+      "default": true,
+      "info": "Turn on/off all pixel tracking"
+    },
+    {
+      "type": "checkbox",
+      "id": "debug_mode",
+      "label": "Debug Mode",
+      "default": false,
+      "info": "Show detailed logs in browser console"
+    }
+  ]
+}
+{% endschema %}

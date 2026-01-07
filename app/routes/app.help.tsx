@@ -53,6 +53,111 @@ export default function Help() {
                 You can track button clicks, form submissions, page scrolls, and more.
               </Text>
 
+              <Text variant="headingMd" as="h3">How Custom Events Work</Text>
+              <Text as="p">
+                Track any user interaction and send it to Facebook for better ad optimization
+              </Text>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px', marginBottom: '24px' }}>
+                <div style={{
+                  background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
+                  padding: '20px',
+                  borderRadius: '12px',
+                  border: '1px solid #0ea5e9',
+                  position: 'relative',
+                  overflow: 'hidden'
+                }}>
+                  <div style={{ position: 'absolute', top: '-10px', right: '-10px', fontSize: '40px', opacity: 0.1 }}>📝</div>
+                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '12px' }}>
+                    <span style={{ fontSize: '20px', marginRight: '12px' }}>📝</span>
+                    <strong style={{ color: '#0c4a6e', fontSize: '16px' }}>1. Create Event</strong>
+                  </div>
+                  <p style={{ margin: 0, fontSize: '14px', color: '#0369a1', lineHeight: '1.5' }}>
+                    Name your event and choose where it should trigger. Use templates for common e-commerce events.
+                  </p>
+                </div>
+
+                <div style={{
+                  background: 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)',
+                  padding: '20px',
+                  borderRadius: '12px',
+                  border: '1px solid #10b981',
+                  position: 'relative',
+                  overflow: 'hidden'
+                }}>
+                  <div style={{ position: 'absolute', top: '-10px', right: '-10px', fontSize: '40px', opacity: 0.1 }}>🔗</div>
+                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '12px' }}>
+                    <span style={{ fontSize: '20px', marginRight: '12px' }}>🔗</span>
+                    <strong style={{ color: '#065f46', fontSize: '16px' }}>2. Map to Facebook</strong>
+                  </div>
+                  <p style={{ margin: 0, fontSize: '14px', color: '#047857', lineHeight: '1.5' }}>
+                    Connect to Facebook events like Purchase, AddToCart, Lead for better ad optimization.
+                  </p>
+                </div>
+
+                <div style={{
+                  background: 'linear-gradient(135deg, #fefce8 0%, #fef3c7 100%)',
+                  padding: '20px',
+                  borderRadius: '12px',
+                  border: '1px solid #f59e0b',
+                  position: 'relative',
+                  overflow: 'hidden'
+                }}>
+                  <div style={{ position: 'absolute', top: '-10px', right: '-10px', fontSize: '40px', opacity: 0.1 }}>⚡</div>
+                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '12px' }}>
+                    <span style={{ fontSize: '20px', marginRight: '12px' }}>⚡</span>
+                    <strong style={{ color: '#92400e', fontSize: '16px' }}>3. Choose Trigger</strong>
+                  </div>
+                  <p style={{ margin: 0, fontSize: '14px', color: '#a16207', lineHeight: '1.5' }}>
+                    Manual code triggers or automatic CSS selectors that detect user interactions.
+                  </p>
+                </div>
+
+                <div style={{
+                  background: 'linear-gradient(135deg, #f3e8ff 0%, #e9d5ff 100%)',
+                  padding: '20px',
+                  borderRadius: '12px',
+                  border: '1px solid #8b5cf6',
+                  position: 'relative',
+                  overflow: 'hidden'
+                }}>
+                  <div style={{ position: 'absolute', top: '-10px', right: '-10px', fontSize: '40px', opacity: 0.1 }}>🛡️</div>
+                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '12px' }}>
+                    <span style={{ fontSize: '20px', marginRight: '12px' }}>🛡️</span>
+                    <strong style={{ color: '#6b21a8', fontSize: '16px' }}>4. Adblocker-Proof</strong>
+                  </div>
+                  <p style={{ margin: 0, fontSize: '14px', color: '#7c2d92', lineHeight: '1.5' }}>
+                    All events are sent server-side via Facebook CAPI, bypassing adblockers completely.
+                  </p>
+                </div>
+              </div>
+
+              <div style={{
+                background: 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)',
+                padding: '20px',
+                borderRadius: '12px',
+                border: '1px solid #10b981',
+                borderLeft: '6px solid #10b981'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start' }}>
+                  <span style={{ color: '#10b981', fontSize: '24px', marginRight: '12px', marginTop: '2px' }}>💡</span>
+                  <div>
+                    <strong style={{ color: '#065f46', fontSize: '16px' }}>Pro Tips:</strong>
+                    <div style={{ marginTop: '8px', color: '#047857', fontSize: '14px', lineHeight: '1.6' }}>
+                      <p style={{ margin: '0 0 8px 0' }}>
+                        • Use <code style={{ background: '#bbf7d0', padding: '2px 6px', borderRadius: '4px', fontSize: '13px' }}>PixelAnalytics.track('event_name', data)</code> in your theme code for manual triggers
+                      </p>
+                      <p style={{ margin: '0 0 8px 0' }}>
+                        • Set up automatic triggers with CSS selectors like <code style={{ background: '#bbf7d0', padding: '2px 6px', borderRadius: '4px', fontSize: '13px' }}>.add-to-cart-btn</code>
+                      </p>
+                      <p style={{ margin: 0 }}>
+                        • Test events before going live using the built-in test functionality
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <Text variant="headingMd" as="h3">Event Types</Text>
               <BlockStack gap="200">
                 <Card background="bg-surface-secondary">
@@ -225,46 +330,46 @@ export default function Help() {
                     </List>
                   </BlockStack>
                 </Card>
+
+                <Card background="bg-surface-secondary">
+                  <BlockStack gap="200">
+                    <Text variant="headingSm" as="h4">Add to Cart Selector Troubleshooting</Text>
+                    <div style={{ marginTop: '12px', color: '#374151', fontSize: '14px', lineHeight: '1.6' }}>
+                      <p style={{ margin: '0 0 12px 0' }}><strong>Common Shopify Add-to-Cart Selectors:</strong></p>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '8px', marginBottom: '12px' }}>
+                        <div style={{ background: '#f9fafb', padding: '8px', borderRadius: '6px', border: '1px solid #d1d5db' }}>
+                          <code style={{ background: '#e5e7eb', padding: '2px 6px', borderRadius: '4px', fontSize: '13px', fontWeight: 'bold' }}>.add-to-cart</code>
+                          <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>Most common selector</div>
+                        </div>
+                        <div style={{ background: '#f9fafb', padding: '8px', borderRadius: '6px', border: '1px solid #d1d5db' }}>
+                          <code style={{ background: '#e5e7eb', padding: '2px 6px', borderRadius: '4px', fontSize: '13px', fontWeight: 'bold' }}>.product-form__cart-submit</code>
+                          <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>Dawn theme</div>
+                        </div>
+                        <div style={{ background: '#f9fafb', padding: '8px', borderRadius: '6px', border: '1px solid #d1d5db' }}>
+                          <code style={{ background: '#e5e7eb', padding: '2px 6px', borderRadius: '4px', fontSize: '13px', fontWeight: 'bold' }}>[name="add"]</code>
+                          <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>Form input attribute</div>
+                        </div>
+                        <div style={{ background: '#f9fafb', padding: '8px', borderRadius: '6px', border: '1px solid #d1d5db' }}>
+                          <code style={{ background: '#e5e7eb', padding: '2px 6px', borderRadius: '4px', fontSize: '13px', fontWeight: 'bold' }}>.btn-add-to-cart</code>
+                          <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>Custom themes</div>
+                        </div>
+                      </div>
+                      <div style={{ background: '#fefce8', padding: '12px', borderRadius: '8px', border: '1px solid #fbbf24' }}>
+                        <strong style={{ color: '#92400e' }}>How to find the correct selector:</strong>
+                        <ol style={{ margin: '8px 0 0 20px', padding: 0 }}>
+                          <li style={{ marginBottom: '4px' }}>Open your product page in a browser</li>
+                          <li style={{ marginBottom: '4px' }}>Right-click the "Add to Cart" button → "Inspect"</li>
+                          <li style={{ marginBottom: '4px' }}>Copy the class name or ID from the HTML</li>
+                          <li style={{ marginBottom: '4px' }}>Use "🧪 Test Event" to verify it works</li>
+                          <li>Check Facebook Events Manager for test events</li>
+                        </ol>
+                      </div>
+                    </div>
+                  </BlockStack>
+                </Card>
               </BlockStack>
             </BlockStack>
           </Card>
-        </Layout.Section>
-
-        <Layout.Section variant="oneThird">
-          <BlockStack gap="400">
-            <Card>
-              <BlockStack gap="300">
-                <InlineStack align="space-between">
-                  <Text variant="headingMd" as="h3">Quick Actions</Text>
-                  <CodeIcon />
-                </InlineStack>
-                <Button url="/app/custom-events" variant="primary">
-                  Manage Custom Events
-                </Button>
-                <Button url="/app/settings" variant="secondary">
-                  Facebook Pixel Settings
-                </Button>
-                <Button url="/app/conversions" variant="secondary">
-                  View Conversions
-                </Button>
-              </BlockStack>
-            </Card>
-
-            <Card>
-              <BlockStack gap="300">
-                <InlineStack align="space-between">
-                  <Text variant="headingMd" as="h3">Need More Help?</Text>
-                  <SettingsIcon />
-                </InlineStack>
-                <Text as="p">
-                  If you need additional assistance, check out our detailed guides or contact support.
-                </Text>
-                <Button url="mailto:support@pixelify.app" external>
-                  Contact Support
-                </Button>
-              </BlockStack>
-            </Card>
-          </BlockStack>
         </Layout.Section>
       </Layout>
     </Page>

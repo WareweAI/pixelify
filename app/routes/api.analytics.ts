@@ -46,7 +46,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
 
     // Get overview stats
-    const [totalEvents, pageviews, uniqueVisitors, sessions] = await Promise.all([
+    const [totalEvents, pageviews, uniqueVisitors, sessions, totalRevenue] = await Promise.all([
       prisma.event.count({
         where: { appId: app.id, createdAt: { gte: startDate } },
       }),
@@ -61,6 +61,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
       prisma.analyticsSession.count({
         where: { appId: app.id, startTime: { gte: startDate } },
       }),
+      prisma.dailyStats.aggregate({
+        where: {
+          appId: app.id,
+          date: { gte: startDate },
+        },
+        _sum: { revenue: true },
+      }).then((result: any) => result._sum.revenue || 0),
     ]);
 
     // Get top pages
@@ -185,6 +192,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         pageviews,
         uniqueVisitors,
         sessions,
+        totalRevenue,
       },
       topPages,
       topReferrers,

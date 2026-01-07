@@ -14,9 +14,9 @@ function createPrismaClient() {
   const isVercel = process.env.VERCEL || process.env.VERCEL_URL || process.env.VERCEL_ENV;
 
   if (isVercel || process.env.NODE_ENV === "production") {
-    // Use pooled connection on Vercel or production for better reliability
-    databaseUrl = process.env.DATABASE_URL;
-    console.log("[DB] Using pooled connection for Vercel/production");
+    // Use direct connection on Vercel or production for migrations to work
+    databaseUrl = process.env.DIRECT_URL || process.env.DATABASE_URL;
+    console.log("[DB] Using direct connection for Vercel/production");
   } else {
     // Use direct connection in local development
     databaseUrl = process.env.DIRECT_URL || process.env.DATABASE_URL;

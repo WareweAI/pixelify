@@ -3,8 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
+  provider = "postgresql"
+  url = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
@@ -22,10 +22,14 @@ model App {
   appId             String             @unique
   appToken          String
   name              String
+  plan              String             @default("Free")
+  welcomeEmailSent  Boolean            @default(false)
+  enabled           Boolean            @default(true)
+  shopEmail         String?
   createdAt         DateTime           @default(now())
-  userId            String
+  userId            String?
   analyticsSessions AnalyticsSession[]
-  user              User               @relation(fields: [userId], references: [id])
+  user              User?              @relation(fields: [userId], references: [id])
   settings          AppSettings?
   customEvents      CustomEvent[]
   dailyStats        DailyStats[]
@@ -180,6 +184,7 @@ model AppSettings {
   metaPixelEnabled   Boolean @default(false)
   metaTestEventCode  String?
   metaVerified       Boolean @default(false)
+  timezone           String? @default("GMT+0")
   app                App     @relation(fields: [appId], references: [id])
 }
 

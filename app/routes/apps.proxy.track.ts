@@ -35,19 +35,41 @@ export async function action({ request }: ActionFunctionArgs) {
     const body = await request.json();
     const { appId, eventName } = body;
 
-    console.log(`[App Proxy track] appId: ${appId}, eventName: ${eventName}`);
+    console.log(`[App Proxy track] appId: ${appId}, eventName: ${eventName}, shop: ${shop}`);
 
-    if (!appId || !eventName) {
-      return Response.json({ error: "Missing required fields" }, { status: 400 });
+    if (!eventName) {
+      return Response.json({ error: "Missing eventName" }, { status: 400 });
     }
 
-    const app = await prisma.app.findUnique({
+    // Try to find app by appId first
+    let app = await prisma.app.findUnique({
       where: { appId },
       include: { settings: true },
     });
 
+    // If not found by appId, try to find by shop domain (more reliable)
+    if (!app && shop) {
+      console.log(`[App Proxy track] App not found by appId: ${appId}, trying shop lookup: ${shop}`);
+      
+      const user = await prisma.user.findUnique({
+        where: { storeUrl: shop },
+      });
+
+      if (user) {
+        app = await prisma.app.findFirst({
+          where: { userId: user.id },
+          include: { settings: true },
+          orderBy: { createdAt: "desc" },
+        });
+        
+        if (app) {
+          console.log(`[App Proxy track] Found app by shop: ${app.appId} (${app.name})`);
+        }
+      }
+    }
+
     if (!app) {
-      console.log(`[App Proxy track] App not found: ${appId}`);
+      console.log(`[App Proxy track] App not found for appId: ${appId}, shop: ${shop}`);
 
       // Log available apps for debugging
       const allApps = await prisma.app.findMany({

@@ -307,7 +307,10 @@ export async function action({ request }: ActionFunctionArgs) {
 
     // Forward ALL events to Meta CAPI (server-side) to bypass adblockers
     // Both regular events (pageview, click, etc.) and custom events are sent to Facebook CAPI
-    if (app.settings?.metaPixelEnabled && app.settings?.metaVerified) {
+    // Skip CAPI for test events if no test event code is configured
+    const isTestEvent = customData?.test_event === true;
+    const skipCapiForTest = isTestEvent && !app.settings?.metaTestEventCode;
+    if (app.settings?.metaPixelEnabled && app.settings?.metaVerified && !skipCapiForTest) {
       try {
         // Check if this is a custom event to get Meta event mapping
         const customEvent = await prisma.customEvent.findFirst({
@@ -386,7 +389,13 @@ export async function action({ request }: ActionFunctionArgs) {
 
         // Add custom data from the request
         if (customData) {
-          eventData = { ...eventData, ...customData };
+          const processedCustomData = { ...customData };
+          // Ensure value is a number for CAPI
+          if (processedCustomData.value !== undefined) {
+            const numValue = parseFloat(processedCustomData.value);
+            processedCustomData.value = isNaN(numValue) ? undefined : numValue;
+          }
+          eventData = { ...eventData, ...processedCustomData };
         }
 
         console.log(`[Track] Preparing to send to Facebook CAPI:`, {

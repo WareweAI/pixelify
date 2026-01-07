@@ -74,4 +74,3 @@ export async function action({ request }: ActionFunctionArgs) {
 export default function WebhookCheckoutsCreate() {
   return null;
 }
-

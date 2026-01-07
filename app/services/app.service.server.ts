@@ -1,12 +1,14 @@
 // App Service - Business logic for app management
 import prisma from "~/db.server";
 import * as crypto from "node:crypto";
+import { sendWelcomeEmail } from "./email.server";
 
 interface CreateAppParams {
   userId: string;
   name: string;
   metaAppId?: string;
   metaAccessToken?: string;
+  email?: string;
 }
 
 // Get all apps for a user
@@ -50,6 +52,7 @@ export async function createAppWithSettings({
   name,
   metaAppId,
   metaAccessToken,
+  email,
 }: CreateAppParams) {
   const appId = crypto.randomBytes(8).toString("hex");
   
@@ -57,6 +60,11 @@ export async function createAppWithSettings({
   const appToken = metaAppId 
     ? `token_${metaAppId}_${crypto.randomBytes(12).toString("hex")}`
     : `token_${Date.now()}_${crypto.randomBytes(12).toString("hex")}`;
+
+  // Check if this is the first app for the user
+  const existingAppsCount = await prisma.app.count({
+    where: { userId },
+  });
 
   const app = await prisma.app.create({
     data: {
@@ -76,6 +84,30 @@ export async function createAppWithSettings({
       metaVerified: false,
     },
   });
+
+  // Send welcome email if this is the first app and email is provided
+  if (existingAppsCount === 0 && email) {
+    try {
+      // Get the shop name from the user record
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { storeUrl: true },
+      });
+
+      if (user) {
+        const shopName = user.storeUrl.replace('.myshopify.com', '');
+        await sendWelcomeEmail(email, shopName);
+        // Mark as sent
+        await prisma.app.update({
+          where: { id: app.id },
+          data: { welcomeEmailSent: true },
+        });
+      }
+    } catch (error) {
+      console.error("Failed to send welcome email:", error);
+      // Don't fail the app creation if email fails
+    }
+  }
 
   return { app, settings };
 }

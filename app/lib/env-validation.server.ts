@@ -49,7 +49,9 @@ export function validateProductionEnvironment() {
   const requiredVars = [
     "SHOPIFY_API_KEY",
     "SHOPIFY_API_SECRET",
-    "DATABASE_URL"
+    "DATABASE_URL",
+    "PLUNK_API_KEY",
+    "PLUNK_API_SECRET"
   ];
 
   // Optional but recommended environment variables

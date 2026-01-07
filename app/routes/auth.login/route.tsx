@@ -68,15 +68,6 @@ export default function Auth() {
       try {
         const inIframe = window.top !== window.self;
         setIsInIframe(inIframe);
-        
-        if (inIframe && window.top) {
-          try {
-            const topLocation = window.top.location;
-            topLocation.href = window.location.href;
-          } catch (e) {
-            setIsInIframe(false);
-          }
-        }
       } catch (e) {
         setIsInIframe(false);
       }
@@ -88,6 +79,15 @@ export default function Auth() {
       <AppProvider embedded={false}>
         <div style={{ padding: "40px", textAlign: "center" }}>
           <p>Redirecting to login...</p>
+          <script
+            dangerouslySetInnerHTML={{
+              __html: `
+                if (window.top !== window.self) {
+                  window.top.location.href = '/auth';
+                }
+              `,
+            }}
+          />
         </div>
       </AppProvider>
     );

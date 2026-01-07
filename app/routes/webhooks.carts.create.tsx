@@ -1,4 +1,3 @@
-// Webhook: carts/create - Server-side AddToCart tracking
 import type { ActionFunctionArgs } from "react-router";
 import prisma from "~/db.server";
 import crypto from "crypto";
@@ -70,4 +69,3 @@ export async function action({ request }: ActionFunctionArgs) {
 export default function WebhookCartsCreate() {
   return null;
 }
-

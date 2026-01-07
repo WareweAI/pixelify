@@ -1,9 +1,10 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "c73e202223c791156254879d10871b61"
+client_id = "22e1740803c975ae11fd5bc9b23c7dd4"
 name = "pixelify"
 application_url = "https://pixelify-red.vercel.app"
 embedded = true
+handle = "pixelify-tracker"
 
 [build]
 automatically_update_urls_on_dev = true
@@ -12,33 +13,24 @@ automatically_update_urls_on_dev = true
 api_version = "2026-01"
 
   [[webhooks.subscriptions]]
-  topics = [ "app/uninstalled" ]
-  uri = "/webhooks/app/uninstalled"
-
-  [[webhooks.subscriptions]]
   topics = [ "app/scopes_update" ]
   uri = "/webhooks/app/scopes_update"
 
   [[webhooks.subscriptions]]
-  topics = [ "orders/create" ]
-  uri = "/webhooks/orders/create"
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
 
   [[webhooks.subscriptions]]
-  topics = [ "checkouts/create" ]
-  uri = "/webhooks/checkouts/create"
-
-  [[webhooks.subscriptions]]
-  topics = [ "carts/create" ]
-  uri = "/webhooks/carts/create"
+  topics = [ "app_subscriptions/update" ]
+  uri = "/webhooks/app_subscriptions/update"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_analytics,read_customers,read_orders,read_products,read_checkouts,read_themes,write_script_tags"
+scopes = "read_analytics,read_checkouts,read_customers,read_orders,read_products,read_themes,write_script_tags"
 
 [auth]
 redirect_urls = [ "https://pixelify-red.vercel.app/auth" ]
 
-# App Proxy - allows theme extensions to call our API without CORS issues
 [app_proxy]
 url = "https://pixelify-red.vercel.app/apps/proxy"
 subpath = "pixel-api"

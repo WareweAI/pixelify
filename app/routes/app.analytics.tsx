@@ -14,7 +14,6 @@ import {
   EmptyState,   
   Spinner,
   Box,
-  Badge,
   ProgressBar,
   Button,
   Icon,
@@ -28,16 +27,9 @@ import {
   ViewIcon,
   PersonIcon,
   ClockIcon,
-  ChevronUpIcon,
-  ChevronDownIcon,
-  CalendarIcon,
-  LocationIcon,
   DesktopIcon,
   MobileIcon,
   TabletIcon,
-  ExternalIcon,
-  SearchIcon,
-  CartIcon,
   CheckIcon,
   OrderIcon
 } from "@shopify/polaris-icons";
@@ -75,6 +67,7 @@ interface AnalyticsData {
     pageviews: number;
     uniqueVisitors: number;
     sessions: number;
+    totalRevenue: number;
   };
   topPages: Array<{ url: string; count: number }>;
   topReferrers: Array<{ referrer: string; count: number }>;
@@ -242,7 +235,7 @@ export default function AnalyticsPage() {
             {/* Key Metrics Cards */}
             <Layout.Section>
               <Grid>
-                <Grid.Cell columnSpan={{xs: 6, sm: 3, md: 3, lg: 3, xl: 3}}>
+                <Grid.Cell columnSpan={{xs: 6, sm: 4, md: 3, lg: 2, xl: 2}}>
                   <Card>
                     <BlockStack gap="200">
                       <Icon source={ViewIcon} tone="base" />
@@ -258,7 +251,7 @@ export default function AnalyticsPage() {
                   </Card>
                 </Grid.Cell>
 
-                <Grid.Cell columnSpan={{xs: 6, sm: 3, md: 3, lg: 3, xl: 3}}>
+                <Grid.Cell columnSpan={{xs: 6, sm: 4, md: 3, lg: 2, xl: 2}}>
                   <Card>
                     <BlockStack gap="200">
                       <Icon source={PersonIcon} tone="base" />
@@ -274,7 +267,7 @@ export default function AnalyticsPage() {
                   </Card>
                 </Grid.Cell>
 
-                <Grid.Cell columnSpan={{xs: 6, sm: 3, md: 3, lg: 3, xl: 3}}>
+                <Grid.Cell columnSpan={{xs: 6, sm: 4, md: 3, lg: 2, xl: 2}}>
                   <Card>
                     <BlockStack gap="200">
                       <Icon source={ClockIcon} tone="base" />
@@ -290,7 +283,7 @@ export default function AnalyticsPage() {
                   </Card>
                 </Grid.Cell>
 
-                <Grid.Cell columnSpan={{xs: 6, sm: 3, md: 3, lg: 3, xl: 3}}>
+                <Grid.Cell columnSpan={{xs: 6, sm: 4, md: 3, lg: 2, xl: 2}}>
                   <Card>
                     <BlockStack gap="200">
                       <Icon source={CheckIcon} tone="base" />
@@ -300,6 +293,22 @@ export default function AnalyticsPage() {
                         </Text>
                         <Text variant="bodySm" as="p" tone="subdued">
                           Total Events
+                        </Text>
+                      </BlockStack>
+                    </BlockStack>
+                  </Card>
+                </Grid.Cell>
+
+                <Grid.Cell columnSpan={{xs: 6, sm: 4, md: 3, lg: 2, xl: 2}}>
+                  <Card>
+                    <BlockStack gap="200">
+                      <Icon source={OrderIcon} tone="base" />
+                      <BlockStack gap="100">
+                        <Text variant="headingXl" as="h3">
+                          ${analytics.overview.totalRevenue.toFixed(2)}
+                        </Text>
+                        <Text variant="bodySm" as="p" tone="subdued">
+                          Total Revenue
                         </Text>
                       </BlockStack>
                     </BlockStack>

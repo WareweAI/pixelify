@@ -61,8 +61,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   // Calculate aggregated dashboard stats
   const totalPixels = apps.length;
-  const totalEvents = apps.reduce((sum, app) => sum + app._count.events, 0);
-  const totalSessions = apps.reduce((sum, app) => sum + app._count.analyticsSessions, 0);
+  const totalEvents = apps.reduce((sum: any, app: { _count: { events: any; }; }) => sum + app._count.events, 0);
+  const totalSessions = apps.reduce((sum: any, app: { _count: { analyticsSessions: any; }; }) => sum + app._count.analyticsSessions, 0);
 
   // Get recent events across all apps (last 7 days)
   const sevenDaysAgo = new Date();
@@ -105,7 +105,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       totalSessions,
       todayEvents,
     },
-    recentEvents: recentEvents.map(e => ({
+    recentEvents: recentEvents.map((e: { id: any; eventName: any; url: any; app: { name: any; appId: any; }; createdAt: any; }) => ({
       id: e.id,
       eventName: e.eventName,
       url: e.url,
@@ -279,7 +279,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         },
       });
 
-      return { success: true, app, intent: "create" };
+      return { success: true, app, intent: "create", step: 2, message: "Facebook Pixel created successfully! Now choose your timezone." };
     } catch (error: any) {
       console.error("Create app error:", error);
       return { error: error.message || "Failed to create pixel" };
@@ -315,6 +315,62 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
+  if (intent === "save-timezone") {
+    const appId = formData.get("appId") as string;
+    const timezone = formData.get("timezone") as string;
+    
+    if (!appId || !timezone) {
+      return { error: "App ID and timezone are required" };
+    }
+
+    try {
+      // Update the app settings with timezone
+      await prisma.appSettings.updateMany({
+        where: {
+          app: {
+            id: appId,
+            userId: user.id
+          }
+        },
+        data: {
+          timezone: timezone
+        }
+      });
+
+      return { success: true, message: "Timezone saved successfully!", step: 3 };
+    } catch (error: any) {
+      console.error("Save timezone error:", error);
+      return { error: error.message || "Failed to save timezone" };
+    }
+  }
+
+  if (intent === "toggle-pixel") {
+    const appId = formData.get("appId") as string;
+    const enabled = formData.get("enabled") === "true";
+    
+    if (!appId) {
+      return { error: "App ID is required" };
+    }
+
+    try {
+      // Update the app enabled status
+      await prisma.app.update({
+        where: {
+          id: appId,
+          userId: user.id
+        },
+        data: {
+          enabled: enabled
+        }
+      });
+
+      return { success: true, message: `Pixel ${enabled ? 'enabled' : 'disabled'} successfully!` };
+    } catch (error: any) {
+      console.error("Toggle pixel error:", error);
+      return { error: error.message || "Failed to toggle pixel" };
+    }
+  }
+
   if (intent === "fetch-facebook-pixels") {
     const accessToken = formData.get("accessToken") as string;
     
@@ -333,14 +389,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       if (adAccountsData.error) {
         console.error("[Dashboard] Ad accounts error:", adAccountsData.error);
-        // Fallback to original /me/adspixels if ad accounts fail
+        return {
+          error: `Failed to access Facebook ad accounts. This usually means your access token doesn't have the required permissions (ads_read, business_management) or has expired. Please generate a new token with proper permissions.`
+        };
       }
 
       let businessId: string | null = null;
       let businessName: string | null = null;
+      let adAccounts: any[] = [];
 
       if (adAccountsData.data && adAccountsData.data.length > 0) {
-        const accountWithBusiness = adAccountsData.data.find((acc: any) => acc.business && acc.business.id);
+        // Filter to active ad accounts only
+        adAccounts = adAccountsData.data.filter((acc: any) => acc.account_status === 1);
+
+        const accountWithBusiness = adAccounts.find((acc: any) => acc.business && acc.business.id);
         if (accountWithBusiness) {
           businessId = accountWithBusiness.business.id;
           businessName = accountWithBusiness.business.name || "Business Manager";
@@ -372,32 +434,47 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }
       }
 
-      // Fallback: if no pixels from business or no business found, try /me/adspixels
-      if (pixels.length === 0) {
-        console.log("[Dashboard] No pixels from business. Falling back to /me/adspixels...");
-        const response = await fetch(
-          `https://graph.facebook.com/v24.0/me/adspixels?fields=id,name&access_token=${accessToken}`
-        );
-        const data = await response.json();
-        console.log("[Dashboard] /me/adspixels response:", data);
+      // Step 2b: If no pixels from business, fetch pixels from individual ad accounts
+      if (pixels.length === 0 && adAccounts.length > 0) {
+        console.log(`[Dashboard] No pixels from business. Fetching from ${adAccounts.length} ad accounts...`);
 
-        if (data.error) {
-          console.error("[Dashboard] Facebook API Error (me/adspixels):", data.error);
-          return { error: `Facebook API Error: ${data.error.message}` };
-        }
+        for (const account of adAccounts) {
+          try {
+            console.log(`[Dashboard] Fetching pixels from ad account: ${account.name} (${account.id})`);
+            const pixelsResponse = await fetch(
+              `https://graph.facebook.com/v24.0/${account.id}/adspixels?fields=id,name,creation_time,last_fired_time&access_token=${accessToken}`
+            );
+            const pixelsData = await pixelsResponse.json();
 
-        if (data.data) {
-          data.data.forEach((pixel: any) => {
-            pixels.push({
-              id: pixel.id,
-              name: pixel.name,
-              accountName: "Direct Pixel",
-            });
-          });
+            if (!pixelsData.error && pixelsData.data) {
+              pixelsData.data.forEach((pixel: any) => {
+                pixels.push({
+                  id: pixel.id,
+                  name: pixel.name,
+                  accountName: account.name,
+                });
+              });
+            }
+          } catch (error) {
+            console.error(`[Dashboard] Error fetching pixels from account ${account.id}:`, error);
+          }
         }
       }
 
-      console.log(`[Dashboard] Fetched ${pixels.length} pixels from Facebook`);
+      // Step 3: If no pixels found, provide helpful error message
+      if (pixels.length === 0) {
+        if (adAccounts.length === 0) {
+          return {
+            error: "No ad accounts found. You need to create at least one ad account in Facebook Ads Manager to use pixels. Visit https://ads.facebook.com to create an ad account."
+          };
+        } else {
+          return {
+            error: "No pixels found in your ad accounts. Create pixels in Facebook Events Manager (https://business.facebook.com/events_manager) and try again."
+          };
+        }
+      }
+
+      console.log(`[Dashboard] Successfully fetched ${pixels.length} pixels from Facebook`);
       console.log("[Dashboard] Pixels:", pixels);
 
       return { success: true, facebookPixels: pixels };
@@ -438,6 +515,48 @@ export default function DashboardPage() {
     error?: string;
   } | null>(null);
   
+  // Timezone state
+  const [selectedTimezone, setSelectedTimezone] = useState("GMT+0");
+  const [createdAppId, setCreatedAppId] = useState<string | null>(null);
+  
+  // Comprehensive GMT timezone options (like Omega Pixel)
+  const timezoneOptions = [
+    { label: "(GMT+0:00) UTC - Coordinated Universal Time", value: "GMT+0" },
+    { label: "(GMT+0:00) London, Dublin, Lisbon", value: "GMT+0" },
+    { label: "(GMT+1:00) Paris, Berlin, Rome, Madrid", value: "GMT+1" },
+    { label: "(GMT+2:00) Cairo, Athens, Helsinki, Kyiv", value: "GMT+2" },
+    { label: "(GMT+3:00) Moscow, Istanbul, Riyadh, Nairobi", value: "GMT+3" },
+    { label: "(GMT+3:30) Tehran", value: "GMT+3:30" },
+    { label: "(GMT+4:00) Dubai, Baku, Tbilisi", value: "GMT+4" },
+    { label: "(GMT+4:30) Kabul", value: "GMT+4:30" },
+    { label: "(GMT+5:00) Karachi, Tashkent", value: "GMT+5" },
+    { label: "(GMT+5:30) Mumbai, New Delhi, Kolkata", value: "GMT+5:30" },
+    { label: "(GMT+5:45) Kathmandu", value: "GMT+5:45" },
+    { label: "(GMT+6:00) Dhaka, Almaty", value: "GMT+6" },
+    { label: "(GMT+6:30) Yangon", value: "GMT+6:30" },
+    { label: "(GMT+7:00) Bangkok, Jakarta, Hanoi", value: "GMT+7" },
+    { label: "(GMT+8:00) Singapore, Hong Kong, Beijing, Perth", value: "GMT+8" },
+    { label: "(GMT+9:00) Tokyo, Seoul", value: "GMT+9" },
+    { label: "(GMT+9:30) Adelaide, Darwin", value: "GMT+9:30" },
+    { label: "(GMT+10:00) Sydney, Melbourne, Brisbane", value: "GMT+10" },
+    { label: "(GMT+11:00) Solomon Islands, New Caledonia", value: "GMT+11" },
+    { label: "(GMT+12:00) Auckland, Fiji", value: "GMT+12" },
+    { label: "(GMT+13:00) Samoa, Tonga", value: "GMT+13" },
+    { label: "(GMT-1:00) Azores, Cape Verde", value: "GMT-1" },
+    { label: "(GMT-2:00) Mid-Atlantic", value: "GMT-2" },
+    { label: "(GMT-3:00) São Paulo, Buenos Aires", value: "GMT-3" },
+    { label: "(GMT-3:30) Newfoundland", value: "GMT-3:30" },
+    { label: "(GMT-4:00) Atlantic Time, Caracas", value: "GMT-4" },
+    { label: "(GMT-5:00) Eastern Time (US & Canada)", value: "GMT-5" },
+    { label: "(GMT-6:00) Central Time (US & Canada), Mexico City", value: "GMT-6" },
+    { label: "(GMT-7:00) Mountain Time (US & Canada)", value: "GMT-7" },
+    { label: "(GMT-8:00) Pacific Time (US & Canada)", value: "GMT-8" },
+    { label: "(GMT-9:00) Alaska", value: "GMT-9" },
+    { label: "(GMT-10:00) Hawaii", value: "GMT-10" },
+    { label: "(GMT-11:00) Midway Island, Samoa", value: "GMT-11" },
+    { label: "(GMT-12:00) International Date Line West", value: "GMT-12" },
+  ];
+  
   const [pixelForm, setPixelForm] = useState({
     pixelName: "",
     pixelId: "",
@@ -446,6 +565,7 @@ export default function DashboardPage() {
 
   // Enhanced create modal state
   const [showEnhancedCreateModal, setShowEnhancedCreateModal] = useState(false);
+  const [enhancedCreateStep, setEnhancedCreateStep] = useState(1); // 1: Create, 2: Timezone
   const [enhancedCreateForm, setEnhancedCreateForm] = useState({
     appName: "",
     pixelId: "",
@@ -890,6 +1010,37 @@ export default function DashboardPage() {
         localStorage.setItem("facebook_user", JSON.stringify(fetcher.data.facebookUser));
       }
     }
+    
+    // Handle step progression after pixel creation
+    if (fetcher.data?.success && fetcher.data?.step === 2) {
+      if (showEnhancedCreateModal) {
+        // Enhanced modal flow - move to timezone step within modal
+        setEnhancedCreateStep(2);
+      } else {
+        // Onboarding flow - move to timezone step
+        setCurrentStep(2);
+      }
+      
+      // Store the created app ID for timezone saving
+      if (fetcher.data?.app?.id) {
+        setCreatedAppId(fetcher.data.app.id);
+      }
+    }
+    
+    // Handle timezone save completion
+    if (fetcher.data?.success && fetcher.data?.step === 3) {
+      if (showEnhancedCreateModal) {
+        // Close modal and refresh
+        setShowEnhancedCreateModal(false);
+        setEnhancedCreateStep(1);
+        setEnhancedCreateForm({ appName: "", pixelId: "", accessToken: "" });
+        setSelectedFacebookPixel("");
+        setPixelValidationResult(null);
+        setCreatedAppId(null);
+      } else {
+        setCurrentStep(3); // Move to next step in onboarding
+      }
+    }
   }, [fetcher.data]);
 
   // Refresh Facebook token and pixels
@@ -1032,9 +1183,8 @@ export default function DashboardPage() {
       { method: "POST" }
     );
 
-    setShowEnhancedCreateModal(false);
-    setEnhancedCreateForm({ appName: "", pixelId: "", accessToken: "" });
-    setSelectedFacebookPixel("");
+    // Don't close modal - wait for step 2 (timezone selection)
+    // Modal will move to step 2 when fetcher.data.step === 2
   }, [fetcher, enhancedCreateForm, selectedFacebookPixel, facebookAccessToken]);
 
   const handleCreate = useCallback(() => {
@@ -1074,6 +1224,17 @@ export default function DashboardPage() {
     );
     setShowDeleteModal(null);
   }, [fetcher, showDeleteModal]);
+
+  const handleTogglePixel = useCallback((appId: string, enabled: boolean) => {
+    fetcher.submit(
+      { 
+        intent: "toggle-pixel", 
+        appId: appId, 
+        enabled: (!enabled).toString() 
+      },
+      { method: "POST" }
+    );
+  }, [fetcher]);
 
   const handleCreateModalClose = useCallback(() => {
     setShowCreateModal(false);
@@ -1235,13 +1396,13 @@ export default function DashboardPage() {
             <BlockStack gap="400">
               <InlineStack align="space-between" blockAlign="center">
                 <Text variant="headingLg" as="h2">Your Facebook Pixels</Text>
-                <Button url="/app/pixels">Manage All Pixels</Button>
+                <Text as="h1" fontWeight="bold">Manage All Pixels</Text>
               </InlineStack>
               
               <Card>
                 <BlockStack gap="400">
                   {apps.map((app: any) => {
-                    const { id, appId, name, _count, settings } = app;
+                    const { id, appId, name, _count, settings, enabled } = app;
                     return (
                       <div key={id} style={{ padding: "16px", border: "1px solid #e5e7eb", borderRadius: "8px" }}>
                         <BlockStack gap="300">
@@ -1252,12 +1413,23 @@ export default function DashboardPage() {
                                 {settings?.metaPixelEnabled && (
                                   <Badge tone="success">Meta Connected</Badge>
                                 )}
+                                <Badge tone={enabled ? "success" : "critical"}>
+                                  {enabled ? "Enabled" : "Disabled"}
+                                </Badge>
                               </InlineStack>
                               <Text variant="bodySm" as="p" tone="subdued">
                                 Pixel ID: {settings?.metaPixelId || appId} • {_count.events.toLocaleString()} events • {_count.analyticsSessions.toLocaleString()} sessions
                               </Text>
                             </BlockStack>
                             <InlineStack gap="200">
+                              <Button 
+                                variant={enabled ? "primary" : "secondary"}
+                                tone={enabled ? "critical" : "success"}
+                                onClick={() => handleTogglePixel(id, enabled)}
+                                loading={isLoading}
+                              >
+                                {enabled ? "Disable" : "Enable"}
+                              </Button>
                               <Button onClick={() => setShowSnippet(appId)}>
                                 Get Code
                               </Button>
@@ -1323,38 +1495,63 @@ export default function DashboardPage() {
           open={showEnhancedCreateModal}
           onClose={() => {
             setShowEnhancedCreateModal(false);
+            setEnhancedCreateStep(1);
             setEnhancedCreateForm({ appName: "", pixelId: "", accessToken: "" });
             setSelectedFacebookPixel("");
             setPixelValidationResult(null);
+            setCreatedAppId(null);
           }}
-          title="Create New Pixel"
+          title={enhancedCreateStep === 1 ? "Create New Pixel" : "Choose Timezone"}
           primaryAction={{
-            content: isValidatingPixel ? "Validating..." : "Create Pixel",
-            onAction: handleEnhancedCreate,
+            content: enhancedCreateStep === 1 
+              ? (isValidatingPixel ? "Validating..." : "Create Pixel")
+              : (isLoading ? "Saving..." : "Save & Continue"),
+            onAction: enhancedCreateStep === 1 ? handleEnhancedCreate : () => {
+              if (createdAppId) {
+                fetcher.submit(
+                  {
+                    intent: "save-timezone",
+                    appId: createdAppId,
+                    timezone: selectedTimezone,
+                  },
+                  { method: "POST" }
+                );
+              }
+            },
             loading: isLoading || isValidatingPixel,
-            disabled: 
-              !enhancedCreateForm.appName || 
-              (!enhancedCreateForm.pixelId && !selectedFacebookPixel) ||
-              apps.some((app: any) => app.settings?.metaPixelId === (enhancedCreateForm.pixelId || selectedFacebookPixel)) ||
-              (selectedFacebookPixel && selectedFacebookPixel !== "manual" && !pixelValidationResult?.valid) ||
-              isValidatingPixel,
+            disabled: enhancedCreateStep === 1 
+              ? (!enhancedCreateForm.appName || 
+                 (!enhancedCreateForm.pixelId && !selectedFacebookPixel) ||
+                 apps.some((app: any) => app.settings?.metaPixelId === (enhancedCreateForm.pixelId || selectedFacebookPixel)) ||
+                 (selectedFacebookPixel && selectedFacebookPixel !== "manual" && !pixelValidationResult?.valid) ||
+                 isValidatingPixel)
+              : false,
           }}
           secondaryActions={[
             {
-              content: "Cancel",
+              content: enhancedCreateStep === 2 ? "Back" : "Cancel",
               onAction: () => {
-                setShowEnhancedCreateModal(false);
-                setEnhancedCreateForm({ appName: "", pixelId: "", accessToken: "" });
-                setSelectedFacebookPixel("");
-                setPixelValidationResult(null);
+                if (enhancedCreateStep === 2) {
+                  setEnhancedCreateStep(1);
+                } else {
+                  setShowEnhancedCreateModal(false);
+                  setEnhancedCreateStep(1);
+                  setEnhancedCreateForm({ appName: "", pixelId: "", accessToken: "" });
+                  setSelectedFacebookPixel("");
+                  setPixelValidationResult(null);
+                  setCreatedAppId(null);
+                }
               },
             },
           ]}
         >
           <Modal.Section>
             <BlockStack gap="400">
-              {/* Facebook Connection Status */}
-              {mounted && isConnectedToFacebook && facebookUser ? (
+              {/* Step 1: Create Pixel */}
+              {enhancedCreateStep === 1 && (
+                <>
+                  {/* Facebook Connection Status */}
+                  {mounted && isConnectedToFacebook && facebookUser ? (
                 <Card background="bg-surface-success">
                   <InlineStack align="space-between" blockAlign="center">
                     <InlineStack gap="200" blockAlign="center">
@@ -1620,6 +1817,67 @@ export default function DashboardPage() {
                       <p>❌ Pixel validation failed: {pixelValidationResult.error}</p>
                     </Banner>
                   ) : null}
+                </>
+              )}
+              </>
+              )}
+
+              {/* Step 2: Choose Timezone */}
+              {enhancedCreateStep === 2 && (
+                <>
+                  <Banner tone="success">
+                    <p>✅ Pixel created successfully! Now choose your GMT timezone for tracking events.</p>
+                  </Banner>
+
+                  <div>
+                    <Text as="p" variant="bodyMd" fontWeight="medium">
+                      Select GMT Timezone <Text as="span" tone="critical">*</Text>
+                    </Text>
+                    <div style={{ marginTop: "8px", marginBottom: "4px" }}>
+                      <Select
+                        label=""
+                        options={timezoneOptions}
+                        value={selectedTimezone}
+                        onChange={setSelectedTimezone}
+                      />
+                    </div>
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      This timezone will be used for sending tracking events to Facebook.
+                    </Text>
+                  </div>
+
+                  {/* Current Selection Display */}
+                  <Card>
+                    <BlockStack gap="200">
+                      <Text variant="headingSm" as="h3">Selected Timezone</Text>
+                      <InlineStack gap="200" blockAlign="center">
+                        <div style={{
+                          width: "12px",
+                          height: "12px",
+                          borderRadius: "50%",
+                          backgroundColor: "#10b981"
+                        }}></div>
+                        <Text as="p" variant="bodyMd" fontWeight="medium">
+                          {timezoneOptions.find(tz => tz.value === selectedTimezone)?.label || selectedTimezone}
+                        </Text>
+                      </InlineStack>
+                    </BlockStack>
+                  </Card>
+
+                  <Banner tone="info">
+                    <BlockStack gap="100">
+                      <Text as="p" variant="bodyMd" fontWeight="medium">Why timezone matters:</Text>
+                      <Text as="p" variant="bodySm">
+                        • Facebook uses timezone to properly attribute conversions
+                      </Text>
+                      <Text as="p" variant="bodySm">
+                        • Events are timestamped based on your selected timezone
+                      </Text>
+                      <Text as="p" variant="bodySm">
+                        • Helps with accurate reporting and audience insights
+                      </Text>
+                    </BlockStack>
+                  </Banner>
                 </>
               )}
             </BlockStack>
@@ -2018,64 +2276,132 @@ export default function DashboardPage() {
                 </Banner>
               )}
 
-              <Text variant="headingLg" as="h2">
-                Create New Pixel
-              </Text>
+              {/* Step 1: Create Pixel */}
+              {currentStep === 1 && (
+                <>
+                  <Text variant="headingLg" as="h2">
+                    Create New Pixel
+                  </Text>
 
-              <Banner tone="info">
-                <p>
-                  <strong>Two ways to add pixels:</strong> Connect your Facebook account to auto-fetch existing pixels, or manually enter your Pixel ID and Access Token.
-                </p>
-              </Banner>
+                  <Banner tone="info">
+                    <p>
+                      <strong>Two ways to add pixels:</strong> Connect your Facebook account to auto-fetch existing pixels, or manually enter your Pixel ID and Access Token.
+                    </p>
+                  </Banner>
 
-              {/* Input Method Tabs */}
-              <div style={{ 
-                display: "flex", 
-                gap: "1px", 
-                backgroundColor: "#e5e7eb", 
-                borderRadius: "8px", 
-                padding: "4px" 
-              }}>
-                <button
-                  onClick={() => {
-                    setInputMethod("auto");
-                    setPixelForm({ pixelName: "", pixelId: "", trackingPages: "all" });
-                  }}
-                  style={{
-                    flex: 1,
-                    padding: "12px 24px",
-                    backgroundColor: inputMethod === "auto" ? "white" : "transparent",
-                    border: "none",
-                    borderRadius: "6px",
-                    cursor: "pointer",
-                    fontWeight: inputMethod === "auto" ? "600" : "400",
-                    color: inputMethod === "auto" ? "#1f2937" : "#6b7280"
-                  }}
-                >
-                  Auto Input Pixel
-                </button>
-                <button
-                  onClick={() => {
-                    setInputMethod("manual");
-                    setPixelForm({ pixelName: "", pixelId: "", trackingPages: "all" });
-                    setIsConnectedToFacebook(false);
-                    setFacebookPixels([]);
-                    setSelectedFacebookPixel("");
-                  }}
-                  style={{
-                    flex: 1,
-                    padding: "12px 24px",
-                    backgroundColor: inputMethod === "manual" ? "white" : "transparent",
-                    border: "none",
-                    borderRadius: "6px",
-                    cursor: "pointer",
-                    fontWeight: inputMethod === "manual" ? "600" : "400",
-                    color: inputMethod === "manual" ? "#1f2937" : "#6b7280"
-                  }}
-                >
-                  Manual Input
-                </button>
-              </div>
+                  {/* Input Method Tabs */}
+                  <div style={{ 
+                    display: "flex", 
+                    gap: "1px", 
+                    backgroundColor: "#e5e7eb", 
+                    borderRadius: "8px", 
+                    padding: "4px" 
+                  }}>
+                    <button
+                      onClick={() => {
+                        setInputMethod("auto");
+                        setPixelForm({ pixelName: "", pixelId: "", trackingPages: "all" });
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: "12px 24px",
+                        backgroundColor: inputMethod === "auto" ? "white" : "transparent",
+                        border: "none",
+                        borderRadius: "6px",
+                        cursor: "pointer",
+                        fontWeight: inputMethod === "auto" ? "600" : "400",
+                        color: inputMethod === "auto" ? "#1f2937" : "#6b7280"
+                      }}
+                    >
+                      Auto Input Pixel
+                    </button>
+                    <button
+                      onClick={() => {
+                        setInputMethod("manual");
+                        setPixelForm({ pixelName: "", pixelId: "", trackingPages: "all" });
+                        setIsConnectedToFacebook(false);
+                        setFacebookPixels([]);
+                        setSelectedFacebookPixel("");
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: "12px 24px",
+                        backgroundColor: inputMethod === "manual" ? "white" : "transparent",
+                        border: "none",
+                        borderRadius: "6px",
+                        cursor: "pointer",
+                        fontWeight: inputMethod === "manual" ? "600" : "400",
+                        color: inputMethod === "manual" ? "#1f2937" : "#6b7280"
+                      }}
+                    >
+                      Manual Input
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* Step 2: Choose Timezone */}
+              {currentStep === 2 && (
+                <>
+                  <Text variant="headingLg" as="h2">
+                    Choose GMT Timezone
+                  </Text>
+
+                  <Banner tone="success">
+                    <p>✅ Pixel created successfully! Now choose your GMT timezone for tracking events.</p>
+                  </Banner>
+
+                  <div>
+                    <Text as="p" variant="bodyMd" fontWeight="medium">
+                      Select GMT Timezone <Text as="span" tone="critical">*</Text>
+                    </Text>
+                    <div style={{ marginTop: "8px", marginBottom: "4px" }}>
+                      <Select
+                        label=""
+                        options={timezoneOptions}
+                        value={selectedTimezone}
+                        onChange={setSelectedTimezone}
+                      />
+                    </div>
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      This timezone will be used for sending tracking events to Facebook.
+                    </Text>
+                  </div>
+
+                  {/* Current Selection Display */}
+                  <Card>
+                    <BlockStack gap="200">
+                      <Text variant="headingSm" as="h3">Selected Timezone</Text>
+                      <InlineStack gap="200" blockAlign="center">
+                        <div style={{
+                          width: "12px",
+                          height: "12px",
+                          borderRadius: "50%",
+                          backgroundColor: "#10b981"
+                        }}></div>
+                        <Text as="p" variant="bodyMd" fontWeight="medium">
+                          {timezoneOptions.find(tz => tz.value === selectedTimezone)?.label || selectedTimezone}
+                        </Text>
+                      </InlineStack>
+                    </BlockStack>
+                  </Card>
+
+                  <Banner tone="info">
+                    <BlockStack gap="100">
+                      <Text as="p" variant="bodyMd" fontWeight="medium">Why timezone matters:</Text>
+                      <Text as="p" variant="bodySm">
+                        • Facebook uses timezone to properly attribute conversions
+                      </Text>
+                      <Text as="p" variant="bodySm">
+                        • Events are timestamped based on your selected timezone
+                      </Text>
+                      <Text as="p" variant="bodySm">
+                        • Helps with accurate reporting and audience insights
+                      </Text>
+                    </BlockStack>
+                  </Banner>
+                </>
+              )}
 
               {/* Form Fields */}
               <BlockStack gap="400">
@@ -2328,23 +2654,56 @@ export default function DashboardPage() {
                 borderTop: "1px solid #e5e7eb"
               }}>
                 <Text as="p" variant="bodySm" tone="subdued">
-                  Step 1 of 4
+                  Step {currentStep} of 4
                 </Text>
-                <Button 
-                  variant="primary" 
-                  onClick={handleCreatePixel}
-                  loading={isLoading}
-                  disabled={
-                    inputMethod === "auto" 
-                      ? !pixelForm.pixelId || !selectedFacebookPixel
-                      : !pixelForm.pixelName || 
-                        !pixelForm.pixelId || 
-                        !facebookAccessToken ||
-                        apps.some((app: any) => app.settings?.metaPixelId === pixelForm.pixelId)
-                  }
-                >
-                  {inputMethod === "manual" ? "Validate & Create Pixel" : "Next"}
-                </Button>
+                
+                {currentStep === 1 && (
+                  <Button 
+                    variant="primary" 
+                    onClick={handleCreatePixel}
+                    loading={isLoading}
+                    disabled={
+                      inputMethod === "auto" 
+                        ? !pixelForm.pixelId || !selectedFacebookPixel
+                        : !pixelForm.pixelName || 
+                          !pixelForm.pixelId || 
+                          !facebookAccessToken ||
+                          apps.some((app: any) => app.settings?.metaPixelId === pixelForm.pixelId)
+                    }
+                  >
+                    {inputMethod === "manual" ? "Validate & Create Pixel" : "Next"}
+                  </Button>
+                )}
+                
+                {currentStep === 2 && (
+                  <InlineStack gap="200">
+                    <Button 
+                      onClick={() => setCurrentStep(1)}
+                    >
+                      Back
+                    </Button>
+                    <Button 
+                      variant="primary" 
+                      loading={isLoading}
+                      onClick={() => {
+                        if (createdAppId) {
+                          fetcher.submit(
+                            {
+                              intent: "save-timezone",
+                              appId: createdAppId,
+                              timezone: selectedTimezone,
+                            },
+                            { method: "POST" }
+                          );
+                        } else {
+                          setCurrentStep(3);
+                        }
+                      }}
+                    >
+                      Continue
+                    </Button>
+                  </InlineStack>
+                )}
               </div>
             </BlockStack>
           </Card>
