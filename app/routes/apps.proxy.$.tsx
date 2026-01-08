@@ -42,8 +42,8 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       shop: shop
     });
 
-    // Route: /apps/pixel-api/get-pixel-id
-    if (path === "get-pixel-id" || path.startsWith("get-pixel-id")) {
+    // Route: /apps/proxy/pixel-api/get-pixel-id
+    if (path === "pixel-api/get-pixel-id" || path.startsWith("pixel-api/get-pixel-id")) {
       const shopDomain = url.searchParams.get("shop");
       
       if (!shopDomain) {
@@ -223,8 +223,25 @@ export async function action({ request, params }: ActionFunctionArgs) {
               },
             });
             console.log(`[App Proxy] Event "${eventName}" forwarded to Meta CAPI`);
-          } catch (metaError) {
+          } catch (metaError: any) {
             console.error("[App Proxy] Meta CAPI forwarding error:", metaError);
+
+            // Check if token has expired (error code 190)
+            if (metaError?.error_code === 190 || metaError?.code === 190) {
+              console.warn("[App Proxy] Meta access token expired, disabling Meta integration");
+              try {
+                await prisma.appSettings.update({
+                  where: { appId: app.id },
+                  data: {
+                    metaPixelEnabled: false,
+                    metaVerified: false,
+                  },
+                });
+                console.log("[App Proxy] Meta integration disabled due to expired token");
+              } catch (updateError) {
+                console.error("[App Proxy] Failed to disable Meta integration:", updateError);
+              }
+            }
           }
         }
 

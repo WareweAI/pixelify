@@ -34,8 +34,14 @@
         });
       }
       if (!res.ok) {
-        return res.json().then(function(data) {
-          throw new Error(data.error || 'API request failed');
+        return res.text().then(function(text) {
+          try {
+            var data = JSON.parse(text);
+            throw new Error(data.error || 'API request failed');
+          } catch (e) {
+            // If not JSON or parsing failed, use status
+            throw new Error('API request failed: ' + res.status + ' ' + res.statusText);
+          }
         });
       }
       return res.json();
@@ -105,13 +111,20 @@
       .catch(function(err) {
         retryCount++;
         console.error('[PixelTracker] Init failed (attempt ' + retryCount + '/' + maxRetries + '):', err.message);
-        
-        if (retryCount < maxRetries) {
+
+        // Don't retry on 404 errors (app not installed)
+        var is404Error = err.message.includes('404') || err.message.includes('Not Found');
+
+        if (!is404Error && retryCount < maxRetries) {
           if (DEBUG) console.log('[PixelTracker] Retrying in ' + retryDelay + 'ms...');
           setTimeout(attemptInitialization, retryDelay);
           retryDelay *= 2;
         } else {
-          console.error('[PixelTracker] Failed after ' + maxRetries + ' attempts. Tracking disabled.');
+          if (is404Error) {
+            console.warn('[PixelTracker] App not installed on this shop. Tracking disabled.');
+          } else {
+            console.error('[PixelTracker] Failed after ' + maxRetries + ' attempts. Tracking disabled.');
+          }
         }
       });
   }

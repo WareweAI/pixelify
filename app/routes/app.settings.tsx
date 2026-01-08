@@ -677,7 +677,22 @@ export default function SettingsPage() {
                   {settings?.metaPixelEnabled && (
                     <Badge tone="success">Connected</Badge>
                   )}
+                  {settings?.metaPixelId && !settings?.metaPixelEnabled && settings?.metaVerified === false && (
+                    <Badge tone="critical">Token Expired</Badge>
+                  )}
                 </InlineStack>
+
+                {settings?.metaPixelId && !settings?.metaPixelEnabled && settings?.metaVerified === false && (
+                  <Banner tone="critical">
+                    <p>Your Meta access token has expired. Please reconnect to continue sending events to Meta.</p>
+                  </Banner>
+                )}
+
+                {settings?.metaPixelId && !settings?.metaPixelEnabled && settings?.metaVerified === false && (
+                  <Button onClick={() => window.open('/app/dashboard', '_blank')} tone="critical">
+                    Reconnect Meta Account
+                  </Button>
+                )}
 
                 <Text as="p" tone="subdued">
                   Connect to Meta Conversions API to send server-side events for better attribution.

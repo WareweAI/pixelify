@@ -3,7 +3,7 @@
 import prisma from '~/db.server';
 import { getGeoData } from './geo.server';
 import { parseDevice, isBot } from './device.server';
-import { sendToMetaCAPI, mapToMetaEvent } from './meta-capi.server';
+import { sendToMetaCAPI, mapToMetaEvent, refreshMetaAccessToken } from './meta-capi.server';
 
 export interface TrackingPayload {
   appId: string;
@@ -158,31 +158,72 @@ export async function trackEvent(
 
     // Forward to Meta Pixel CAPI if enabled
     if (app.settings?.metaPixelEnabled && app.settings?.metaPixelId && app.settings?.metaAccessToken) {
-      forwardToMeta(app.settings, {
-        eventName: payload.eventName,
-        url: payload.url,
-        ipAddress: context.ip,
-        userAgent: context.userAgent,
-        email: payload.email,
-        phone: payload.phone,
-        firstName: payload.firstName,
-        lastName: payload.lastName,
-        city: geoData.city,
-        state: geoData.region,
-        zip: geoData.zip,
-        countryCode: geoData.countryCode,
-        fingerprint: payload.fingerprint,
-        fbc: payload.fbc,
-        fbp: payload.fbp,
-        value: payload.value,
-        currency: payload.currency,
-        productId: payload.productId,
-        productName: payload.productName,
-        quantity: payload.quantity,
-        customData: payload.customData,
-      }).catch((err) => {
-        console.error('Meta CAPI forward error:', err);
-      });
+      // Check if token is expired and try to refresh if needed
+      const now = new Date();
+      const tokenExpiresAt = app.settings.metaTokenExpiresAt;
+      const isTokenExpired = tokenExpiresAt && now > tokenExpiresAt;
+
+      let accessToken = app.settings.metaAccessToken;
+      let tokenRefreshed = false;
+
+      if (isTokenExpired) {
+        console.log('[Tracking] Facebook access token expired, attempting refresh...');
+
+        try {
+          const refreshResult = await refreshMetaAccessToken(app.settings.metaAccessToken);
+
+          if (refreshResult.success && refreshResult.newToken) {
+            // Update the token in database
+            await prisma.appSettings.update({
+              where: { appId: app.id },
+              data: {
+                metaAccessToken: refreshResult.newToken,
+                metaTokenExpiresAt: refreshResult.expiresAt,
+              },
+            });
+
+            accessToken = refreshResult.newToken;
+            tokenRefreshed = true;
+            console.log('[Tracking] Facebook access token refreshed successfully');
+          } else {
+            console.warn('[Tracking] Facebook access token refresh failed:', refreshResult.error);
+            console.warn('[Tracking] Skipping CAPI send. User needs to re-authenticate.');
+            // Continue without sending to Meta
+          }
+        } catch (refreshError) {
+          console.error('[Tracking] Error refreshing Facebook token:', refreshError);
+          console.warn('[Tracking] Skipping CAPI send. User needs to re-authenticate.');
+          // Continue without sending to Meta
+        }
+      }
+
+      if (!isTokenExpired || tokenRefreshed) {
+        forwardToMeta({ ...app.settings, metaAccessToken: accessToken }, {
+          eventName: payload.eventName,
+          url: payload.url,
+          ipAddress: context.ip,
+          userAgent: context.userAgent,
+          email: payload.email,
+          phone: payload.phone,
+          firstName: payload.firstName,
+          lastName: payload.lastName,
+          city: geoData.city,
+          state: geoData.region,
+          zip: geoData.zip,
+          countryCode: geoData.countryCode,
+          fingerprint: payload.fingerprint,
+          fbc: payload.fbc,
+          fbp: payload.fbp,
+          value: payload.value,
+          currency: payload.currency,
+          productId: payload.productId,
+          productName: payload.productName,
+          quantity: payload.quantity,
+          customData: payload.customData,
+        }).catch((err) => {
+          console.error('Meta CAPI forward error:', err);
+        });
+      }
     }
 
     return { success: true, eventId: event.id };

@@ -59,6 +59,35 @@ function hashData(data: string): string {
     .digest("hex");
 }
 
+// Refresh Facebook access token
+export async function refreshMetaAccessToken(accessToken: string): Promise<{ success: boolean; newToken?: string; expiresAt?: Date; error?: string }> {
+  try {
+    const response = await fetch(`${META_GRAPH_API_URL}/${META_GRAPH_API_VERSION}/oauth/access_token?grant_type=fb_exchange_token&client_id=${process.env.FACEBOOK_APP_ID}&client_secret=${process.env.FACEBOOK_APP_SECRET}&fb_exchange_token=${accessToken}`);
+
+    const data = await response.json();
+
+    if (data.error) {
+      return { success: false, error: data.error.message };
+    }
+
+    if (data.access_token) {
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 60);
+
+      return {
+        success: true,
+        newToken: data.access_token,
+        expiresAt
+      };
+    }
+
+    return { success: false, error: 'No access token in response' };
+  } catch (error) {
+    console.error('Meta token refresh error:', error);
+    return { success: false, error: 'Failed to refresh token' };
+  }
+}
+
 // Validate Meta credentials using Dataset ID (Pixel ID) and Access Token
 export async function validateMetaCredentials(
   datasetId: string,

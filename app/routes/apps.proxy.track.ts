@@ -3,7 +3,7 @@ import type { ActionFunctionArgs } from "react-router";
 import prisma from "~/db.server";
 import { parseUserAgent, getDeviceType } from "~/services/device.server";
 import { getGeoData } from "~/services/geo.server";
-import { forwardToMeta } from "~/services/meta-capi.server";
+import { forwardToMeta, refreshMetaAccessToken } from "~/services/meta-capi.server";
 
 export async function action({ request }: ActionFunctionArgs) {
   const url = new URL(request.url);
@@ -173,14 +173,46 @@ export async function action({ request }: ActionFunctionArgs) {
 
     // Forward ALL events to Meta CAPI (server-side) to bypass adblockers
     if (app.settings?.metaPixelEnabled && app.settings?.metaVerified && app.settings?.metaAccessToken) {
-      // Check if token is expired
+      // Check if token is expired and try to refresh if needed
       const now = new Date();
       const tokenExpiresAt = app.settings.metaTokenExpiresAt;
       const isTokenExpired = tokenExpiresAt && now > tokenExpiresAt;
 
+      let accessToken = app.settings.metaAccessToken;
+      let tokenRefreshed = false;
+
       if (isTokenExpired) {
-        console.warn('[App Proxy track] Facebook access token expired, skipping CAPI send. User needs to re-authenticate.');
-      } else {
+        console.log('[App Proxy track] Facebook access token expired, attempting refresh...');
+
+        try {
+          const refreshResult = await refreshMetaAccessToken(app.settings.metaAccessToken);
+
+          if (refreshResult.success && refreshResult.newToken) {
+            // Update the token in database
+            await prisma.appSettings.update({
+              where: { appId: app.id },
+              data: {
+                metaAccessToken: refreshResult.newToken,
+                metaTokenExpiresAt: refreshResult.expiresAt,
+              },
+            });
+
+            accessToken = refreshResult.newToken;
+            tokenRefreshed = true;
+            console.log('[App Proxy track] Facebook access token refreshed successfully');
+          } else {
+            console.warn('[App Proxy track] Facebook access token refresh failed:', refreshResult.error);
+            console.warn('[App Proxy track] Skipping CAPI send. User needs to re-authenticate.');
+            // Continue without sending to Meta
+          }
+        } catch (refreshError) {
+          console.error('[App Proxy track] Error refreshing Facebook token:', refreshError);
+          console.warn('[App Proxy track] Skipping CAPI send. User needs to re-authenticate.');
+          // Continue without sending to Meta
+        }
+      }
+
+      if (!isTokenExpired || tokenRefreshed) {
         try {
 
           // Check if this is a custom event to get Meta event mapping
@@ -211,7 +243,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
           await forwardToMeta({
             pixelId: app.settings.metaPixelId!,
-            accessToken: app.settings.metaAccessToken!,
+            accessToken: accessToken,
             testEventCode: app.settings.metaTestEventCode || undefined,
             event: {
               eventName: metaEventName,
