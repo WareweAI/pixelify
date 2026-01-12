@@ -38,8 +38,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const apps = await prisma.app.findMany({
     where: { userId: user.id },
-    include: {
-      settings: true,
+    select: {
+      id: true,
+      appId: true,
+      name: true,
     },
   });
 
@@ -153,6 +155,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { success: true, message: "Meta integration disconnected" };
   }
 
+  if (intent === "update-catalog") {
+    // TODO: Re-enable after migration is applied to production
+    return { success: true, message: "Catalog settings temporarily disabled" };
+    /*
+    const appId = formData.get("appId") as string;
+    const facebookCatalogEnabled = formData.get("facebookCatalogEnabled") === "true";
+
+    await prisma.appSettings.update({
+      where: { appId },
+      data: {
+        facebookCatalogEnabled,
+      },
+    });
+
+    return { success: true, message: "Catalog settings updated" };
+    */
+  }
+
   if (intent === "delete-script-tags") {
     try {
       const accessToken = session.accessToken;
@@ -228,11 +248,39 @@ export default function SettingsPage() {
   const { apps } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
   const [selectedAppId, setSelectedAppId] = useState(apps[0]?.id || "");
+  const [settings, setSettings] = useState<any>(null);
+  const [loadingSettings, setLoadingSettings] = useState(false);
 
   const [showDisconnectModal, setShowDisconnectModal] = useState(false);
 
   const selectedApp = apps.find((a: any) => a.id === selectedAppId);
-  const settings = selectedApp?.settings;
+
+  const fetchSettings = useCallback(async () => {
+    if (!selectedAppId) return;
+
+    setLoadingSettings(true);
+    try {
+      const app = apps.find((a: any) => a.id === selectedAppId);
+      if (app) {
+        // Since we removed settings from loader, we need to fetch them
+        // For now, we'll use a simple approach - get from database via API
+        // Actually, let's create a simple API endpoint for settings
+        const response = await fetch(`/api/app-settings?appId=${app.appId}`);
+        if (response.ok) {
+          const data = await response.json();
+          setSettings(data.settings);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to fetch settings:", error);
+    } finally {
+      setLoadingSettings(false);
+    }
+  }, [selectedAppId, apps]);
+
+  useEffect(() => {
+    fetchSettings();
+  }, [fetchSettings]);
 
   // Local state for form
   const [trackingSettings, setTrackingSettings] = useState({
@@ -261,6 +309,16 @@ export default function SettingsPage() {
   const [timezoneSettings, setTimezoneSettings] = useState({
     timezone: "GMT+0",
   });
+
+  // TODO: Re-enable after migration is applied to production
+  /*
+  const [catalogSettings, setCatalogSettings] = useState({
+    facebookCatalogEnabled: false,
+    facebookCatalogId: "",
+    facebookCatalogSyncStatus: null as string | null,
+    facebookCatalogLastSync: null as Date | null,
+  });
+  */
 
   // Comprehensive timezone options
   const timezoneOptions = [
@@ -326,8 +384,24 @@ export default function SettingsPage() {
       setTimezoneSettings({
         timezone: settings.timezone || "GMT+0",
       });
+      // TODO: Re-enable after migration is applied to production
+      /*
+      setCatalogSettings({
+        facebookCatalogEnabled: settings.facebookCatalogEnabled ?? false,
+        facebookCatalogId: settings.facebookCatalogId || "",
+        facebookCatalogSyncStatus: settings.facebookCatalogSyncStatus,
+        facebookCatalogLastSync: settings.facebookCatalogLastSync,
+      });
+      */
     }
   }, [settings]);
+
+  // Refresh settings after successful actions
+  useEffect(() => {
+    if (fetcher.data?.success) {
+      fetchSettings();
+    }
+  }, [fetcher.data, fetchSettings]);
 
   // Delete redirect is now handled in the action using Shopify's redirect method
 
@@ -385,6 +459,20 @@ export default function SettingsPage() {
       { method: "POST" }
     );
   }, [fetcher, selectedAppId, timezoneSettings]);
+
+  // TODO: Re-enable after migration is applied to production
+  /*
+  const handleSaveCatalog = useCallback(() => {
+    fetcher.submit(
+      {
+        intent: "update-catalog",
+        appId: selectedAppId,
+        facebookCatalogEnabled: String(catalogSettings.facebookCatalogEnabled),
+      },
+      { method: "POST" }
+    );
+  }, [fetcher, selectedAppId, catalogSettings]);
+  */
 
 
 
@@ -456,13 +544,22 @@ export default function SettingsPage() {
           <Layout.Section>
             <Card>
               <BlockStack gap="400">
-                <Select
-                  id="select-pixel"
-                  label="Select Pixel"
-                  options={appOptions}
-                  value={selectedAppId}
-                  onChange={setSelectedAppId}
-                />
+                <InlineStack gap="400" wrap={false} align="space-between">
+                  <div style={{ minWidth: "200px" }}>
+                    <Select
+                      id="select-pixel"
+                      label="Select Pixel"
+                      options={appOptions}
+                      value={selectedAppId}
+                      onChange={setSelectedAppId}
+                    />
+                  </div>
+                  <InlineStack gap="200">
+                    <Button onClick={fetchSettings} loading={loadingSettings}>
+                      Refresh
+                    </Button>
+                  </InlineStack>
+                </InlineStack>
                 {selectedApp && (
                   <InlineStack gap="200">
                     <Badge>{`ID: ${selectedApp.appId}`}</Badge>
@@ -635,7 +732,7 @@ export default function SettingsPage() {
                         borderRadius: "50%",
                         backgroundColor: "#10b981"
                       }}></div>
-                      <Text variant="bodyMd" fontWeight="medium">
+                      <Text variant="bodyMd" fontWeight="medium" as="p">
                         {timezoneOptions.find(tz => tz.value === timezoneSettings.timezone)?.label || timezoneSettings.timezone}
                       </Text>
                     </InlineStack>
@@ -756,6 +853,145 @@ export default function SettingsPage() {
               </BlockStack>
             </Card>
           </Layout.Section>
+
+          {/* Facebook Catalog Integration - Temporarily disabled */}
+          {/*
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="400">
+                <InlineStack align="space-between">
+                  <Text variant="headingMd" as="h2">Facebook Catalog Integration</Text>
+                  {catalogSettings.facebookCatalogEnabled && (
+                    <Badge tone="success">Enabled</Badge>
+                  )}
+                </InlineStack>
+
+                <Text as="p" tone="subdued">
+                  Sync your Shopify products to Facebook catalog for better ad management and dynamic product ads.
+                </Text>
+
+                <Checkbox
+                  label="Enable Facebook catalog sync"
+                  helpText="Automatically sync products to Facebook catalog"
+                  checked={catalogSettings.facebookCatalogEnabled}
+                  onChange={(checked) =>
+                    setCatalogSettings((prev) => ({ ...prev, facebookCatalogEnabled: checked }))
+                  }
+                />
+
+                {catalogSettings.facebookCatalogId && (
+                  <TextField
+                    label="Catalog ID"
+                    value={catalogSettings.facebookCatalogId}
+                    readOnly
+                    helpText="Facebook catalog ID for this store"
+                    autoComplete="off"
+                  />
+                )}
+
+                {catalogSettings.facebookCatalogSyncStatus && (
+                  <Box padding="400" background="bg-surface-secondary" borderRadius="200">
+                    <BlockStack gap="200">
+                      <Text variant="headingSm" as="h3">Sync Status</Text>
+                      <InlineStack gap="200" blockAlign="center">
+                        <Badge tone={
+                          catalogSettings.facebookCatalogSyncStatus === 'synced' ? 'success' :
+                          catalogSettings.facebookCatalogSyncStatus === 'syncing' ? 'info' :
+                          catalogSettings.facebookCatalogSyncStatus === 'error' ? 'critical' : undefined
+                        }>
+                          {catalogSettings.facebookCatalogSyncStatus}
+                        </Badge>
+                        {catalogSettings.facebookCatalogLastSync && (
+                          <Text variant="bodySm" as="p" tone="subdued">
+                            Last sync: {new Date(catalogSettings.facebookCatalogLastSync).toLocaleString()}
+                          </Text>
+                        )}
+                      </InlineStack>
+                    </BlockStack>
+                  </Box>
+                )}
+
+                <InlineStack gap="200">
+                  <Button onClick={handleSaveCatalog} loading={isLoading}>
+                    Save Catalog Settings
+                  </Button>
+
+                  {!catalogSettings.facebookCatalogId ? (
+                    <Button
+                      onClick={async () => {
+                        const response = await fetch('/api/facebook-catalog?action=create_catalog&name=' + encodeURIComponent(`${selectedApp?.name} Catalog`));
+                        const result = await response.json();
+                        if (result.success) {
+                          setCatalogSettings(prev => ({
+                            ...prev,
+                            facebookCatalogId: result.catalogId,
+                            facebookCatalogSyncStatus: 'created'
+                          }));
+                          fetcher.submit({}, { method: "POST" }); // Refresh data
+                        }
+                      }}
+                      loading={isLoading}
+                      disabled={!metaSettings.metaPixelEnabled}
+                    >
+                      Create Catalog
+                    </Button>
+                  ) : (
+                    <>
+                      <Button
+                        onClick={async () => {
+                          const response = await fetch('/api/facebook-catalog?action=sync_products', {
+                            method: 'POST',
+                            body: new FormData(),
+                          });
+                          const result = await response.json();
+                          if (result.success) {
+                            setCatalogSettings(prev => ({
+                              ...prev,
+                              facebookCatalogSyncStatus: 'synced',
+                              facebookCatalogLastSync: new Date()
+                            }));
+                            fetcher.submit({}, { method: "POST" }); // Refresh data
+                          }
+                        }}
+                        loading={isLoading}
+                      >
+                        Sync Products
+                      </Button>
+                      <Button
+                        tone="critical"
+                        onClick={async () => {
+                          const response = await fetch('/api/facebook-catalog?action=delete_catalog', {
+                            method: 'POST',
+                            body: new FormData(),
+                          });
+                          const result = await response.json();
+                          if (result.success) {
+                            setCatalogSettings(prev => ({
+                              ...prev,
+                              facebookCatalogId: "",
+                              facebookCatalogSyncStatus: null,
+                              facebookCatalogLastSync: null
+                            }));
+                            fetcher.submit({}, { method: "POST" }); // Refresh data
+                          }
+                        }}
+                        loading={isLoading}
+                      >
+                        Delete Catalog
+                      </Button>
+                    </>
+                  )}
+                </InlineStack>
+
+                {!metaSettings.metaPixelEnabled && (
+                  <Banner tone="warning">
+                    <p>Meta pixel integration must be enabled first to use catalog features.</p>
+                  </Banner>
+                )}
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+          */}
 
 
         </Layout>

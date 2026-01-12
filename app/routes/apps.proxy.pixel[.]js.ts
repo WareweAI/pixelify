@@ -2,6 +2,9 @@
 import type { LoaderFunctionArgs } from "react-router";
 import prisma from "~/db.server";
 
+// Server-only route - no client bundle needed
+export const clientLoader = undefined;
+
 export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const id = url.searchParams.get("id");
@@ -83,6 +86,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   function track(eventName, props) {
     props = props || {};
     var utm = getUtm();
+    var currency = (window.Shopify && window.Shopify.currency) ? window.Shopify.currency : 'USD';
     var data = {
       appId: APP_ID,
       eventName: eventName,
@@ -94,6 +98,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       screenWidth: screen.width,
       screenHeight: screen.height,
       language: navigator.language,
+      currency: currency,
       timestamp: new Date().toISOString()
     };
     for (var k in utm) { if (utm[k]) data[k] = utm[k]; }
@@ -133,16 +138,30 @@ export async function loader({ request }: LoaderFunctionArgs) {
       if (text.includes('add to cart') ||
           text.includes('add to bag') ||
           text.includes('buy now') ||
+          text.includes('add to basket') ||
+          text.includes('add item') ||
+          text.includes('افزودن به سبد') || // Persian
+          text.includes('إضافة إلى السلة') || // Arabic
+          text.includes('加入购物车') || // Chinese
+          text.includes('장바구니에 추가') || // Korean
+          text.includes('カートに追加') || // Japanese
           el.name === 'add' ||
           el.getAttribute('name') === 'add' ||
           el.closest('form[action*="/cart/add"]') ||
           el.closest('[data-product-form]') ||
           el.closest('.product-form') ||
+          el.closest('.add-to-cart-form') ||
           el.getAttribute('data-action') === 'add-to-cart' ||
+          el.getAttribute('data-testid') === 'add-to-cart' ||
           el.classList.contains('btn-add-to-cart') ||
           el.classList.contains('add-to-cart') ||
+          el.classList.contains('add-to-cart-btn') ||
+          el.classList.contains('product-form__submit') ||
+          el.classList.contains('shopify-payment-button__button') ||
           el.id === 'AddToCart' ||
-          el.getAttribute('id') === 'AddToCart') {
+          el.getAttribute('id') === 'AddToCart' ||
+          el.getAttribute('aria-label')?.includes('add to cart') ||
+          el.getAttribute('title')?.includes('add to cart')) {
 
         // Use requestIdleCallback or setTimeout to ensure we don't block the UI
         var trackAddToCart = function() {
@@ -186,7 +205,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
             product_name: productName,
             price: productPrice,
             quantity: quantity,
-            currency: 'USD' // Default currency, could be detected from page
+            currency: currency
           };
 
           // Trigger the custom add_to_cart event

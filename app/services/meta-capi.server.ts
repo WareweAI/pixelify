@@ -1,8 +1,8 @@
 // Meta Conversions API (CAPI) Service
 import * as crypto from "node:crypto";
 
-const META_GRAPH_API_VERSION = "v24.0";
-const META_GRAPH_API_URL = "https://graph.facebook.com";
+export const META_GRAPH_API_VERSION = "v24.0";
+export const META_GRAPH_API_URL = "https://graph.facebook.com";
 
 export interface MetaEventData {
   event_name: string;

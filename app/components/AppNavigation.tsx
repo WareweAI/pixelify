@@ -36,6 +36,7 @@ export function AppNavigation() {
   return (
     <s-app-nav>
       <s-link href="/app">Dashboard</s-link>
+      <s-link href="/app/catalog">Catalog</s-link>
       <s-link href="/app/analytics">Analytics</s-link>
       <s-link href="/app/custom-events">Custom Events</s-link>
       <s-link href="/app/events">Event Logs</s-link>

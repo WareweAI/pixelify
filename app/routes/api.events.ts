@@ -25,34 +25,45 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
 
     // Build where clause
-    const where: any = { appId: app.id };
+    let whereClause = 'WHERE "appId" = $1';
+    const params: any[] = [app.id];
+
     if (eventName) {
-      where.eventName = eventName;
+      whereClause += ' AND "eventName" = $2';
+      params.push(eventName);
     }
 
     // Get total count
-    const total = await prisma.event.count({ where });
+    const totalQuery = `SELECT COUNT(*) as total FROM "Event" ${whereClause}`;
+    const totalResult = await prisma.$queryRawUnsafe(totalQuery, ...params) as any;
+    const total = parseInt(totalResult[0].total);
 
-    // Get events
-    const events = await prisma.event.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      take: limit,
-      skip: offset,
-      select: {
-        id: true,
-        eventName: true,
-        url: true,
-        city: true,
-        country: true,
-        browser: true,
-        deviceType: true,
-        customData: true,
-        createdAt: true,
+    // Get events with raw SQL for better performance
+    const eventsQuery = `
+      SELECT
+        "id",
+        "eventName",
+        "url",
+        "city",
+        "country",
+        "browser",
+        "deviceType",
+        "customData",
+        "createdAt"
+      FROM "Event"
+      ${whereClause}
+      ORDER BY "createdAt" DESC
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+    `;
+
+    params.push(limit, offset);
+    const events = await prisma.$queryRawUnsafe(eventsQuery, ...params) as any;
+
+    return Response.json({ events, total }, {
+      headers: {
+        'Cache-Control': 'public, max-age=60', // Cache for 1 minute
       },
     });
-
-    return Response.json({ events, total });
   } catch (error) {
     console.error('Events API error:', error);
     return Response.json({ error: 'Internal error' }, { status: 500 });

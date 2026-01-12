@@ -42,8 +42,8 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       shop: shop
     });
 
-    // Route: /apps/proxy/pixel-api/get-pixel-id
-    if (path === "pixel-api/get-pixel-id" || path.startsWith("pixel-api/get-pixel-id")) {
+    // Route: /apps/proxy/get-pixel-id (proxied from /apps/pixel-api/get-pixel-id)
+    if (path === "get-pixel-id" || path.startsWith("get-pixel-id")) {
       const shopDomain = url.searchParams.get("shop");
       
       if (!shopDomain) {

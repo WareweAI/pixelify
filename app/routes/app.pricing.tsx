@@ -144,7 +144,7 @@ export default function PricingPage() {
       id: "free",
       name: "Free",
       price: "$0",
-      period: "foever",
+      period: "forever",
       description: "Perfect for testing and small stores",
       features: [
         "1 Pixel",
@@ -375,4 +375,3 @@ export default function PricingPage() {
 }
 
 export const headers = (headersArgs: any) => boundary.headers(headersArgs);
-

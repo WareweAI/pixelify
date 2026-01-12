@@ -21,19 +21,92 @@ import {
   Modal,
   Divider,
   Badge,
+  DataTable,
 } from "@shopify/polaris";
-import { CheckIcon, ConnectIcon } from "@shopify/polaris-icons";
+import { CheckIcon, ConnectIcon, ExportIcon } from "@shopify/polaris-icons";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopify = getShopifyInstance();
-  
+
   if (!shopify?.authenticate) {
     console.error("Shopify not configured in app.dashboard loader");
     throw new Response("Shopify configuration not found", { status: 500 });
   }
 
-  const { session } = await shopify.authenticate.admin(request);
+  let session, admin;
+  try {
+    const authResult = await shopify.authenticate.admin(request);
+    session = authResult.session;
+    admin = authResult.admin;
+  } catch (error) {
+    // If it's a redirect response (302), re-throw it for proper redirect handling
+    if (error instanceof Response && error.status === 302) {
+      throw error;
+    }
+    console.error("Authentication error:", error);
+    // Otherwise, treat as database/server error
+    throw new Response("Unable to authenticate. Database connection may be unavailable. Please try again later.", { status: 503 });
+  }
   const shop = session.shop;
+  
+  // Handle charge approval redirect AFTER authentication
+  const chargeId = new URL(request.url).searchParams.get('charge_id');
+  if (chargeId) {
+    console.log(`✅ Charge approved for shop ${shop}, charge_id: ${chargeId}`);
+    
+    // Fetch current subscription from Shopify to update plan
+    try {
+      const response = await admin.graphql(`
+        query {
+          appInstallation {
+            activeSubscriptions {
+              id
+              name
+              status
+            }
+          }
+        }
+      `);
+
+      const data = await response.json() as any;
+      const activeSubscriptions = data?.data?.appInstallation?.activeSubscriptions || [];
+
+      if (activeSubscriptions.length > 0) {
+        const activeSubscription = activeSubscriptions.find((sub: any) =>
+          sub.status === 'ACTIVE' || sub.status === 'active'
+        );
+
+        if (activeSubscription) {
+          // Only recognize Free, Basic, and Advance plans
+          const shopifyPlanName = activeSubscription.name;
+          let currentPlan = 'Free';
+          
+          if (shopifyPlanName === 'Free' || shopifyPlanName === 'Basic' || shopifyPlanName === 'Advance') {
+            currentPlan = shopifyPlanName;
+          }
+
+          // Update plan in database
+          const user = await prisma.user.findUnique({ where: { storeUrl: shop } });
+          if (user) {
+            await prisma.app.updateMany({
+              where: { userId: user.id },
+              data: { plan: currentPlan },
+            });
+            console.log(`✅ Updated plan to ${currentPlan} after charge approval`);
+          }
+        }
+      }
+    } catch (error: any) {
+      console.error('⚠️ Failed to update plan after charge approval:', error);
+    }
+    
+    // Redirect to dashboard without charge_id to avoid showing it in URL
+    const { redirect } = await import("react-router");
+    throw redirect("/app/dashboard");
+  }
+  const url = new URL(request.url);
+  const purchaseOffset = parseInt(url.searchParams.get('purchaseOffset') || '0');
+  const purchaseLimit = 10;
 
   let user = await prisma.user.findUnique({
     where: { storeUrl: shop },
@@ -64,19 +137,32 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const totalEvents = apps.reduce((sum: any, app: { _count: { events: any; }; }) => sum + app._count.events, 0);
   const totalSessions = apps.reduce((sum: any, app: { _count: { analyticsSessions: any; }; }) => sum + app._count.analyticsSessions, 0);
 
-  // Get recent events across all apps (last 7 days)
+  // Get recent purchase events across all apps (last 7 days)
   const sevenDaysAgo = new Date();
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-  const recentEvents = await prisma.event.findMany({
+  // Get total count for pagination
+  const totalPurchaseEvents = await prisma.event.count({
     where: {
       app: {
         userId: user.id,
       },
+      eventName: "Purchase",
+      createdAt: { gte: sevenDaysAgo },
+    },
+  });
+
+  const recentPurchaseEvents = await prisma.event.findMany({
+    where: {
+      app: {
+        userId: user.id,
+      },
+      eventName: "Purchase",
       createdAt: { gte: sevenDaysAgo },
     },
     orderBy: { createdAt: "desc" },
-    take: 10,
+    take: purchaseLimit,
+    skip: purchaseOffset,
     include: {
       app: {
         select: { name: true, appId: true },
@@ -96,8 +182,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
-  return { 
-    apps, 
+  return {
+    apps,
     hasPixels: apps.length > 0,
     stats: {
       totalPixels,
@@ -105,14 +191,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       totalSessions,
       todayEvents,
     },
-    recentEvents: recentEvents.map((e: { id: any; eventName: any; url: any; app: { name: any; appId: any; }; createdAt: any; }) => ({
+    recentPurchaseEvents: recentPurchaseEvents.map((e: any) => ({
       id: e.id,
-      eventName: e.eventName,
-      url: e.url,
-      appName: e.app.name,
-      appId: e.app.appId,
-      createdAt: e.createdAt,
+      orderId: e.customData?.order_id || e.productId || '-',
+      value: e.value || (typeof e.customData?.value === 'number' ? e.customData.value : parseFloat(e.customData?.value) || null),
+      currency: e.currency || e.customData?.currency || 'USD',
+      pixelId: e.app.appId,
+      source: e.utmSource || '-',
+      purchaseTime: e.createdAt,
     })),
+    totalPurchaseEvents,
+    purchaseOffset,
+    purchaseLimit,
   };
 };
 
@@ -488,7 +578,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function DashboardPage() {
-  const { apps, hasPixels, stats, recentEvents } = useLoaderData<typeof loader>();
+  const { apps, hasPixels, stats, recentPurchaseEvents, totalPurchaseEvents, purchaseOffset, purchaseLimit } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
   const [searchParams] = useSearchParams();
   const [mounted, setMounted] = useState(false);
@@ -572,6 +662,10 @@ export default function DashboardPage() {
     accessToken: "",
   });
 
+  // Purchase reports search state
+  const [purchaseSearchTerm, setPurchaseSearchTerm] = useState("");
+  const [currentPurchaseOffset, setCurrentPurchaseOffset] = useState(0);
+
   // Create form state (for manual pixel creation)
   const [createForm, setCreateForm] = useState({
     name: "",
@@ -584,10 +678,29 @@ export default function DashboardPage() {
 
   const isLoading = fetcher.state !== "idle";
 
+  // Filter purchase events based on search term
+  const filteredPurchaseEvents = recentPurchaseEvents.filter((event: any) => {
+    if (!purchaseSearchTerm) return true;
+
+    const searchLower = purchaseSearchTerm.toLowerCase();
+    return (
+      event.orderId.toLowerCase().includes(searchLower) ||
+      event.pixelId.toLowerCase().includes(searchLower) ||
+      event.source.toLowerCase().includes(searchLower) ||
+      event.currency.toLowerCase().includes(searchLower) ||
+      (event.value && event.value.toString().includes(searchLower))
+    );
+  });
+
   // Mark component as mounted to prevent hydration mismatch
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // Sync offset with loader data
+  useEffect(() => {
+    setCurrentPurchaseOffset(purchaseOffset);
+  }, [purchaseOffset]);
 
   // Function to fetch pixels using Facebook SDK (3-step approach)
   const fetchPixelsWithSDK = useCallback((accessToken: string) => {
@@ -869,7 +982,7 @@ export default function DashboardPage() {
   }, [fetcher, pixelForm, inputMethod, facebookAccessToken]);
 
   const handleConnectToFacebook = useCallback(() => {
-    const scope = "ads_read,business_management,ads_management,pages_show_list,pages_read_engagement";
+    const scope = "ads_read,business_management,ads_management,pages_show_list,pages_read_engagement,catalog_management";
     
     // Check if Facebook SDK is loaded
     if ((window as any).FB) {
@@ -1396,7 +1509,43 @@ export default function DashboardPage() {
             <BlockStack gap="400">
               <InlineStack align="space-between" blockAlign="center">
                 <Text variant="headingLg" as="h2">Your Facebook Pixels</Text>
-                <Text as="h1" fontWeight="bold">Manage All Pixels</Text>
+                <InlineStack gap="200">
+                  <Button
+                    icon={ExportIcon}
+                    onClick={() => {
+                      // Create CSV content for pixels
+                      const headers = ['Name', 'Pixel ID', 'Events', 'Sessions', 'Status', 'Meta Connected'];
+                      const csvContent = [
+                        headers.join(','),
+                        ...apps.map((app: any) => {
+                          const { name, settings, _count, enabled } = app;
+                          return [
+                            `"${name}"`,
+                            `"${settings?.metaPixelId || 'N/A'}"`,
+                            `"${_count.events.toLocaleString()}"`,
+                            `"${_count.analyticsSessions.toLocaleString()}"`,
+                            `"${enabled ? 'Enabled' : 'Disabled'}"`,
+                            `"${settings?.metaPixelEnabled ? 'Yes' : 'No'}"`
+                          ].join(',');
+                        })
+                      ].join('\n');
+
+                      // Create and download CSV file
+                      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                      const link = document.createElement('a');
+                      const url = URL.createObjectURL(blob);
+                      link.setAttribute('href', url);
+                      link.setAttribute('download', `pixels-report-${new Date().toISOString().split('T')[0]}.csv`);
+                      link.style.visibility = 'hidden';
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                    }}
+                  >
+                    Export CSV
+                  </Button>
+                  <Text as="h1" fontWeight="bold">Manage All Pixels</Text>
+                </InlineStack>
               </InlineStack>
               
               <Card>
@@ -1458,32 +1607,120 @@ export default function DashboardPage() {
             </BlockStack>
           </Layout.Section>
 
-          {/* Recent Events */}
-          {recentEvents.length > 0 && (
+          {/* Recent Purchase Events */}
+          {recentPurchaseEvents.length > 0 && (
             <Layout.Section>
               <Card>
                 <BlockStack gap="400">
-                  <Text variant="headingMd" as="h3">Recent Events</Text>
-                  <BlockStack gap="200">
-                    {recentEvents.map((event: any) => (
-                      <InlineStack key={event.id} align="space-between" blockAlign="center">
-                        <BlockStack gap="100">
-                          <InlineStack gap="200" blockAlign="center">
-                            <Badge>{event.eventName}</Badge>
-                            <Text as="p" variant="bodySm" tone="subdued">{event.appName}</Text>
-                          </InlineStack>
-                          {event.url && (
-                            <Text as="p" variant="bodySm" tone="subdued">
-                              {new URL(event.url).pathname}
-                            </Text>
-                          )}
-                        </BlockStack>
-                        <Text as="p" variant="bodySm" tone="subdued">
-                          {new Date(event.createdAt).toLocaleString()}
-                        </Text>
-                      </InlineStack>
-                    ))}
-                  </BlockStack>
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text variant="headingMd" as="h3">Recent Purchase Reports</Text>
+                    <InlineStack gap="200" blockAlign="center">
+                      <Button
+                        icon={ExportIcon}
+                        onClick={() => {
+                          // Create CSV content
+                          const headers = ['Order ID', 'Value', 'Currency', 'Pixel ID', 'Source', 'Purchase Time'];
+                          const csvContent = [
+                            headers.join(','),
+                            ...filteredPurchaseEvents.map(event => [
+                              `"${event.orderId}"`,
+                              event.value ? `"$${event.value.toFixed(2)}"` : '""',
+                              `"${event.currency}"`,
+                              `"${event.pixelId}"`,
+                              `"${event.source}"`,
+                              `"${new Date(event.purchaseTime).toLocaleString()}"`
+                            ].join(','))
+                          ].join('\n');
+
+                          // Create and download CSV file
+                          const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                          const link = document.createElement('a');
+                          const url = URL.createObjectURL(blob);
+                          link.setAttribute('href', url);
+                          link.setAttribute('download', `purchase-report-${new Date().toISOString().split('T')[0]}.csv`);
+                          link.style.visibility = 'hidden';
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                        }}
+                      >
+                        Export CSV
+                      </Button>
+                      <div style={{ width: "300px" }}>
+                        <TextField
+                          label=""
+                          value={purchaseSearchTerm}
+                          onChange={setPurchaseSearchTerm}
+                          placeholder="Search orders, pixels, sources..."
+                          autoComplete="off"
+                          clearButton
+                          onClearButtonClick={() => setPurchaseSearchTerm("")}
+                        />
+                      </div>
+                    </InlineStack>
+                  </InlineStack>
+
+                  <DataTable
+                    columnContentTypes={['text', 'numeric', 'text', 'text', 'text', 'text']}
+                    headings={['Order ID', 'Value', 'Currency', 'Pixel ID', 'Source', 'Purchase Time']}
+                    rows={filteredPurchaseEvents.map((event: any) => [
+                      <Text key={`order-${event.id}`} variant="bodyMd" fontWeight="medium" as="span">
+                        {event.orderId}
+                      </Text>,
+                      <Text key={`value-${event.id}`} variant="bodyMd" fontWeight="medium" as="span">
+                        {(() => {
+                          const val = event.value;
+                          if (typeof val === 'number' && !isNaN(val)) {
+                            return `$${val.toFixed(2)}`;
+                          }
+                          return '-';
+                        })()}
+                      </Text>,
+                      <Badge key={`currency-${event.id}`} tone="success">{event.currency}</Badge>,
+                      <Text key={`pixel-${event.id}`} variant="bodySm" tone="subdued" as="span">
+                        {event.pixelId}
+                      </Text>,
+                      <Text key={`source-${event.id}`} variant="bodySm" tone="subdued" as="span">
+                        {event.source}
+                      </Text>,
+                      <Text key={`time-${event.id}`} variant="bodySm" tone="subdued" as="span">
+                        {new Date(event.purchaseTime).toLocaleString()}
+                      </Text>
+                    ])}
+                  />
+
+                  {totalPurchaseEvents > purchaseLimit && (
+                    <InlineStack align="center" gap="200">
+                      <Button
+                        disabled={currentPurchaseOffset === 0}
+                        onClick={() => {
+                          const newOffset = Math.max(0, currentPurchaseOffset - purchaseLimit);
+                          window.location.href = `/app/dashboard?purchaseOffset=${newOffset}`;
+                        }}
+                      >
+                        Previous
+                      </Button>
+                      <Text as="span" tone="subdued">
+                        Page {Math.floor(currentPurchaseOffset / purchaseLimit) + 1} of {Math.ceil(totalPurchaseEvents / purchaseLimit)}
+                      </Text>
+                      <Button
+                        disabled={currentPurchaseOffset + purchaseLimit >= totalPurchaseEvents}
+                        onClick={() => {
+                          const newOffset = currentPurchaseOffset + purchaseLimit;
+                          window.location.href = `/app/dashboard?purchaseOffset=${newOffset}`;
+                        }}
+                      >
+                        Next
+                      </Button>
+                    </InlineStack>
+                  )}
+
+                  <Text variant="bodySm" tone="subdued" as="p">
+                    Report shows purchase events from the last 7 days across all your Facebook pixels.
+                    {filteredPurchaseEvents.length !== recentPurchaseEvents.length &&
+                      ` Showing ${filteredPurchaseEvents.length} of ${recentPurchaseEvents.length} purchases.`
+                    }
+                  </Text>
                 </BlockStack>
               </Card>
             </Layout.Section>
@@ -2790,7 +3027,7 @@ export default function DashboardPage() {
                     1. Go to <a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noopener noreferrer" style={{color: "#2563eb"}}>Facebook Graph API Explorer</a>
                   </Text>
                   <Text as="p" variant="bodySm">
-                    2. Select your app and generate a token with <code>ads_read</code>, <code>business_management</code>, <code>ads_management</code>, <code>pages_show_list</code>, <code>pages_read_engagement</code> permissions
+                    2. Select your app and generate a token with <code>ads_read</code>, <code>business_management</code>, <code>ads_management</code>, <code>pages_show_list</code>, <code>pages_read_engagement</code>, <code>catalog_management</code> permissions
                   </Text>
                   <Text as="p" variant="bodySm">
                     3. Copy and paste the token above
@@ -2800,7 +3037,7 @@ export default function DashboardPage() {
             </Card>
 
             <Banner tone="info">
-              <p><strong>Required Permissions:</strong> Your Facebook app needs <code>ads_read</code>, <code>business_management</code>, <code>ads_management</code>, <code>pages_show_list</code>, <code>pages_read_engagement</code> permissions to access pixel data.</p>
+              <p><strong>Required Permissions:</strong> Your Facebook app needs <code>ads_read</code>, <code>business_management</code>, <code>ads_management</code>, <code>pages_show_list</code>, <code>pages_read_engagement</code>, <code>catalog_management</code> permissions to access pixel data and manage product catalogs.</p>
             </Banner>
           </BlockStack>
         </Modal.Section>
@@ -2808,3 +3045,4 @@ export default function DashboardPage() {
     </div>
   );
 }
+

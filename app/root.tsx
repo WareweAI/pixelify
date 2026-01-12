@@ -12,10 +12,9 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { getShopifyInstance } from "./shopify.server";
 import prisma from "./db.server";
 
-import tailwindStyles from "./styles/tailwind.css?url";
+import "./styles/tailwind.css";
 
 export const links: LinksFunction = () => [
-  { rel: "stylesheet", href: tailwindStyles as string },
   { rel: "preconnect", href: "https://cdn.shopify.com/" },
   {
     rel: "stylesheet",

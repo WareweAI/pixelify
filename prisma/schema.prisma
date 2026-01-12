@@ -85,6 +85,7 @@ model Event {
 
   @@index([appId, createdAt])
   @@index([eventName])
+  @@index([appId, eventName, createdAt])
   @@index([country])
   @@index([deviceType])
 }
@@ -185,6 +186,13 @@ model AppSettings {
   metaTestEventCode  String?
   metaVerified       Boolean @default(false)
   timezone           String? @default("GMT+0")
+
+  // Facebook Catalog settings
+  facebookCatalogId        String?
+  facebookCatalogEnabled   Boolean @default(false)
+  facebookCatalogSyncStatus String?
+  facebookCatalogLastSync  DateTime?
+
   app                App     @relation(fields: [appId], references: [id])
 }
 

@@ -27,7 +27,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (!shopify?.authenticate) {
     throw new Response("Shopify configuration not found", { status: 500 });
   }
-  const { session } = await shopify.authenticate.admin(request);
+  const { session, admin } = await shopify.authenticate.admin(request);
   const shop = session.shop;
 
   const user = await db.user.findUnique({ where: { storeUrl: shop } });
@@ -63,10 +63,96 @@ export async function loader({ request }: LoaderFunctionArgs) {
     throw new Response("App not found for this shop", { status: 404 });
   }
 
+  // Get current plan from Shopify GraphQL API (source of truth)
+  let currentPlan = app.plan || 'Free';
+  
+  try {
+    const response = await admin.graphql(`
+      query {
+        appInstallation {
+          activeSubscriptions {
+            id
+            name
+            status
+          }
+        }
+      }
+    `);
+
+    const data = await response.json() as any;
+    const activeSubscriptions = data?.data?.appInstallation?.activeSubscriptions || [];
+
+    if (activeSubscriptions.length > 0) {
+      const activeSubscription = activeSubscriptions.find((sub: any) =>
+        sub.status === 'ACTIVE' || sub.status === 'active'
+      );
+
+      if (activeSubscription) {
+        // Only recognize Free, Basic, and Advance plans
+        const shopifyPlanName = activeSubscription.name;
+        
+        // Normalize plan name - only accept exact matches for Free, Basic, or Advance
+        if (shopifyPlanName === 'Free' || shopifyPlanName === 'Basic' || shopifyPlanName === 'Advance') {
+          currentPlan = shopifyPlanName;
+        } else {
+          // Any other plan name defaults to Free
+          currentPlan = 'Free';
+        }
+        
+        // Update database if plan changed
+        if (currentPlan !== app.plan) {
+          await db.app.update({
+            where: { id: app.id },
+            data: { plan: currentPlan },
+          });
+          console.log(`✅ Updated plan in database: ${app.plan} → ${currentPlan} for shop ${shop}`);
+        }
+      } else {
+        // No active subscription = Free plan
+        currentPlan = 'Free';
+        if (app.plan !== 'Free') {
+          await db.app.update({
+            where: { id: app.id },
+            data: { plan: 'Free' },
+          });
+          console.log(`✅ Updated plan to Free (no active subscription) for shop ${shop}`);
+        }
+      }
+    } else {
+      // No subscriptions = Free plan
+      currentPlan = 'Free';
+      if (app.plan !== 'Free') {
+        await db.app.update({
+          where: { id: app.id },
+          data: { plan: 'Free' },
+        });
+        console.log(`✅ Updated plan to Free (no subscriptions) for shop ${shop}`);
+      }
+    }
+  } catch (error: any) {
+    console.error('⚠️ Failed to fetch plan from Shopify GraphQL, using database plan:', error);
+    // Fallback to database plan if GraphQL fails
+    currentPlan = app.plan || 'Free';
+  }
+
+  // Determine access based on plan - only Free, Basic, and Advance are valid
+  // Ensure plan is one of the three valid plans
+  if (currentPlan !== 'Free' && currentPlan !== 'Basic' && currentPlan !== 'Advance') {
+    currentPlan = 'Free';
+  }
+  
+  const isFreePlan = currentPlan === 'Free';
+  const hasAccess = currentPlan === 'Basic' || currentPlan === 'Advance';
+
+  console.log(`📊 Custom Events Access Check - Shop: ${shop}, Plan: ${currentPlan}, Has Access: ${hasAccess}`);
+
   return Response.json({
     app,
     customEvents: app.customEvents,
     shop,
+    plan: currentPlan,
+    isFreePlan,
+    hasAccess,
   });
 }
 
@@ -97,6 +183,74 @@ export async function action({ request }: ActionFunctionArgs) {
 
       if (!app) {
         return Response.json({ success: false, error: "App not found for this shop" }, { status: 404 });
+      }
+
+      // Get current plan from Shopify GraphQL API (source of truth)
+      let currentPlan = app.plan || 'Free';
+      
+      try {
+        const { admin } = await shopify.authenticate.admin(request);
+        const response = await admin.graphql(`
+          query {
+            appInstallation {
+              activeSubscriptions {
+                id
+                name
+                status
+              }
+            }
+          }
+        `);
+
+        const data = await response.json() as any;
+        const activeSubscriptions = data?.data?.appInstallation?.activeSubscriptions || [];
+
+        if (activeSubscriptions.length > 0) {
+          const activeSubscription = activeSubscriptions.find((sub: any) =>
+            sub.status === 'ACTIVE' || sub.status === 'active'
+          );
+
+          if (activeSubscription) {
+            // Only recognize Free, Basic, and Advance plans
+            const shopifyPlanName = activeSubscription.name;
+            
+            // Normalize plan name - only accept exact matches for Free, Basic, or Advance
+            if (shopifyPlanName === 'Free' || shopifyPlanName === 'Basic' || shopifyPlanName === 'Advance') {
+              currentPlan = shopifyPlanName;
+            } else {
+              // Any other plan name defaults to Free
+              currentPlan = 'Free';
+            }
+            
+            // Update database if plan changed
+            if (currentPlan !== app.plan) {
+              await db.app.update({
+                where: { id: app.id },
+                data: { plan: currentPlan },
+              });
+            }
+          } else {
+            currentPlan = 'Free';
+          }
+        } else {
+          currentPlan = 'Free';
+        }
+      } catch (error: any) {
+        console.error('⚠️ Failed to fetch plan from Shopify GraphQL in action, using database plan:', error);
+        currentPlan = app.plan || 'Free';
+      }
+
+      // Ensure plan is one of the three valid plans (Free, Basic, Advance)
+      if (currentPlan !== 'Free' && currentPlan !== 'Basic' && currentPlan !== 'Advance') {
+        currentPlan = 'Free';
+      }
+      
+      // Block Free plan users from all actions
+      if (currentPlan === 'Free') {
+        return Response.json({ 
+          success: false, 
+          error: "Custom events are only available for Basic and Advance plans. Please upgrade to access this feature." 
+        }, { status: 403 });
       }
 
     if (action === "create") {
@@ -393,6 +547,9 @@ type LoaderData = {
   app: any;
   customEvents: any[];
   shop: string;
+  plan: string;
+  isFreePlan: boolean;
+  hasAccess: boolean;
 };
 
 type ActionData = {
@@ -402,7 +559,7 @@ type ActionData = {
 } | undefined;
 
 export default function CustomEvents() {
-  const { app, customEvents } = useLoaderData<LoaderData>();
+  const { app, customEvents, shop, plan, isFreePlan, hasAccess } = useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
   const navigation = useNavigation();
   const isLoading = navigation.state === "submitting";
@@ -429,6 +586,28 @@ export default function CustomEvents() {
   });
   const [jsonError, setJsonError] = useState<string>("");
   const [testLoading, setTestLoading] = useState(false);
+
+  const redirectToShopifyPricing = () => {
+    const storeHandle = shop.replace('.myshopify.com', '');
+    const appHandle = "pixelify-tracker";
+    const baseUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
+
+    try {
+      if (window.top && window.top !== window) {
+        window.top.location.href = baseUrl;
+      } else {
+        window.location.href = baseUrl;
+      }
+    } catch (e) {
+      // Fallback if top access fails
+      const form = document.createElement('form');
+      form.method = 'GET';
+      form.action = baseUrl;
+      form.target = '_top';
+      document.body.appendChild(form);
+      form.submit();
+    }
+  };
 
   // Close modal when event is successfully created/updated
   useEffect(() => {
@@ -803,10 +982,312 @@ export default function CustomEvents() {
     </ButtonGroup>
   ]);
 
+  // Demo data for free plan users
+  const demoCustomEvents = [
+    {
+      id: "demo-1",
+      displayName: "Add to Wishlist",
+      name: "wishlist_add",
+      description: "Tracks when users add items to their wishlist",
+      eventType: "click",
+      selector: ".wishlist-btn, .add-to-wishlist",
+      pageType: "product",
+      metaEventName: "AddToCart",
+      isActive: true,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: "demo-2",
+      displayName: "Newsletter Signup",
+      name: "newsletter_signup",
+      description: "Tracks newsletter form submissions",
+      eventType: "submit",
+      selector: "#newsletter-form, .newsletter-form",
+      pageType: "all",
+      metaEventName: "Lead",
+      isActive: true,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: "demo-3",
+      displayName: "Size Guide View",
+      name: "size_guide_view",
+      description: "Tracks when users view size guides",
+      eventType: "click",
+      selector: ".size-guide-btn, .size-guide-link",
+      pageType: "product",
+      metaEventName: "ViewContent",
+      isActive: false,
+      createdAt: new Date().toISOString(),
+    },
+  ];
+
+  // Show demo view for Free plan users
+  if (isFreePlan || !hasAccess) {
+    return (
+      <Page
+        title="Custom Events - Premium Feature"
+        subtitle="Track user interactions and send them to Facebook (adblocker-proof!)"
+      >
+        <Layout>
+          {/* Demo Banner */}
+          <Layout.Section>
+            <div style={{
+              background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
+              border: '2px solid #0ea5e9',
+              borderRadius: '12px',
+              padding: '24px',
+              textAlign: 'center',
+              marginBottom: '24px'
+            }}>
+              <div style={{ fontSize: '48px', marginBottom: '16px' }}>🎯</div>
+              <h2 style={{ margin: '0 0 8px 0', color: '#0c4a6e', fontSize: '24px', fontWeight: '700' }}>
+                Custom Events - Premium Feature
+              </h2>
+              <p style={{ margin: '0 0 20px 0', color: '#0369a1', fontSize: '16px' }}>
+                Complete the onboarding and select a plan to unlock the features.
+              </p>
+              <p style={{ margin: '0 0 24px 0', color: '#64748b', fontSize: '14px', fontStyle: 'italic' }}>
+                Note: The data shown in this demo is simulated for demonstration purposes only.
+              </p>
+              <Button
+                variant="primary"
+                size="large"
+                onClick={redirectToShopifyPricing}
+              >
+                Continue to Pricing Plans
+              </Button>
+            </div>
+          </Layout.Section>
+
+          {/* Demo Stats */}
+          <Layout.Section>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+              <div style={{
+                background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
+                padding: '20px',
+                borderRadius: '12px',
+                border: '1px solid #e2e8f0',
+                textAlign: 'center',
+                opacity: 0.7
+              }}>
+                <div style={{ fontSize: '32px', fontWeight: '700', color: '#1e40af', marginBottom: '4px' }}>
+                  3
+                </div>
+                <div style={{ fontSize: '14px', color: '#64748b', fontWeight: '500' }}>Total Events</div>
+              </div>
+
+              <div style={{
+                background: 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)',
+                padding: '20px',
+                borderRadius: '12px',
+                border: '1px solid #10b981',
+                textAlign: 'center',
+                opacity: 0.7
+              }}>
+                <div style={{ fontSize: '32px', fontWeight: '700', color: '#059669', marginBottom: '4px' }}>
+                  2
+                </div>
+                <div style={{ fontSize: '14px', color: '#065f46', fontWeight: '500' }}>Active Events</div>
+              </div>
+
+              <div style={{
+                background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+                padding: '20px',
+                borderRadius: '12px',
+                border: '1px solid #f59e0b',
+                textAlign: 'center',
+                opacity: 0.7
+              }}>
+                <div style={{ fontSize: '32px', fontWeight: '700', color: '#d97706', marginBottom: '4px' }}>
+                  3
+                </div>
+                <div style={{ fontSize: '14px', color: '#92400e', fontWeight: '500' }}>Auto Events</div>
+              </div>
+
+              <div style={{
+                background: 'linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%)',
+                padding: '20px',
+                borderRadius: '12px',
+                border: '1px solid #6366f1',
+                textAlign: 'center',
+                opacity: 0.7
+              }}>
+                <div style={{ fontSize: '32px', fontWeight: '700', color: '#4f46e5', marginBottom: '4px' }}>
+                  0
+                </div>
+                <div style={{ fontSize: '14px', color: '#3730a3', fontWeight: '500' }}>Manual Events</div>
+              </div>
+            </div>
+          </Layout.Section>
+
+          {/* Demo Events Table */}
+          <Layout.Section>
+            <Card>
+              <div style={{ padding: '0' }}>
+                <div style={{
+                  padding: '20px 24px',
+                  borderBottom: '1px solid #e2e8f0',
+                  background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <h3 style={{ margin: '0 0 4px 0', fontSize: '18px', fontWeight: '600', color: '#1e293b' }}>
+                        📊 Demo Custom Events
+                      </h3>
+                      <p style={{ margin: 0, fontSize: '14px', color: '#64748b' }}>
+                        Preview of what you can achieve with custom events
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ overflow: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                        <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          Event
+                        </th>
+                        <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Type</th>
+                        <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Trigger</th>
+                        <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Facebook Event</th>
+                        <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {demoCustomEvents.map((event: any, index: number) => (
+                        <tr key={event.id} style={{
+                          borderBottom: '1px solid #f1f5f9',
+                          backgroundColor: index % 2 === 0 ? 'white' : '#fafafa',
+                          opacity: 0.8
+                        }}>
+                          <td style={{ padding: '20px 24px' }}>
+                            <div>
+                              <div style={{ fontWeight: '600', color: '#1e293b', marginBottom: '4px' }}>
+                                {event.displayName}
+                              </div>
+                              <div style={{ fontSize: '13px', color: '#64748b', fontFamily: 'monospace' }}>
+                                {event.name}
+                              </div>
+                              {event.description && (
+                                <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px' }}>
+                                  {event.description}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td style={{ padding: '20px 24px' }}>
+                            <div style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              padding: '4px 8px',
+                              borderRadius: '6px',
+                              fontSize: '12px',
+                              fontWeight: '500',
+                              backgroundColor: '#dbeafe',
+                              color: '#1e40af'
+                            }}>
+                              <span>🎯</span>
+                              Auto
+                            </div>
+                          </td>
+                          <td style={{ padding: '20px 24px' }}>
+                            <div>
+                              <div style={{ fontSize: '13px', color: '#1e293b', fontWeight: '500' }}>
+                                {event.eventType}
+                              </div>
+                              <div style={{ fontSize: '12px', color: '#64748b', fontFamily: 'monospace', marginTop: '2px' }}>
+                                {event.selector}
+                              </div>
+                            </div>
+                          </td>
+                          <td style={{ padding: '20px 24px' }}>
+                            <div style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              padding: '4px 8px',
+                              borderRadius: '6px',
+                              fontSize: '12px',
+                              fontWeight: '500',
+                              backgroundColor: '#f0f9ff',
+                              color: '#0369a1'
+                            }}>
+                              <span>📘</span>
+                              {event.metaEventName}
+                            </div>
+                          </td>
+                          <td style={{ padding: '20px 24px' }}>
+                            <div style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              padding: '6px 10px',
+                              borderRadius: '20px',
+                              fontSize: '12px',
+                              fontWeight: '600',
+                              backgroundColor: event.isActive ? '#dcfce7' : '#fee2e2',
+                              color: event.isActive ? '#166534' : '#991b1b'
+                            }}>
+                              <div style={{
+                                width: '6px',
+                                height: '6px',
+                                borderRadius: '50%',
+                                backgroundColor: event.isActive ? '#22c55e' : '#ef4444'
+                              }}></div>
+                              {event.isActive ? 'Active' : 'Inactive'}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </Card>
+          </Layout.Section>
+
+          {/* Call to Action */}
+          <Layout.Section>
+            <Card>
+              <div style={{
+                padding: '32px',
+                textAlign: 'center',
+                background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)'
+              }}>
+                <div style={{ fontSize: '48px', marginBottom: '16px' }}>🚀</div>
+                <h3 style={{ margin: '0 0 16px 0', color: '#1e293b', fontSize: '20px', fontWeight: '600' }}>
+                  Ready to Unlock Custom Events?
+                </h3>
+                <p style={{ margin: '0 0 24px 0', color: '#64748b', fontSize: '16px' }}>
+                  Upgrade to a paid plan to create unlimited custom events and track any user interaction on your store.
+                </p>
+                <Button
+                  variant="primary"
+                  size="large"
+                  onClick={redirectToShopifyPricing}
+                >
+                  View Pricing Plans
+                </Button>
+              </div>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
+
+  // Only show full UI for Basic/Advance plan users
+  if (!hasAccess) {
+    return null;
+  }
+
   return (
     <Page
       title="Custom Events"
-      subtitle="Track user interactions and send them to Facebook (adblocker-proof!)"
+      subtitle={`Track user interactions and send them to Facebook (adblocker-proof!) - ${plan} Plan`}
       primaryAction={{
         content: "✨ Create Event",
         onAction: handleModalToggle
@@ -1345,8 +1826,10 @@ export default function CustomEvents() {
                           />
                         </th>
                         <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Event</th>
+                        <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Name</th>
                         <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Type</th>
                         <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Trigger</th>
+                        <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Page</th>
                         <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Facebook Event</th>
                         <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Status</th>
                         <th style={{ padding: '16px 24px', textAlign: 'right', fontSize: '12px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Actions</th>

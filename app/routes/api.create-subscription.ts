@@ -3,6 +3,9 @@ import { authenticate } from "../shopify.server";
 import { sendPlanPurchaseEmail } from "../services/email.server";
 import db from "../db.server";
 
+// Server-only route - no client bundle needed
+export const clientLoader = undefined;
+
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
 
@@ -16,7 +19,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   try {
     const response = await admin.graphql(`
       mutation appSubscriptionCreate($name: String!, $lineItems: [AppSubscriptionLineItemInput!]!) {
-        appSubscriptionCreate(name: $name, lineItems: $lineItems, returnUrl: "${process.env.SHOPIFY_APP_URL}/app/pricing") {
+        appSubscriptionCreate(name: $name, lineItems: $lineItems, returnUrl: "${process.env.SHOPIFY_APP_URL}/app/dashboard") {
           confirmationUrl
           userErrors {
             field
@@ -42,10 +45,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const data = await response.json();
 
     if (data.data?.appSubscriptionCreate?.confirmationUrl) {
-      // Send purchase email
-      if (session.email) {
-        await sendPlanPurchaseEmail(session.email, session.shop, planName);
-      }
+      // Send purchase email - TODO: Implement email sending
+      // if (session.email) {
+      //   await sendPlanPurchaseEmail(session.email, session.shop, planName);
+      // }
 
       // Update app plan in database (though actual subscription happens later)
       // For now, set it to the plan being purchased

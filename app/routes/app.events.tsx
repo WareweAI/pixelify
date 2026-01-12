@@ -62,7 +62,31 @@ export default function EventsPage() {
   const [eventFilter, setEventFilter] = useState("");
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
+  const [eventTypes, setEventTypes] = useState<string[]>([]);
+  const [loadingTypes, setLoadingTypes] = useState(false);
   const limit = 50;
+
+  const appOptions = apps.map((app: { appId: string; name: string }) => ({
+    label: app.name,
+    value: app.appId,
+  }));
+
+  const fetchEventTypes = useCallback(async () => {
+    if (!selectedApp) return;
+
+    setLoadingTypes(true);
+    try {
+      const res = await fetch(`/api/event-types?appId=${selectedApp}`);
+      const data = await res.json();
+      if (data.eventTypes) {
+        setEventTypes(data.eventTypes);
+      }
+    } catch (error) {
+      console.error("Failed to fetch event types:", error);
+    } finally {
+      setLoadingTypes(false);
+    }
+  }, [selectedApp]);
 
   const fetchEvents = useCallback(async () => {
     if (!selectedApp) return;
@@ -89,6 +113,12 @@ export default function EventsPage() {
   }, [selectedApp, eventFilter, offset]);
 
   useEffect(() => {
+    if (selectedApp) {
+      fetchEventTypes();
+    }
+  }, [selectedApp, fetchEventTypes]);
+
+  useEffect(() => {
     fetchEvents();
   }, [fetchEvents]);
 
@@ -96,66 +126,23 @@ export default function EventsPage() {
     setOffset(0);
   }, [selectedApp, eventFilter]);
 
-  const getBadgeTone = (eventName: string) => {
-    switch (eventName) {
-      case "pageview":
-        return "info";
-      case "purchase":
-        return "success";
-      case "addToCart":
-        return "attention";
-      case "initiateCheckout":
-        return "warning";
-      default:
-        return undefined;
-    }
-  };
-
-  const rows = events.map((event) => {
-    let pathname = "-";
-    try {
-      if (event.url) {
-        pathname = new URL(event.url).pathname;
-      }
-    } catch {
-      pathname = event.url || "-";
-    }
-
-    const customDataStr = event.customData ? JSON.stringify(event.customData) : "-";
-
-    return [
-      <Badge key={event.id} tone={getBadgeTone(event.eventName)}>
-        {event.eventName}
-      </Badge>,
-      <Text key={`url-${event.id}`} as="span" truncate>
-        {pathname}
-      </Text>,
-      [event.city, event.country].filter(Boolean).join(", ") || "-",
-      event.browser || "-",
-      event.deviceType || "-",
-      <Text key={`data-${event.id}`} as="span" truncate>
-        {customDataStr}
-      </Text>,
-      new Date(event.createdAt).toLocaleString(),
-    ];
-  });
-
-  const appOptions = apps.map((app: { appId: string; name: string }) => ({
-    label: app.name,
-    value: app.appId,
-  }));
-
   const eventFilterOptions = [
     { label: "All Events", value: "" },
-    { label: "Pageviews", value: "pageview" },
-    { label: "Purchases", value: "purchase" },
-    { label: "Add to Cart", value: "addToCart" },
-    { label: "View Content", value: "viewContent" },
-    { label: "Initiate Checkout", value: "initiateCheckout" },
-    { label: "Lead", value: "lead" },
-    { label: "Search", value: "search" },
-    { label: "Subscribe", value: "subscribe" },
+    ...eventTypes.map(type => ({
+      label: type.charAt(0).toUpperCase() + type.slice(1).replace(/([A-Z])/g, ' $1'),
+      value: type
+    }))
   ];
+
+  const rows = events.map(event => [
+    <Badge key={event.id} tone="info">{event.eventName}</Badge>,
+    event.url || "-",
+    `${event.city || ""} ${event.country ? `(${event.country})` : ""}`.trim() || "-",
+    event.browser || "-",
+    event.deviceType || "-",
+    event.customData ? JSON.stringify(event.customData) : "-",
+    new Date(event.createdAt).toLocaleString(),
+  ]);
 
   if (apps.length === 0) {
     return (
@@ -201,7 +188,14 @@ export default function EventsPage() {
                     options={eventFilterOptions}
                     value={eventFilter}
                     onChange={setEventFilter}
+                    disabled={loadingTypes}
                   />
+                  {loadingTypes && (
+                    <InlineStack gap="200" align="center">
+                      <Spinner size="small" />
+                      <Text as="span" tone="subdued">Loading event types...</Text>
+                    </InlineStack>
+                  )}
                 </div>
                 <div style={{ alignSelf: "flex-end" }}>
                   <Button onClick={fetchEvents} loading={loading}>

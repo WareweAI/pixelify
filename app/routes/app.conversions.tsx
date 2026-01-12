@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import type { LoaderFunctionArgs } from "react-router";
-import { useLoaderData } from "react-router";
+import { useLoaderData, useSearchParams, useNavigate } from "react-router";
 import { getShopifyInstance } from "../shopify.server";
 import prisma from "../db.server";
+import { ConversionsService } from "../services/conversions.server";
 import {
   Page,
   Layout,
@@ -15,6 +16,8 @@ import {
   EmptyState,
   DataTable,
   Divider,
+  Button,
+  Spinner,
 } from "@shopify/polaris";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -27,115 +30,115 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
 
   if (!user) {
-    return { pixels: [], conversions: [], conversionStats: [] };
+    return {
+      pixels: [],
+    };
   }
 
-  const pixels = await prisma.app.findMany({
-    where: { userId: user.id },
-    include: { settings: true },
-  });
-
-  // Get conversion events (purchases, add to cart, etc.)
-  const conversions = await prisma.event.findMany({
-    where: {
-      app: {
-        userId: user.id,
-      },
-      eventName: {
-        in: [
-          'purchase', 'Purchase',
-          'addToCart', 'add_to_cart', 'AddToCart', 
-          'initiateCheckout', 'initiate_checkout', 'InitiateCheckout',
-          'add_payment_info', 'AddPaymentInfo',
-          'viewContent', 'view_content', 'ViewContent',
-          'pageview', 'page_view'
-        ]
-      },
-    },
-    orderBy: { createdAt: 'desc' },
-    take: 100,
-    include: {
-      app: {
-        select: { name: true, appId: true },
-      },
-    },
-  });
-
-  // Calculate conversion metrics
-  const last30Days = new Date();
-  last30Days.setDate(last30Days.getDate() - 30);
-
-  const conversionStats = await prisma.event.groupBy({
-    by: ['eventName'],
-    where: {
-      app: {
-        userId: user.id,
-      },
-      eventName: {
-        in: [
-          'purchase', 'Purchase',
-          'addToCart', 'add_to_cart', 'AddToCart', 
-          'initiateCheckout', 'initiate_checkout', 'InitiateCheckout',
-          'add_payment_info', 'AddPaymentInfo',
-          'viewContent', 'view_content', 'ViewContent',
-          'pageview', 'page_view'
-        ]
-      },
-      createdAt: { gte: last30Days },
-    },
-    _count: true,
-  });
+  const pixels = await ConversionsService.getUserPixels(user.id);
 
   return {
     pixels,
-    conversions: conversions.map((c: any) => ({
-      id: c.id,
-      eventName: c.eventName,
-      url: c.url || '',
-      pixelName: c.app?.name || 'Unknown',
-      createdAt: c.createdAt,
-      value: c.value || null,
-      currency: c.currency || null,
-    })),
-    conversionStats: conversionStats.map((s: any) => ({
-      eventName: s.eventName,
-      count: s._count || 0,
-    })),
   };
 };
 
-export default function ConversionsPage() {
-  const { pixels, conversions, conversionStats } = useLoaderData<typeof loader>();
-  const [selectedPixel, setSelectedPixel] = useState("all");
-  const [timeRange, setTimeRange] = useState("30d");
+interface ConversionData {
+  conversions: Array<{
+    id: string;
+    eventName: string;
+    url?: string;
+    pixelName: string;
+    createdAt: Date;
+    value?: number | null;
+    currency?: string | null;
+  }>;
+  conversionStats: Array<{
+    eventName: string;
+    count: number;
+  }>;
+  totalPurchases: number;
+  totalAddToCarts: number;
+  totalCheckouts: number;
+  totalViewContent: number;
+  conversionRate: string;
+  totalCount: number;
+}
 
-  const pixelOptions = [
+type Conversion = ConversionData['conversions'][0];
+
+export default function ConversionsPage() {
+  const { pixels } = useLoaderData<typeof loader>();
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+
+  const [conversionData, setConversionData] = useState<ConversionData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const selectedPixel = searchParams.get('pixel') || 'all';
+  const timeRange = searchParams.get('range') || '30d';
+  const page = parseInt(searchParams.get('page') || '1', 10);
+
+  const fetchConversionData = useCallback(async () => {
+    setLoading(true);
+    setError("");
+
+    try {
+      const params = new URLSearchParams({
+        range: timeRange,
+        pixel: selectedPixel,
+        page: page.toString(),
+      });
+
+      const res = await fetch(`/api/conversions?${params.toString()}`);
+      const data = await res.json();
+
+      if (data.error) {
+        setError(data.error);
+      } else {
+        setConversionData(data);
+      }
+    } catch (err) {
+      setError("Failed to load conversion data");
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedPixel, timeRange, page]);
+
+  useEffect(() => {
+    fetchConversionData();
+  }, [fetchConversionData]);
+
+  const updateFilters = (pixel?: string, range?: string, page?: number) => {
+    const params = new URLSearchParams(searchParams);
+    if (pixel !== undefined) params.set('pixel', pixel);
+    if (range !== undefined) params.set('range', range);
+    if (page !== undefined) params.set('page', page.toString());
+    navigate(`?${params.toString()}`);
+  };
+
+  // Memoize options to prevent unnecessary re-renders
+  const pixelOptions = useMemo(() => [
     { label: "All Pixels", value: "all" },
     ...pixels.map((pixel: any) => ({
       label: pixel.name,
       value: pixel.appId,
     })),
-  ];
+  ], [pixels]);
 
-  const timeRangeOptions = [
+  const timeRangeOptions = useMemo(() => [
     { label: "Last 7 days", value: "7d" },
     { label: "Last 30 days", value: "30d" },
     { label: "Last 90 days", value: "90d" },
-  ];
+  ], []);
 
-  const filteredConversions = selectedPixel === "all"
-    ? conversions || []
-    : (conversions || []).filter((c: any) => {
-      const pixel = pixels.find((p: any) => p.name === c.pixelName);
-      return pixel?.appId === selectedPixel;
-    });
-
-  // Conversion event mapping (handle multiple variations)
-  const eventLabels: Record<string, string> = {
+  // Memoize event labels
+  const eventLabels: Record<string, string> = useMemo(() => ({
     purchase: "Purchase",
     Purchase: "Purchase",
     addToCart: "Add to Cart",
-    add_to_cart: "Add to Cart", 
+    add_to_cart: "Add to Cart",
     AddToCart: "Add to Cart",
     initiateCheckout: "Initiate Checkout",
     initiate_checkout: "Initiate Checkout",
@@ -147,41 +150,83 @@ export default function ConversionsPage() {
     ViewContent: "View Content",
     pageview: "Page View",
     page_view: "Page View",
-  };
+  }), []);
 
-  // Calculate totals (handle multiple event name variations)
-  const purchaseEvents = ['purchase', 'Purchase'];
-  const addToCartEvents = ['addToCart', 'add_to_cart', 'AddToCart'];
-  const checkoutEvents = ['initiateCheckout', 'initiate_checkout', 'InitiateCheckout'];
-  const viewContentEvents = ['viewContent', 'view_content', 'ViewContent', 'pageview', 'page_view'];
+  // Memoize table rows to prevent recalculation on every render
+  const tableRows = useMemo(() => {
+    if (!conversionData?.conversions) return [];
+    return (conversionData.conversions || []).map((conversion: Conversion) => [
+      eventLabels[conversion.eventName] || conversion.eventName,
+      conversion.pixelName || 'Unknown',
+      conversion.url ? new URL(conversion.url).pathname : "-",
+      conversion.value ? `${conversion.currency || 'USD'} ${conversion.value}` : "-",
+      conversion.createdAt ? new Date(conversion.createdAt).toISOString().replace('T', ' ').split('.')[0] : "-",
+    ]);
+  }, [conversionData?.conversions, eventLabels]);
 
-  const totalPurchases = conversionStats
-    .filter((s: any) => purchaseEvents.includes(s.eventName))
-    .reduce((sum: number, s: any) => sum + (s.count || 0), 0);
-    
-  const totalAddToCarts = conversionStats
-    .filter((s: any) => addToCartEvents.includes(s.eventName))
-    .reduce((sum: number, s: any) => sum + (s.count || 0), 0);
-    
-  const totalCheckouts = conversionStats
-    .filter((s: any) => checkoutEvents.includes(s.eventName))
-    .reduce((sum: number, s: any) => sum + (s.count || 0), 0);
-    
-  const totalViewContent = conversionStats
-    .filter((s: any) => viewContentEvents.includes(s.eventName))
-    .reduce((sum: number, s: any) => sum + (s.count || 0), 0);
+  // Memoize pagination info
+  const paginationInfo = useMemo(() => {
+    if (!conversionData) return { totalPages: 1, startPage: 1 };
+    const totalPages = Math.ceil(conversionData.totalCount / 15);
+    const startPage = Math.max(1, Math.min(totalPages - 9, page - 4));
+    return { totalPages, startPage };
+  }, [conversionData?.totalCount, page]);
 
-  // Calculate conversion rate (ensure no division by zero)
-  const conversionRate = totalViewContent > 0 ? ((totalPurchases / totalViewContent) * 100).toFixed(2) : "0.00";
+  // Loading state component
+  if (loading && !conversionData) {
+    return (
+      <Page
+        title="Conversions"
+        subtitle="Track and analyze your Facebook Pixel conversions"
+      >
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="400" align="center">
+                <Spinner size="large" />
+                <Text variant="bodyMd" as="p">Loading conversion data...</Text>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
 
-  // Prepare data for table
-  const tableRows = (filteredConversions || []).map((conversion: any) => [
-    eventLabels[conversion.eventName] || conversion.eventName,
-    conversion.pixelName || 'Unknown',
-    conversion.url ? new URL(conversion.url).pathname : "-",
-    conversion.value ? `${conversion.currency || 'USD'} ${conversion.value}` : "-",
-    conversion.createdAt ? new Date(conversion.createdAt).toISOString().replace('T', ' ').split('.')[0] : "-",
-  ]);
+  // Error state
+  if (error && !conversionData) {
+    return (
+      <Page
+        title="Conversions"
+        subtitle="Track and analyze your Facebook Pixel conversions"
+      >
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <EmptyState
+                heading="Error loading conversions"
+                image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+              >
+                <p>{error}</p>
+                <Button onClick={fetchConversionData}>Try Again</Button>
+              </EmptyState>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
+
+  const {
+    conversions = [],
+    conversionStats = [],
+    totalPurchases = 0,
+    totalAddToCarts = 0,
+    totalCheckouts = 0,
+    totalViewContent = 0,
+    conversionRate = "0.00",
+    totalCount = 0,
+  } = conversionData || {};
 
   return (
     <Page
@@ -198,7 +243,8 @@ export default function ConversionsPage() {
                   label="Select Pixel"
                   options={pixelOptions}
                   value={selectedPixel}
-                  onChange={setSelectedPixel}
+                  disabled={loading}
+                  onChange={(value) => updateFilters(value, undefined, 1)}
                 />
               </div>
               <div style={{ minWidth: "150px" }}>
@@ -206,7 +252,8 @@ export default function ConversionsPage() {
                   label="Time Range"
                   options={timeRangeOptions}
                   value={timeRange}
-                  onChange={setTimeRange}
+                  disabled={loading}
+                  onChange={(value) => updateFilters(undefined, value, 1)}
                 />
               </div>
             </InlineStack>
@@ -345,7 +392,7 @@ export default function ConversionsPage() {
               <Text variant="bodySm" as="p" tone="subdued">
                 This shows what events are actually being tracked. If you don't see conversions above, check if the event names match.
               </Text>
-              
+
               {conversionStats.length > 0 ? (
                 <div>
                   <Text variant="bodyMd" as="p" fontWeight="bold">Event Types Found:</Text>
@@ -381,7 +428,7 @@ export default function ConversionsPage() {
             <BlockStack gap="400">
               <Text variant="headingMd" as="h2">Recent Conversions</Text>
 
-              {filteredConversions.length === 0 ? (
+              {tableRows.length === 0 ? (
                 <EmptyState
                   heading="No conversions yet"
                   image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
@@ -389,17 +436,45 @@ export default function ConversionsPage() {
                   <p>Start tracking conversions by adding Facebook Pixels to your store.</p>
                 </EmptyState>
               ) : (
-                <DataTable
-                  columnContentTypes={['text', 'text', 'text', 'text', 'text']}
-                  headings={['Event', 'Pixel', 'Page', 'Value', 'Date']}
-                  rows={tableRows}
-                  pagination={{
-                    hasNext: false,
-                    hasPrevious: false,
-                    onNext: () => { },
-                    onPrevious: () => { },
-                  }}
-                />
+                <>
+                  <DataTable
+                    columnContentTypes={['text', 'text', 'text', 'text', 'text']}
+                    headings={['Event', 'Pixel', 'Page', 'Value', 'Date']}
+                    rows={tableRows}
+                  />
+                  {totalCount > 15 && (
+                    <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'center', gap: '8px', alignItems: 'center' }}>
+                      <Button
+                        disabled={page <= 1 || loading}
+                        onClick={() => updateFilters(undefined, undefined, page - 1)}
+                      >
+                        Previous
+                      </Button>
+                      <Text variant="bodySm" as="span">Page {page} of {paginationInfo.totalPages}</Text>
+                      {Array.from({ length: Math.min(10, paginationInfo.totalPages) }, (_, i) => {
+                        const p = paginationInfo.startPage + i;
+                        if (p > paginationInfo.totalPages) return null;
+                        return (
+                          <Button
+                            key={p}
+                            variant={p === page ? 'primary' : 'secondary'}
+                            disabled={loading}
+                            onClick={() => updateFilters(undefined, undefined, p)}
+                          >
+                            {p.toString()}
+                          </Button>
+                        );
+                      })}
+                      <Button
+                        disabled={page * 15 >= totalCount || loading}
+                        onClick={() => updateFilters(undefined, undefined, page + 1)}
+                      >
+                        Next
+                      </Button>
+                      {loading && <Spinner size="small" />}
+                    </div>
+                  )}
+                </>
               )}
             </BlockStack>
           </Card>

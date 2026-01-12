@@ -9,6 +9,7 @@
 
   export const loader = async ({ request }: LoaderFunctionArgs) => {
     const url = new URL(request.url);
+    const chargeId = url.searchParams.get('charge_id');
 
     const shopify = getShopifyInstance();
 
@@ -22,21 +23,33 @@
       throw new Response("Shopify configuration not found. Please check environment variables.", { status: 500 });
     }
 
-    // Handle charge approval redirect if charge_id is present (before authentication)
-    const chargeId = url.searchParams.get('charge_id');
-    if (chargeId) {
-      console.log(`Charge approved redirect for: ${chargeId}`);
-      // Redirect to dashboard after charge approval
-      const { redirect } = await import("react-router");
-      throw redirect("/app/dashboard");
-    }
-
     // Try to authenticate
     try {
       await shopify.authenticate.admin(request);
     } catch (error) {
-      // If authentication fails, rethrow
+      // If authentication redirects (OAuth flow) and we have charge_id, preserve it
+      if (chargeId && error instanceof Response) {
+        const location = error.headers.get('Location');
+        if (location && (error.status === 302 || error.status === 307)) {
+          try {
+            const redirectUrl = new URL(location, request.url);
+            redirectUrl.searchParams.set('charge_id', chargeId);
+            const { redirect } = await import("react-router");
+            throw redirect(redirectUrl.toString());
+          } catch (urlError) {
+            // If URL parsing fails, continue with original redirect
+            console.error('Failed to preserve charge_id in redirect:', urlError);
+          }
+        }
+      }
+      // Rethrow the error (could be redirect or other error)
       throw error;
+    }
+
+    // If we have charge_id and are on /app, redirect to dashboard with charge_id
+    if (chargeId && (url.pathname === '/app' || url.pathname === '/app/')) {
+      const { redirect } = await import("react-router");
+      throw redirect(`/app/dashboard?charge_id=${chargeId}`);
     }
 
     if (url.pathname === '/app' || url.pathname === '/app/') {
@@ -61,9 +74,11 @@
             <s-link href="/app/custom-events">Custom Events</s-link>
             <s-link href="/app/conversions">Conversions</s-link>
             <s-link href="/app/events">Events</s-link>
+            <s-link href="/app/catalog">Catalog</s-link>
             <s-link href="/app/analytics">Analytics</s-link>
             <s-link href="/app/pricing">pricing</s-link>
             <s-link href="/app/settings">Settings</s-link>
+            <s-link href="/app/debug-events">Debug Events</s-link>
           </s-app-nav>
           <Outlet />
         </PolarisAppProvider>

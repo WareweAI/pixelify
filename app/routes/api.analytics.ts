@@ -46,7 +46,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
 
     // Get overview stats
-    const [totalEvents, pageviews, uniqueVisitors, sessions, totalRevenue] = await Promise.all([
+    const [totalEvents, pageviews, uniqueVisitors, sessions, purchaseEventsData, currencyData, addToCartEvents, initiateCheckoutEvents, purchaseEvents] = await Promise.all([
       prisma.event.count({
         where: { appId: app.id, createdAt: { gte: startDate } },
       }),
@@ -61,14 +61,48 @@ export async function loader({ request }: LoaderFunctionArgs) {
       prisma.analyticsSession.count({
         where: { appId: app.id, startTime: { gte: startDate } },
       }),
-      prisma.dailyStats.aggregate({
+      // Get purchase events with value to calculate revenue directly
+      prisma.event.findMany({
         where: {
           appId: app.id,
-          date: { gte: startDate },
+          eventName: 'purchase',
+          createdAt: { gte: startDate },
         },
-        _sum: { revenue: true },
-      }).then((result: any) => result._sum.revenue || 0),
+        select: {
+          value: true,
+          currency: true,
+        },
+      }),
+      // Get the most common currency from events
+      prisma.event.groupBy({
+        by: ['currency'],
+        where: {
+          appId: app.id,
+          createdAt: { gte: startDate },
+          currency: { not: null },
+        },
+        _count: true,
+        orderBy: { _count: { currency: 'desc' } },
+        take: 1,
+      }).then((results: any) => results[0]?.currency || 'USD'),
+      // E-commerce event counts
+      prisma.event.count({
+        where: { appId: app.id, eventName: 'add_to_cart', createdAt: { gte: startDate } },
+      }),
+      prisma.event.count({
+        where: { appId: app.id, eventName: 'initiate_checkout', createdAt: { gte: startDate } },
+      }),
+      prisma.event.count({
+        where: { appId: app.id, eventName: 'purchase', createdAt: { gte: startDate } },
+      }),
     ]);
+
+    // Calculate total revenue from purchase events
+    const totalRevenue = purchaseEventsData.reduce((sum: number, event: any) => {
+      return sum + (event.value || 0);
+    }, 0);
+
+    const currency = currencyData;
 
     // Get top pages
     const topPages = await prisma.event.groupBy({
@@ -167,23 +201,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
       sessions: r.sessions,
     })));
 
-    // Get recent events
-    const recentEvents = await prisma.event.findMany({
-      where: { appId: app.id, createdAt: { gte: startDate } },
-      orderBy: { createdAt: 'desc' },
-      take: 20,
-      select: {
-        id: true,
-        eventName: true,
-        url: true,
-        country: true,
-        city: true,
-        browser: true,
-        deviceType: true,
-        createdAt: true,
-      },
-    });
-
     return Response.json({
       app: { id: app.id, name: app.name, appId: app.appId },
       range,
@@ -193,6 +210,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
         uniqueVisitors,
         sessions,
         totalRevenue,
+        currency,
+        addToCartEvents,
+        initiateCheckoutEvents,
+        purchaseEvents,
       },
       topPages,
       topReferrers,
@@ -201,10 +222,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
       deviceTypes,
       topEvents,
       dailyStats,
-      recentEvents,
+    }, {
+      headers: {
+        'Cache-Control': 'public, max-age=300', // Cache for 5 minutes
+      },
     });
   } catch (error) {
     console.error('Analytics API error:', error);
+    if (error instanceof Error) {
+      console.error('Stack:', error.stack);
+      return Response.json({ error: 'Internal error', details: error.message }, { status: 500 });
+    }
     return Response.json({ error: 'Internal error' }, { status: 500 });
   }
 }

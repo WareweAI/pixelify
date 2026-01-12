@@ -6,18 +6,33 @@ import { sendPlanUpgradeEmail, sendPlanDowngradeEmail } from "../services/email.
 function getPlanNameFromSubscription(subscription: any) {
   console.log("🔍 Subscription data for mapping:", {
     name: subscription.name,
-    status: subscription.status
+    status: subscription.status,
+    line_items: subscription.line_items
   });
 
+  // More flexible plan mapping - handle various naming conventions
   const planMap: Record<string, string> = {
     'Free': 'Free',
     'Basic': 'Basic',
-    'Advance': 'Advance'
+    'Advance': 'Advance',
   };
 
   let internalPlanName = planMap[subscription.name] || 'Free';
 
-  console.log(`🎯 FINAL MAPPING: ${subscription.name} (status: ${subscription.status}) → ${internalPlanName}`);
+  // If still Free but subscription is active, try to infer from line items or other data
+  if (internalPlanName === 'Free' && subscription.status === 'ACTIVE' && subscription.line_items) {
+    const lineItem = subscription.line_items[0];
+    if (lineItem && lineItem.title) {
+      const title = lineItem.title.toLowerCase();
+      if (title.includes('basic')) {
+        internalPlanName = 'Basic';
+      } else if (title.includes('advance') || title.includes('advanced')) {
+        internalPlanName = 'Advance';
+      }
+    }
+  }
+
+  console.log(`🎯 FINAL MAPPING: "${subscription.name}" (status: ${subscription.status}) → ${internalPlanName}`);
   return internalPlanName;
 }
 
@@ -52,9 +67,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   try {
     console.log("🔍 Subscription update payload:", JSON.stringify(payload, null, 2));
 
+    // Get user first
+    const user = await db.user.findUnique({
+      where: { storeUrl: session.shop },
+    });
+
+    if (!user) {
+      console.error("❌ User not found for shop:", session.shop);
+      return new Response("User not found", { status: 404 });
+    }
+
     // Get current app from database
     const app = await db.app.findFirst({
-      where: { appId: session.shop },
+      where: { userId: user.id },
     });
 
     if (!app) {

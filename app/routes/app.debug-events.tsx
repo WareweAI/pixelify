@@ -1,4 +1,3 @@
-import { redirect } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData } from "react-router";
 import {
@@ -11,6 +10,7 @@ import {
   Text,
   Badge,
   Collapsible,
+  DataTable,
 } from "@shopify/polaris";
 import { useState, useCallback } from "react";
 import { getShopifyInstance } from "~/shopify.server";
@@ -28,7 +28,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const app = await db.app.findFirst({
     where: { userId: user.id },
-    include: { 
+    include: {
       settings: true,
       customEvents: {
         where: { isActive: true },
@@ -49,9 +49,25 @@ export async function loader({ request }: LoaderFunctionArgs) {
     throw new Response("App not found for this shop", { status: 404 });
   }
 
+  const twentyFourHoursAgo = new Date();
+  twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
+
+  const recentEcommerceEvents = await db.event.findMany({
+    where: {
+      appId: app.id,
+      eventName: {
+        in: ['AddToCart', 'InitiateCheckout', 'Purchase']
+      },
+      createdAt: { gte: twentyFourHoursAgo },
+    },
+    orderBy: { createdAt: "desc" },
+    take: 20,
+  });
+
   return Response.json({
     app,
     shop,
+    recentEcommerceEvents,
   });
 }
 
@@ -81,8 +97,14 @@ export async function action({ request }: ActionFunctionArgs) {
         return Response.json({ success: false, error: "App not found" });
       }
 
+      // Check subscription for custom events
+      const freeEvents = ['addToCart', 'viewContent', 'initiateCheckout', 'purchase', 'AddToCart', 'InitiateCheckout', 'Purchase', 'ViewContent', 'PageView'];
+      if (app.plan === 'Free' && !freeEvents.includes(eventName)) {
+        return Response.json({ success: false, error: "Custom events are not available on the free plan. Please upgrade to access custom event testing." });
+      }
+
       // Parse event data
-      let parsedEventData = {};
+      let parsedEventData: any = {};
       if (eventData && eventData.trim() !== "") {
         try {
           parsedEventData = JSON.parse(eventData);
@@ -90,6 +112,10 @@ export async function action({ request }: ActionFunctionArgs) {
           return Response.json({ success: false, error: "Invalid JSON in event data" });
         }
       }
+
+      // Extract value and currency from parsed data
+      const value = parsedEventData.value ? parseFloat(parsedEventData.value) : null;
+      const currency = parsedEventData.currency || null;
 
       // Create test event
       await db.event.create({
@@ -105,6 +131,8 @@ export async function action({ request }: ActionFunctionArgs) {
           os: "Debug",
           deviceType: "debug",
           pageTitle: "Debug Test Event",
+          value: value,
+          currency: currency,
           customData: {
             ...parsedEventData,
             debug_test: true,
@@ -132,6 +160,7 @@ export async function action({ request }: ActionFunctionArgs) {
 type LoaderData = {
   app: any;
   shop: string;
+  recentEcommerceEvents: any[];
 };
 
 type ActionData = {
@@ -141,7 +170,7 @@ type ActionData = {
 } | undefined;
 
 export default function DebugEvents() {
-  const { app, shop } = useLoaderData<LoaderData>();
+  const { app, shop, recentEcommerceEvents } = useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
   const [testEventName, setTestEventName] = useState("test_debug_event");
   const [testEventData, setTestEventData] = useState(JSON.stringify({
@@ -153,27 +182,51 @@ export default function DebugEvents() {
 
   const handleTestEvent = useCallback(async (eventName: string, eventData?: any) => {
     try {
+      const formData = new FormData();
+      formData.append('action', 'test_event');
+      formData.append('eventName', eventName);
+      formData.append('eventData', eventData ? JSON.stringify(eventData) : testEventData);
+
       const response = await fetch('/app/debug-events', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams({
-          action: 'test_event',
-          eventName,
-          eventData: eventData ? JSON.stringify(eventData) : testEventData,
-        }),
+        body: formData,
       });
 
-      const result = await response.json();
+      // Clone response for error handling
+      const responseClone = response.clone();
+
+      // Check if response is ok
+      if (!response.ok) {
+        const text = await response.text();
+        console.error('Server error response:', text);
+        alert(`❌ FAILED\n\nServer error (${response.status}). Check console for details.`);
+        return;
+      }
+
+      let result;
+      try {
+        result = await response.json();
+      } catch (parseError) {
+        console.error('Failed to parse response as JSON:', parseError);
+        try {
+          const text = await responseClone.text();
+          console.error('Raw response:', text);
+        } catch (textError) {
+          console.error('Could not read response text either:', textError);
+        }
+        alert(`❌ FAILED\n\nServer returned invalid JSON. Check console for details.`);
+        return;
+      }
 
       if (result.success) {
-        alert(`✅ SUCCESS!\n\nTest event "${eventName}" created successfully!\n\n📍 Check your Events page to see the test event.`);
+        alert(`✅ SUCCESS!\n\nTest event "${eventName}" created successfully!\n\n📍 The page will refresh to show the new event.`);
+        window.location.reload(); // Refresh to show the new event
       } else {
         alert(`❌ FAILED\n\n${result.error || 'Unknown error'}`);
       }
-    } catch (error) {
-      alert(`❌ ERROR\n\nFailed to send test event: ${error}`);
+    } catch (error: any) {
+      console.error('Network error:', error);
+      alert(`❌ ERROR\n\nFailed to send test event: ${error.message || error}`);
     }
   }, [testEventData]);
 
@@ -463,6 +516,59 @@ export default function DebugEvents() {
                   </Badge>
                 </div>
               </div>
+            </div>
+          </Card>
+        </Layout.Section>
+
+        {/* Recent E-commerce Events */}
+        <Layout.Section>
+          <Card>
+            <div style={{ padding: '20px' }}>
+              <Text variant="headingMd" as="h2">🛒 Recent E-commerce Events</Text>
+              <div style={{ marginBottom: '20px' }}>
+                <Text variant="bodyMd" as="p" tone="subdued">
+                  Latest Add to Cart, Initiate Checkout, and Purchase events from the last 24 hours
+                </Text>
+              </div>
+
+              {recentEcommerceEvents.length > 0 ? (
+                <DataTable
+                  columnContentTypes={['text', 'text', 'text', 'text']}
+                  headings={['Event Type', 'Value', 'Currency', 'Time']}
+                  rows={recentEcommerceEvents.map((event: any) => [
+                    <Badge
+                      key={`event-${event.id}`}
+                      tone={
+                        event.eventName === 'Purchase' ? 'success' :
+                        event.eventName === 'InitiateCheckout' ? 'warning' :
+                        'info'
+                      }
+                    >
+                      {event.eventName}
+                    </Badge>,
+                    <Text key={`value-${event.id}`} variant="bodyMd" fontWeight="medium" as="span">
+                      {(() => {
+                        const rawValue = event.value || event.customData?.value;
+                        const numValue = typeof rawValue === 'number' ? rawValue : parseFloat(rawValue);
+                        return !isNaN(numValue) ? `$${numValue.toFixed(2)}` : '-';
+                      })()}
+                    </Text>,
+                    <Badge key={`currency-${event.id}`} tone="success">
+                      {event.currency || event.customData?.currency || 'USD'}
+                    </Badge>,
+                    <Text key={`time-${event.id}`} variant="bodySm" tone="subdued" as="span">
+                      {new Date(event.createdAt).toLocaleString()}
+                    </Text>
+                  ])}
+                />
+              ) : (
+                <div style={{ textAlign: 'center', padding: '40px', color: '#6b7280' }}>
+                  <Text variant="bodyMd" as="p">No e-commerce events in the last 24 hours</Text>
+                  <Text variant="bodySm" as="p" tone="subdued">
+                    Use the test buttons above to generate sample events
+                  </Text>
+                </div>
+              )}
             </div>
           </Card>
         </Layout.Section>
