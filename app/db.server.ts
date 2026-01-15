@@ -4,7 +4,7 @@ declare global {
   var prisma: PrismaClient | undefined;
 }
 
-// Create Prisma client with fallback logic
+// Create Prisma client with optimized connection pooling
 function createPrismaClient() {
   let databaseUrl;
   
@@ -28,6 +28,14 @@ function createPrismaClient() {
         url: databaseUrl,
       },
     },
+    // Configure connection pool for serverless environments
+    __internal: {
+      engine: {
+        connectionTimeout: 20000, // 20 seconds
+        maxWait: 20000, // 20 seconds
+        pool_timeout: 20000, // 20 seconds
+      },
+    },
   });
 }
 
@@ -36,5 +44,20 @@ const prisma = global.prisma || createPrismaClient();
 if (process.env.NODE_ENV !== "production") {
   global.prisma = prisma;
 }
+
+// Graceful shutdown
+process.on('beforeExit', async () => {
+  await prisma.$disconnect();
+});
+
+process.on('SIGINT', async () => {
+  await prisma.$disconnect();
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  await prisma.$disconnect();
+  process.exit(0);
+});
 
 export default prisma;

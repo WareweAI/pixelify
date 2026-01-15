@@ -1,5 +1,6 @@
 // Facebook Catalog API Service
 import { META_GRAPH_API_VERSION, META_GRAPH_API_URL } from "./meta-capi.server";
+import { FacebookTokenService } from "./facebook-token.server";
 
 export interface FacebookCatalogProduct {
   id: string;
@@ -49,6 +50,8 @@ export class FacebookCatalogService {
     method: 'GET' | 'POST' | 'DELETE' = 'GET',
     body?: any
   ): Promise<any> {
+    // Don't validate token before API call - let Facebook API respond
+    // This allows the token from Dashboard OAuth to work without strict validation
     const url = `${META_GRAPH_API_URL}/${META_GRAPH_API_VERSION}/${endpoint}?access_token=${accessToken}`;
 
     const response = await fetch(url, {
@@ -62,9 +65,14 @@ export class FacebookCatalogService {
     const data = await response.json();
 
     if (data.error) {
+      // Handle token expiration errors
+      if (data.error.code === 190) {
+        throw new Error(`Facebook access token has expired. Please reconnect Facebook in Dashboard. Error: ${data.error.message}`);
+      }
+      
       // Provide more helpful error messages for permission issues
       if (data.error.code === 100 || data.error.message?.includes('Permission') || data.error.message?.includes('permission')) {
-        throw new Error(`Facebook API Error: (#100) Missing Permission - ${data.error.message}. Please ensure your access token has the 'catalog_management' permission. Go to Facebook App Settings > Permissions and add 'catalog_management', then regenerate your access token.`);
+        throw new Error(`Facebook API Error: Missing Permission - ${data.error.message}. Your token may not have 'catalog_management' permission. You can use the Feed URL method instead.`);
       }
       throw new Error(`Facebook API Error: ${data.error.message} (Code: ${data.error.code || 'N/A'})`);
     }
@@ -304,6 +312,93 @@ export class FacebookCatalogService {
     } catch (error) {
       console.error('Error validating Facebook catalog access:', error);
       return false;
+    }
+  }
+
+  // Get all catalogs for the user's business accounts
+  static async getCatalogs(accessToken: string): Promise<any[]> {
+    try {
+      // First, get the user's business accounts
+      const businessData = await this.makeApiCall('me/businesses', accessToken);
+
+      if (!businessData.data || businessData.data.length === 0) {
+        return [];
+      }
+
+      const allCatalogs: any[] = [];
+
+      // Get catalogs from each business
+      for (const business of businessData.data) {
+        try {
+          const catalogsData = await this.makeApiCall(
+            `${business.id}/owned_product_catalogs`,
+            accessToken
+          );
+
+          if (catalogsData.data) {
+            allCatalogs.push(...catalogsData.data.map((catalog: any) => ({
+              ...catalog,
+              businessId: business.id,
+              businessName: business.name,
+            })));
+          }
+        } catch (error) {
+          console.error(`Error fetching catalogs for business ${business.id}:`, error);
+        }
+      }
+
+      return allCatalogs;
+    } catch (error) {
+      console.error('Error getting Facebook catalogs:', error);
+      return [];
+    }
+  }
+
+  // Get catalog product count
+  static async getCatalogProductCount(catalogId: string, accessToken: string): Promise<number> {
+    try {
+      const data = await this.makeApiCall(
+        `${catalogId}?fields=product_count`,
+        accessToken
+      );
+      return data.product_count || 0;
+    } catch (error) {
+      console.error('Error getting catalog product count:', error);
+      return 0;
+    }
+  }
+
+  // Connect pixel to catalog
+  static async connectPixelToCatalog(
+    catalogId: string,
+    pixelId: string,
+    accessToken: string
+  ): Promise<boolean> {
+    try {
+      await this.makeApiCall(
+        `${catalogId}/external_event_sources`,
+        accessToken,
+        'POST',
+        { external_event_sources: [pixelId] }
+      );
+      return true;
+    } catch (error) {
+      console.error('Error connecting pixel to catalog:', error);
+      return false;
+    }
+  }
+
+  // Get connected pixels for a catalog
+  static async getConnectedPixels(catalogId: string, accessToken: string): Promise<string[]> {
+    try {
+      const data = await this.makeApiCall(
+        `${catalogId}/external_event_sources`,
+        accessToken
+      );
+      return data.data?.map((source: any) => source.id) || [];
+    } catch (error) {
+      console.error('Error getting connected pixels:', error);
+      return [];
     }
   }
 }

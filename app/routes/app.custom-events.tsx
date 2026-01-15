@@ -158,32 +158,32 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 export async function action({ request }: ActionFunctionArgs) {
   try {
-    const shopify = getShopifyInstance();
-    if (!shopify?.authenticate) {
-      return Response.json({ success: false, error: "Shopify configuration not found" }, { status: 500 });
-    }
-    const { session } = await shopify.authenticate.admin(request);
-    const shop = session.shop;
-    const formData = await request.formData();
-    const action = formData.get("action");
+  const shopify = getShopifyInstance();
+  if (!shopify?.authenticate) {
+    return Response.json({ success: false, error: "Shopify configuration not found" }, { status: 500 });
+  }
+  const { session } = await shopify.authenticate.admin(request);
+  const shop = session.shop;
+  const formData = await request.formData();
+  const action = formData.get("action");
 
     console.log(`[Custom Events] Action: ${action}, Shop: ${shop}`);
 
-    try {
-      const user = await db.user.findUnique({ where: { storeUrl: shop } });
-      if (!user) {
-        return Response.json({ success: false, error: "User not found for this shop" }, { status: 404 });
-      }
+  try {
+    const user = await db.user.findUnique({ where: { storeUrl: shop } });
+    if (!user) {
+      return Response.json({ success: false, error: "User not found for this shop" }, { status: 404 });
+    }
 
-      const appIdFromForm = formData.get("appId") as string | null;
-      const app =
-        appIdFromForm
-          ? await db.app.findFirst({ where: { appId: appIdFromForm, userId: user.id } })
-          : await db.app.findFirst({ where: { userId: user.id }, orderBy: { createdAt: "desc" } });
+    const appIdFromForm = formData.get("appId") as string | null;
+    const app =
+      appIdFromForm
+        ? await db.app.findFirst({ where: { appId: appIdFromForm, userId: user.id } })
+        : await db.app.findFirst({ where: { userId: user.id }, orderBy: { createdAt: "desc" } });
 
-      if (!app) {
-        return Response.json({ success: false, error: "App not found for this shop" }, { status: 404 });
-      }
+    if (!app) {
+      return Response.json({ success: false, error: "App not found for this shop" }, { status: 404 });
+    }
 
       // Get current plan from Shopify GraphQL API (source of truth)
       let currentPlan = app.plan || 'Free';
@@ -506,8 +506,8 @@ export async function action({ request }: ActionFunctionArgs) {
       });
     }
 
-    } catch (error) {
-      console.error("Custom events action error:", error);
+  } catch (error) {
+    console.error("Custom events action error:", error);
       
       // Handle specific Prisma errors
       if (error instanceof Error) {
@@ -530,9 +530,9 @@ export async function action({ request }: ActionFunctionArgs) {
         success: false, 
         error: "Failed to process request. Please try again." 
       }, { status: 500 });
-    }
+  }
 
-    return Response.json({ success: false, error: "Invalid action" }, { status: 400 });
+  return Response.json({ success: false, error: "Invalid action" }, { status: 400 });
   } catch (outerError) {
     // Catch any authentication or other outer errors
     console.error("Custom events outer error:", outerError);
@@ -2037,7 +2037,7 @@ export default function CustomEvents() {
           },
           {
             content: "❌ Cancel",
-            onAction: handleModalToggle
+          onAction: handleModalToggle
           }
         ]}
       >
@@ -2213,33 +2213,33 @@ export default function CustomEvents() {
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
-                  <TextField
+              <TextField
                     label="Display Name"
-                    value={formData.displayName}
-                    onChange={handleInputChange('displayName')}
-                    name="displayName"
-                    placeholder="e.g., Add to Wishlist"
+                value={formData.displayName}
+                onChange={handleInputChange('displayName')}
+                name="displayName"
+                placeholder="e.g., Add to Wishlist"
                     helpText="Human-friendly name shown in your dashboard"
-                    autoComplete="off"
-                    requiredIndicator
-                  />
+                autoComplete="off"
+                requiredIndicator
+              />
 
-                  <TextField
+              <TextField
                     label="Event Name (API)"
-                    value={formData.name}
-                    onChange={handleInputChange('name')}
-                    name="name"
-                    placeholder="e.g., wishlist_add"
+                value={formData.name}
+                onChange={handleInputChange('name')}
+                name="name"
+                placeholder="e.g., wishlist_add"
                     helpText="Technical identifier used in code"
-                    autoComplete="off"
-                    requiredIndicator
-                  />
+                autoComplete="off"
+                requiredIndicator
+              />
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                  <Select
+              <Select
                     label="Page Context"
-                    options={[
+                options={[
                       { label: "🌐 All Pages", value: "all" },
                       { label: "🏠 Home Page", value: "index" },
                       { label: "📦 Product Pages", value: "product" },
@@ -2248,24 +2248,24 @@ export default function CustomEvents() {
                       { label: "💳 Checkout Page", value: "checkout" },
                       { label: "🔍 Search Page", value: "search" },
                       { label: "🎯 Specific URL", value: "custom" }
-                    ]}
-                    value={formData.pageType}
-                    onChange={(value) => setFormData(prev => ({ ...prev, pageType: value }))}
-                    name="pageType"
+                ]}
+                value={formData.pageType}
+                onChange={(value) => setFormData(prev => ({ ...prev, pageType: value }))}
+                name="pageType"
                     helpText="Where this event typically occurs"
-                  />
+              />
 
-                  {formData.pageType === "custom" && (
-                    <TextField
+              {formData.pageType === "custom" && (
+                <TextField
                       label="Specific URL"
-                      value={formData.pageUrl}
-                      onChange={handleInputChange('pageUrl')}
-                      name="pageUrl"
+                  value={formData.pageUrl}
+                  onChange={handleInputChange('pageUrl')}
+                  name="pageUrl"
                       placeholder="/pages/contact"
                       helpText="URL path where this event should trigger"
-                      autoComplete="off"
-                    />
-                  )}
+                  autoComplete="off"
+                />
+              )}
                 </div>
 
                 <TextField
@@ -2314,51 +2314,51 @@ export default function CustomEvents() {
                 </div>
 
                 <div style={{ marginBottom: '20px' }}>
-                  <Select
+              <Select
                     label="Trigger Method"
-                    options={[
+                options={[
                       { label: "✏️ Manual Code Trigger", value: "manual" },
                       { label: "🎯 Automatic CSS Selector", value: "auto" }
-                    ]}
-                    value={formData.eventType === "custom" ? "manual" : "auto"}
-                    onChange={(value) => setFormData(prev => ({
-                      ...prev,
-                      eventType: value === "manual" ? "custom" : "click",
-                      selector: value === "manual" ? "" : prev.selector
-                    }))}
-                    name="triggerType"
+                ]}
+                value={formData.eventType === "custom" ? "manual" : "auto"}
+                onChange={(value) => setFormData(prev => ({
+                  ...prev,
+                  eventType: value === "manual" ? "custom" : "click",
+                  selector: value === "manual" ? "" : prev.selector
+                }))}
+                name="triggerType"
                     helpText="Manual: Use PixelAnalytics.track() in code. Automatic: CSS selectors detect user actions."
-                  />
+              />
                 </div>
 
                 {formData.eventType !== "custom" ? (
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '16px' }}>
-                    <Select
+                  <Select
                       label="DOM Event"
-                      options={[
+                    options={[
                         { label: "🖱️ Click", value: "click" },
                         { label: "📝 Form Submit", value: "submit" },
                         { label: "⌨️ Input Change", value: "change" },
                         { label: "👁️ Focus", value: "focus" },
                         { label: "📜 Scroll", value: "scroll" },
                         { label: "📄 Page Load", value: "load" }
-                      ]}
-                      value={formData.eventType}
-                      onChange={(value) => setFormData(prev => ({ ...prev, eventType: value }))}
-                      name="eventType"
+                    ]}
+                    value={formData.eventType}
+                    onChange={(value) => setFormData(prev => ({ ...prev, eventType: value }))}
+                    name="eventType"
                       helpText="The user action that triggers this event"
-                    />
+                  />
 
-                    <TextField
+                  <TextField
                       label="CSS Selector"
-                      value={formData.selector}
-                      onChange={handleInputChange('selector')}
-                      name="selector"
+                    value={formData.selector}
+                    onChange={handleInputChange('selector')}
+                    name="selector"
                       placeholder=".add-to-cart-btn, #wishlist-button, .product-card .btn"
                       helpText="CSS selector for target elements (use browser dev tools to find)"
-                      autoComplete="off"
-                      requiredIndicator
-                    />
+                    autoComplete="off"
+                    requiredIndicator
+                  />
                   </div>
                 ) : (
                   <div style={{ 
@@ -2433,9 +2433,9 @@ export default function CustomEvents() {
                 </div>
 
                 <div style={{ marginBottom: '20px' }}>
-                  <Select
+              <Select
                     label="Facebook Event Type"
-                    options={[
+                options={[
                       { label: "Choose Facebook event type...", value: "" },
                       { label: "🛒 Purchase (completed sales)", value: "Purchase" },
                       { label: "➕ AddToCart (add to cart actions)", value: "AddToCart" },
@@ -2447,20 +2447,20 @@ export default function CustomEvents() {
                       { label: "📞 Contact (contact forms)", value: "Contact" },
                       { label: "🔍 Search (search actions)", value: "Search" },
                       { label: "🎯 CustomEventName (other events)", value: "CustomEventName" }
-                    ]}
-                    value={formData.metaEventName}
-                    onChange={(value) => setFormData(prev => ({ ...prev, metaEventName: value }))}
-                    name="metaEventName"
+                ]}
+                value={formData.metaEventName}
+                onChange={(value) => setFormData(prev => ({ ...prev, metaEventName: value }))}
+                name="metaEventName"
                     helpText="Map to Facebook's standard events for better ad optimization"
-                    requiredIndicator
-                  />
+                requiredIndicator
+              />
                 </div>
 
-                <TextField
+              <TextField
                   label="Event Data (JSON)"
-                  value={formData.eventData}
-                  onChange={handleInputChange('eventData')}
-                  name="eventData"
+                value={formData.eventData}
+                onChange={handleInputChange('eventData')}
+                name="eventData"
                   multiline={6}
                   placeholder={`{
   "value": 99.99,
@@ -2470,9 +2470,9 @@ export default function CustomEvents() {
   "content_type": "product"
 }`}
                   helpText="Optional data sent to Facebook (value, currency, product info, etc.). Use actual values for testing, not Liquid templates."
-                  autoComplete="off"
+                autoComplete="off"
                   error={jsonError}
-                />
+              />
 
                 {jsonError && (
                   <div style={{ 

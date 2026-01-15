@@ -30,12 +30,9 @@ export const headers: HeadersFunction = (headersArgs) => {
   return boundary.headers(headersArgs);
 };
 
-// Optional root loader: when an authenticated admin request hits an /app route,
-// capture and persist the shop's email for use by webhooks and emails.
 export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
 
-  // Only run for embedded app pages; avoid interfering with public/auth routes
   if (!url.pathname.startsWith("/app")) {
     return null;
   }
@@ -50,7 +47,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const { session, admin } = await shopify.authenticate.admin(request);
     const shop = session.shop;
 
-    // Look up the user so we can associate email with their apps
     const user = await prisma.user.findUnique({
       where: { storeUrl: shop },
       include: { apps: true },
@@ -60,13 +56,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
       return null;
     }
 
-    // If any app already has a shopEmail, no need to refetch
     const existingEmail = user.apps.find((a) => a.shopEmail)?.shopEmail;
     if (existingEmail) {
       return null;
     }
 
-    // Fetch shop email via Admin GraphQL (validated query: shop { email })
     let storeEmail: string | null = null;
     try {
       const response = await admin.graphql(
@@ -93,7 +87,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
       console.error("Failed to fetch/store shop email in root loader:", emailError);
     }
   } catch {
-    // Ignore auth failures here; normal route loaders will handle redirects
     return null;
   }
 

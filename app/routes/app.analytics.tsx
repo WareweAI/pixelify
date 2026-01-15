@@ -106,90 +106,128 @@
     const [conversionRows, setConversionRows] = useState<any[]>([]);
     const [conversionLoading, setConversionLoading] = useState(false);
     const [conversionError, setConversionError] = useState("");
+    // Debounce state
+    const [debounceTimer, setDebounceTimer] = useState<NodeJS.Timeout | null>(null);
 
-    const fetchAnalytics = useCallback(async () => {
-      if (!selectedApp) return;
-
-      setLoading(true);
-      setError("");
-
+    // Cache for analytics data
+    const getCacheKey = (appId: string, range: string) => `analytics_${appId}_${range}`;
+    const getCachedData = (key: string) => {
       try {
-        const res = await fetch(`/api/analytics?appId=${selectedApp}&range=${dateRange}`);
-        const data = await res.json();
-
-        if (data.error) {
-          setError(data.error);
-        } else {
-          setAnalytics(data);
+        const cached = sessionStorage.getItem(key);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          // Check if cache is still valid (5 minutes)
+          if (Date.now() - parsed.timestamp < 5 * 60 * 1000) {
+            return parsed.data;
+          }
         }
       } catch (err) {
-        setError("Failed to load analytics");
-        console.error(err);
-      } finally {
-        setLoading(false);
+        // Ignore cache errors
       }
-    }, [selectedApp, dateRange]);
-
-    const fetchConversionTable = useCallback(async () => {
-      if (!apps || apps.length === 0) return;
-
-      setConversionLoading(true);
-      setConversionError("");
-
+      return null;
+    };
+    const setCachedData = (key: string, data: any) => {
       try {
-        const results = await Promise.all(
-          apps.map(async (app: any) => {
-            try {
-              const res = await fetch(`/api/analytics?appId=${app.appId}&range=${dateRange}`);
-              const data = await res.json();
-
-              if (data.error || !data.overview) {
-                return null;
-              }
-
-              const overview = data.overview as AnalyticsData["overview"];
-              const atc = overview.addToCartEvents || 0;
-              const ic = overview.initiateCheckoutEvents || 0;
-              const pur = overview.purchaseEvents || 0;
-
-              const atcToIc = atc > 0 ? (ic / atc) * 100 : 0;
-              const icToPur = ic > 0 ? (pur / ic) * 100 : 0;
-
-              const currency = overview.currency || "USD";
-              const metaPixelId = app.settings?.metaPixelId || "—";
-
-              return [
-                app.name,
-                app.appId,
-                metaPixelId,
-                atc.toLocaleString(),
-                ic.toLocaleString(),
-                pur.toLocaleString(),
-                `${atcToIc.toFixed(2)}%`,
-                `${icToPur.toFixed(2)}%`,
-                `${currency} ${overview.totalRevenue.toFixed(3)}`,
-                overview.totalEvents.toLocaleString(),
-              ];
-            } catch (err) {
-              console.error("Failed to load conversion row for app", app.appId, err);
-              return null;
-            }
-          })
-        );
-
-        setConversionRows(results.filter(Boolean) as any[]);
+        sessionStorage.setItem(key, JSON.stringify({
+          data,
+          timestamp: Date.now()
+        }));
       } catch (err) {
-        console.error("Failed to load conversion table", err);
-        setConversionError("Failed to load conversion table");
-      } finally {
-        setConversionLoading(false);
+        // Ignore cache errors
       }
-    }, [apps, dateRange]);
+    };
+
+    const fetchAnalytics = useCallback((opts?: { debounce?: boolean }) => {
+      if (!selectedApp) return;
+      const cacheKey = getCacheKey(selectedApp, dateRange);
+      const cachedData = getCachedData(cacheKey);
+      if (cachedData) setAnalytics(cachedData);
+      if (debounceTimer) clearTimeout(debounceTimer);
+      const doFetch = async () => {
+        setLoading(true);
+        setError("");
+        try {
+          const res = await fetch(`/api/analytics?appId=${selectedApp}&range=${dateRange}`);
+          const data = await res.json();
+          if (data.error) {
+            setError(data.error);
+          } else {
+            setAnalytics(data);
+            setCachedData(cacheKey, data);
+          }
+        } catch (err) {
+          setError("Failed to load analytics");
+          console.error(err);
+        } finally {
+          setLoading(false);
+        }
+      };
+      if (opts?.debounce) {
+        const timer = setTimeout(doFetch, 350);
+        setDebounceTimer(timer);
+      } else {
+        doFetch();
+      }
+    }, [selectedApp, dateRange, debounceTimer]);
+
+    const fetchConversionTable = useCallback((opts?: { debounce?: boolean }) => {
+      if (!apps || apps.length === 0) return;
+      const cacheKey = `conversion_table_${dateRange}_${apps.map((a: any) => a.appId).sort().join('_')}`;
+      const cachedData = getCachedData(cacheKey);
+      if (cachedData) setConversionRows(cachedData);
+      if (debounceTimer) clearTimeout(debounceTimer);
+      const doFetch = async () => {
+        setConversionLoading(true);
+        setConversionError("");
+        try {
+          const appIds = apps.map((app: any) => app.appId).join(',');
+          const res = await fetch(`/api/bulk-analytics?appIds=${appIds}&range=${dateRange}`);
+          const bulkData = await res.json();
+          if (bulkData.error) {
+            setConversionError(bulkData.error);
+            return;
+          }
+          const results = bulkData.map((item: any) => {
+            const atc = item.addToCartEvents || 0;
+            const ic = item.initiateCheckoutEvents || 0;
+            const pur = item.purchaseEvents || 0;
+            const atcToIc = atc > 0 ? (ic / atc) * 100 : 0;
+            const icToPur = ic > 0 ? (pur / ic) * 100 : 0;
+            const currency = item.currency || "USD";
+            return [
+              item.name,
+              item.appId,
+              item.metaPixelId || "—",
+              atc.toLocaleString(),
+              ic.toLocaleString(),
+              pur.toLocaleString(),
+              `${atcToIc.toFixed(2)}%`,
+              `${icToPur.toFixed(2)}%`,
+              `${currency} ${item.totalRevenue.toFixed(3)}`,
+              item.totalEvents.toLocaleString(),
+            ];
+          });
+          setConversionRows(results);
+          setCachedData(cacheKey, results);
+        } catch (err) {
+          console.error("Failed to load conversion table", err);
+          setConversionError("Failed to load conversion table");
+        } finally {
+          setConversionLoading(false);
+        }
+      };
+      if (opts?.debounce) {
+        const timer = setTimeout(doFetch, 350);
+        setDebounceTimer(timer);
+      } else {
+        doFetch();
+      }
+    }, [apps, dateRange, debounceTimer]);
 
     useEffect(() => {
-      fetchAnalytics();
-      fetchConversionTable();
-    }, [fetchAnalytics, fetchConversionTable]);
+      fetchAnalytics({ debounce: true });
+      fetchConversionTable({ debounce: true });
+    }, [selectedApp, dateRange]);
 
     const appOptions = apps.map((app: { appId: string; name: string }) => ({
       label: app.name,
@@ -219,9 +257,9 @@
 
     if (apps.length === 0) {
       return (
-        <Page title="Analytics">
+        <Page title="Analytics" fullWidth>
           <Layout>
-            <Layout.Section>
+            <Layout.Section fullWidth>
               <Card>
                 <EmptyState
                   heading="No pixels created"
@@ -241,10 +279,11 @@
       <Page
         title="Analytics Dashboard"
         subtitle="Track your website performance and user behavior"
+        fullWidth
       >
         <Layout>
           {/* Header Controls */}
-          <Layout.Section>
+          <Layout.Section fullWidth>
             <Card>
               <BlockStack gap="400">
                 <InlineStack gap="400" wrap={false} align="space-between">
@@ -384,7 +423,7 @@
           </Layout.Section>
 
           {loading ? (
-            <Layout.Section>
+            <Layout.Section fullWidth>
               <Card>
                 <BlockStack gap="400" inlineAlign="center">
                   <Spinner size="large" />
@@ -393,7 +432,7 @@
               </Card>
             </Layout.Section>
           ) : error ? (
-            <Layout.Section>
+            <Layout.Section fullWidth>
               <Card>
                 <BlockStack gap="300" inlineAlign="center">
                   <Icon source={AlertTriangleIcon} tone="critical" />
@@ -405,7 +444,7 @@
           ) : analytics ? (
             <>
               {/* Key Metrics Cards */}
-              <Layout.Section>
+              <Layout.Section fullWidth>
                 <Grid>
                   <Grid.Cell columnSpan={{xs: 6, sm: 4, md: 3, lg: 2, xl: 2}}>
                     <Card>
@@ -470,27 +509,11 @@
                       </BlockStack>
                     </Card>
                   </Grid.Cell>
-
-                  <Grid.Cell columnSpan={{xs: 6, sm: 4, md: 3, lg: 2, xl: 2}}>
-                    <Card>
-                      <BlockStack gap="200">
-                        <Icon source={OrderIcon} tone="base" />
-                        <BlockStack gap="100">
-                          <Text variant="headingXl" as="h3">
-                            ${analytics.overview.totalRevenue.toFixed(2)}
-                          </Text>
-                          <Text variant="bodySm" as="p" tone="subdued">
-                            Total Revenue
-                          </Text>
-                        </BlockStack>
-                      </BlockStack>
-                    </Card>
-                  </Grid.Cell>
                 </Grid>
               </Layout.Section>
 
               {/* Conversion Performance Table (all pixels) */}
-              <Layout.Section>
+              <Layout.Section fullWidth>
                 <Card>
                   <BlockStack gap="400">
                     <InlineStack align="space-between" blockAlign="center">
@@ -553,7 +576,7 @@
               </Layout.Section>
 
               {/* Charts and Data */}
-              <Layout.Section>
+              <Layout.Section fullWidth>
                 <Grid>
                   {/* Daily Chart */}
                   <Grid.Cell columnSpan={{xs: 6, sm: 6, md: 4, lg: 8, xl: 8}}>
@@ -636,7 +659,7 @@
               </Layout.Section>
 
               {/* Detailed Tables */}
-              <Layout.Section>
+              <Layout.Section fullWidth>
                 <Grid>
                   <Grid.Cell columnSpan={{xs: 6, sm: 6, md: 3, lg: 6, xl: 6}}>
                     <Card>
@@ -702,7 +725,7 @@
 
             </>
           ) : (
-            <Layout.Section>
+            <Layout.Section fullWidth>
               <Card>
                 <EmptyState
                   heading="Select a pixel to view analytics"

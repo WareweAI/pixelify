@@ -24,6 +24,7 @@ import {
   DataTable,
 } from "@shopify/polaris";
 import { CheckIcon, ConnectIcon, ExportIcon } from "@shopify/polaris-icons";
+import { ClientOnly } from "~/components/ClientOnly";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopify = getShopifyInstance();
@@ -33,177 +34,125 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     throw new Response("Shopify configuration not found", { status: 500 });
   }
 
-  let session, admin;
+  let session;
   try {
     const authResult = await shopify.authenticate.admin(request);
     session = authResult.session;
-    admin = authResult.admin;
   } catch (error) {
-    // If it's a redirect response (302), re-throw it for proper redirect handling
-    if (error instanceof Response && error.status === 302) {
-      throw error;
-    }
+    if (error instanceof Response && error.status === 302) throw error;
     console.error("Authentication error:", error);
-    // Otherwise, treat as database/server error
-    throw new Response("Unable to authenticate. Database connection may be unavailable. Please try again later.", { status: 503 });
+    throw new Response("Unable to authenticate. Database connection may be unavailable.", { status: 503 });
   }
   const shop = session.shop;
   
-  // Handle charge approval redirect AFTER authentication
-  const chargeId = new URL(request.url).searchParams.get('charge_id');
-  if (chargeId) {
-    console.log(`✅ Charge approved for shop ${shop}, charge_id: ${chargeId}`);
-    
-    // Fetch current subscription from Shopify to update plan
-    try {
-      const response = await admin.graphql(`
-        query {
-          appInstallation {
-            activeSubscriptions {
-              id
-              name
-              status
-            }
-          }
-        }
-      `);
-
-      const data = await response.json() as any;
-      const activeSubscriptions = data?.data?.appInstallation?.activeSubscriptions || [];
-
-      if (activeSubscriptions.length > 0) {
-        const activeSubscription = activeSubscriptions.find((sub: any) =>
-          sub.status === 'ACTIVE' || sub.status === 'active'
-        );
-
-        if (activeSubscription) {
-          // Only recognize Free, Basic, and Advance plans
-          const shopifyPlanName = activeSubscription.name;
-          let currentPlan = 'Free';
-          
-          if (shopifyPlanName === 'Free' || shopifyPlanName === 'Basic' || shopifyPlanName === 'Advance') {
-            currentPlan = shopifyPlanName;
-          }
-
-          // Update plan in database
-          const user = await prisma.user.findUnique({ where: { storeUrl: shop } });
-          if (user) {
-            await prisma.app.updateMany({
-              where: { userId: user.id },
-              data: { plan: currentPlan },
-            });
-            console.log(`✅ Updated plan to ${currentPlan} after charge approval`);
-          }
-        }
-      }
-    } catch (error: any) {
-      console.error('⚠️ Failed to update plan after charge approval:', error);
-    }
-    
-    // Redirect to dashboard without charge_id to avoid showing it in URL
-    const { redirect } = await import("react-router");
-    throw redirect("/app/dashboard");
-  }
   const url = new URL(request.url);
   const purchaseOffset = parseInt(url.searchParams.get('purchaseOffset') || '0');
   const purchaseLimit = 10;
 
-  let user = await prisma.user.findUnique({
-    where: { storeUrl: shop },
-  });
+  try {
+    let user = await prisma.user.findUnique({ where: { storeUrl: shop } });
 
-  if (!user) {
-    user = await prisma.user.create({
-      data: {
-        storeUrl: shop,
-        password: generateRandomPassword(),
-      },
-    });
+    if (!user) {
+      user = await prisma.user.create({
+        data: { storeUrl: shop, password: generateRandomPassword() },
+      });
+    }
+
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Run ALL queries in parallel for faster load
+    const [apps, totalPurchaseEvents, recentPurchaseEvents, todayEvents] = await Promise.all([
+      // Apps with counts - single optimized query
+      prisma.$queryRaw`
+        SELECT 
+          a."id", a."appId", a."appToken", a."name", a."plan", a."welcomeEmailSent",
+          a."enabled", a."shopEmail", a."createdAt", a."userId", a."websiteDomain",
+          s."metaPixelId", s."metaPixelEnabled", s."timezone",
+          COALESCE((SELECT COUNT(*)::int FROM "Event" e WHERE e."appId" = a."id"), 0) as "eventCount",
+          COALESCE((SELECT COUNT(*)::int FROM "AnalyticsSession" ase WHERE ase."appId" = a."id"), 0) as "sessionCount"
+        FROM "App" a
+        LEFT JOIN "AppSettings" s ON s."appId" = a."id"
+        WHERE a."userId" = ${user.id}
+        ORDER BY a."createdAt" DESC
+      `,
+      // Purchase count
+      prisma.event.count({
+        where: { app: { userId: user.id }, eventName: "Purchase", createdAt: { gte: sevenDaysAgo } },
+      }),
+      // Recent purchases
+      prisma.event.findMany({
+        where: { app: { userId: user.id }, eventName: "Purchase", createdAt: { gte: sevenDaysAgo } },
+        orderBy: { createdAt: "desc" },
+        take: purchaseLimit,
+        skip: purchaseOffset,
+        include: { app: { select: { name: true, appId: true } } },
+      }),
+      // Today's events
+      prisma.event.count({
+        where: { app: { userId: user.id }, createdAt: { gte: today } },
+      }),
+    ]);
+
+    const transformedApps = (apps as any[]).map((app: any) => ({
+      ...app,
+      _count: { events: app.eventCount || 0, analyticsSessions: app.sessionCount || 0 },
+      settings: { metaPixelId: app.metaPixelId, metaPixelEnabled: app.metaPixelEnabled || false, timezone: app.timezone },
+    }));
+
+    const totalPixels = transformedApps.length;
+    const totalEvents = transformedApps.reduce((sum: number, app: any) => sum + app._count.events, 0);
+    const totalSessions = transformedApps.reduce((sum: number, app: any) => sum + app._count.analyticsSessions, 0);
+
+    return {
+      apps: transformedApps,
+      hasPixels: transformedApps.length > 0,
+      stats: { totalPixels, totalEvents, totalSessions, todayEvents },
+      recentPurchaseEvents: recentPurchaseEvents.map((e: any) => ({
+        id: e.id,
+        orderId: e.customData?.order_id || e.productId || '-',
+        value: e.value || (typeof e.customData?.value === 'number' ? e.customData.value : parseFloat(e.customData?.value) || null),
+        currency: e.currency || e.customData?.currency || 'USD',
+        pixelId: e.app.appId,
+        source: e.utmSource || '-',
+        purchaseTime: e.createdAt,
+      })),
+      totalPurchaseEvents,
+      purchaseOffset,
+      purchaseLimit,
+    };
+  } catch (error: any) {
+    console.error("[Dashboard Loader] Database error:", error);
+    
+    // Handle connection pool timeouts gracefully
+    if (error.message?.includes('connection pool') || 
+        error.message?.includes('Timed out') ||
+        error.code === 'P2024') {
+      console.error("[Dashboard Loader] Connection pool timeout - returning minimal data");
+      
+      // Return minimal data to keep the app functional
+      return {
+        apps: [],
+        hasPixels: false,
+        stats: {
+          totalPixels: 0,
+          totalEvents: 0,
+          totalSessions: 0,
+          todayEvents: 0,
+        },
+        recentPurchaseEvents: [],
+        totalPurchaseEvents: 0,
+        purchaseOffset: 0,
+        purchaseLimit: 10,
+        connectionError: true,
+      };
+    }
+    
+    // For other database errors, throw a proper error response
+    throw new Response("Database temporarily unavailable. Please try again later.", { status: 503 });
   }
-
-  const apps = await prisma.app.findMany({
-    where: { userId: user.id },
-    include: {
-      _count: {
-        select: { events: true, analyticsSessions: true },
-      },
-      settings: true,
-    },
-    orderBy: { createdAt: "desc" },
-  });
-
-  // Calculate aggregated dashboard stats
-  const totalPixels = apps.length;
-  const totalEvents = apps.reduce((sum: any, app: { _count: { events: any; }; }) => sum + app._count.events, 0);
-  const totalSessions = apps.reduce((sum: any, app: { _count: { analyticsSessions: any; }; }) => sum + app._count.analyticsSessions, 0);
-
-  // Get recent purchase events across all apps (last 7 days)
-  const sevenDaysAgo = new Date();
-  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-  // Get total count for pagination
-  const totalPurchaseEvents = await prisma.event.count({
-    where: {
-      app: {
-        userId: user.id,
-      },
-      eventName: "Purchase",
-      createdAt: { gte: sevenDaysAgo },
-    },
-  });
-
-  const recentPurchaseEvents = await prisma.event.findMany({
-    where: {
-      app: {
-        userId: user.id,
-      },
-      eventName: "Purchase",
-      createdAt: { gte: sevenDaysAgo },
-    },
-    orderBy: { createdAt: "desc" },
-    take: purchaseLimit,
-    skip: purchaseOffset,
-    include: {
-      app: {
-        select: { name: true, appId: true },
-      },
-    },
-  });
-
-  // Calculate today's stats
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const todayEvents = await prisma.event.count({
-    where: {
-      app: {
-        userId: user.id,
-      },
-      createdAt: { gte: today },
-    },
-  });
-
-  return {
-    apps,
-    hasPixels: apps.length > 0,
-    stats: {
-      totalPixels,
-      totalEvents,
-      totalSessions,
-      todayEvents,
-    },
-    recentPurchaseEvents: recentPurchaseEvents.map((e: any) => ({
-      id: e.id,
-      orderId: e.customData?.order_id || e.productId || '-',
-      value: e.value || (typeof e.customData?.value === 'number' ? e.customData.value : parseFloat(e.customData?.value) || null),
-      currency: e.currency || e.customData?.currency || 'USD',
-      pixelId: e.app.appId,
-      source: e.utmSource || '-',
-      purchaseTime: e.createdAt,
-    })),
-    totalPurchaseEvents,
-    purchaseOffset,
-    purchaseLimit,
-  };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -221,6 +170,54 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const user = await prisma.user.findUnique({ where: { storeUrl: shop } });
   if (!user) {
     return { error: "User not found" };
+  }
+
+  if (intent === "assign-website") {
+    const appId = formData.get("appId") as string;
+    const websiteDomain = formData.get("websiteDomain") as string;
+
+    if (!appId || !websiteDomain) {
+      return { error: "App ID and website domain are required" };
+    }
+
+    try {
+      // Normalize domain - handle https://, www., trailing slashes, etc.
+      const cleanDomain = websiteDomain
+        .toLowerCase()
+        .trim()
+        .replace(/^https?:\/\//, '')  // Remove http:// or https://
+        .replace(/^www\./, '')         // Remove www.
+        .replace(/\/+$/, '')           // Remove trailing slashes
+        .trim();
+      
+      console.log(`[Dashboard] Assigning domain "${cleanDomain}" to app ${appId} (original: "${websiteDomain}")`);
+      
+      // Update using raw SQL
+      const result = await prisma.$executeRawUnsafe(
+        `UPDATE "App" SET "websiteDomain" = $1 WHERE "id" = $2`,
+        cleanDomain,
+        appId
+      );
+      
+      console.log(`[Dashboard] Update result: ${result} rows affected`);
+
+      // Verify the assignment
+      const updatedApp = await prisma.$queryRawUnsafe(
+        `SELECT "name", "websiteDomain" FROM "App" WHERE "id" = $1`,
+        appId
+      ) as any[];
+      
+      if (updatedApp.length > 0) {
+        console.log(`[Dashboard] ✅ Domain assignment verified: "${updatedApp[0].websiteDomain}" for pixel "${updatedApp[0].name}"`);
+        return { success: true, message: `Website domain "${cleanDomain}" assigned to pixel "${updatedApp[0].name}" successfully` };
+      } else {
+        console.log(`[Dashboard] ❌ App not found after update`);
+        return { error: "App not found" };
+      }
+    } catch (error) {
+      console.error("Error assigning website:", error);
+      return { error: `Failed to assign website: ${error instanceof Error ? error.message : String(error)}` };
+    }
   }
 
   if (intent === "create-pixel") {
@@ -461,6 +458,49 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
+  // Save Facebook token to database (called when connecting via SDK)
+  if (intent === "save-facebook-token") {
+    const accessToken = formData.get("accessToken") as string;
+    
+    if (!accessToken) {
+      return { error: "Access token is required" };
+    }
+
+    try {
+      // Get all apps for this user and update their tokens
+      const apps = await prisma.app.findMany({
+        where: { userId: user.id },
+        include: { settings: true },
+      });
+
+      // Update ALL apps with the new token
+      for (const app of apps) {
+        if (app.settings) {
+          await prisma.appSettings.update({
+            where: { id: app.settings.id },
+            data: {
+              metaAccessToken: accessToken,
+              metaTokenExpiresAt: null, // SDK tokens don't have expiry info easily
+            },
+          });
+        } else {
+          await prisma.appSettings.create({
+            data: {
+              appId: app.id,
+              metaAccessToken: accessToken,
+            },
+          });
+        }
+      }
+
+      console.log(`[Dashboard] Saved Facebook token to ${apps.length} app(s)`);
+      return { success: true, message: "Facebook token saved", intent: "save-facebook-token" };
+    } catch (error) {
+      console.error("Error saving Facebook token:", error);
+      return { error: "Failed to save token" };
+    }
+  }
+
   if (intent === "fetch-facebook-pixels") {
     const accessToken = formData.get("accessToken") as string;
     
@@ -578,7 +618,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function DashboardPage() {
-  const { apps, hasPixels, stats, recentPurchaseEvents, totalPurchaseEvents, purchaseOffset, purchaseLimit } = useLoaderData<typeof loader>();
+  const { apps, hasPixels, stats, recentPurchaseEvents, totalPurchaseEvents, purchaseOffset, purchaseLimit, connectionError } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
   const [searchParams] = useSearchParams();
   const [mounted, setMounted] = useState(false);
@@ -588,6 +628,7 @@ export default function DashboardPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showRenameModal, setShowRenameModal] = useState<any>(null);
   const [showDeleteModal, setShowDeleteModal] = useState<any>(null);
+  const [showWebsiteModal, setShowWebsiteModal] = useState<any>(null);
   const [showSnippet, setShowSnippet] = useState<string | null>(null);
   const [facebookAccessToken, setFacebookAccessToken] = useState("");
   const [selectedFacebookPixel, setSelectedFacebookPixel] = useState("");
@@ -675,6 +716,11 @@ export default function DashboardPage() {
 
   // Rename form state
   const [renameValue, setRenameValue] = useState("");
+  const [websiteDomain, setWebsiteDomain] = useState("");
+
+  // Success/Error message state to prevent hydration mismatch
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const isLoading = fetcher.state !== "idle";
 
@@ -877,6 +923,12 @@ export default function DashboardPage() {
             setIsConnectedToFacebook(true);
             localStorage.setItem("facebook_access_token", accessToken);
             
+            // Save token to database so other pages (Catalog) can use it
+            fetcher.submit(
+              { intent: "save-facebook-token", accessToken },
+              { method: "POST" }
+            );
+            
             // Fetch pixels using 3-step approach
             fetchPixelsWithSDK(accessToken);
             
@@ -999,6 +1051,12 @@ export default function DashboardPage() {
           setIsConnectedToFacebook(true);
           localStorage.setItem("facebook_access_token", accessToken);
           
+          // Save token to database so other pages (Catalog) can use it
+          fetcher.submit(
+            { intent: "save-facebook-token", accessToken },
+            { method: "POST" }
+          );
+          
           // Fetch pixels using 3-step approach (user -> businesses -> owned_pixels)
           fetchPixelsWithSDK(accessToken);
           
@@ -1104,6 +1162,15 @@ export default function DashboardPage() {
 
   // Handle fetcher response
   useEffect(() => {
+    // Handle success/error messages
+    if (fetcher.data?.success) {
+      setSuccessMessage(fetcher.data.message || "Action completed successfully");
+      setErrorMessage(null); // Clear error on success
+    } else if (fetcher.data?.error) {
+      setErrorMessage(fetcher.data.error);
+      setSuccessMessage(null); // Clear success on error
+    }
+
     if (fetcher.data?.facebookPixels) {
       setFacebookPixels(fetcher.data.facebookPixels);
       setIsConnectedToFacebook(true);
@@ -1338,6 +1405,21 @@ export default function DashboardPage() {
     setShowDeleteModal(null);
   }, [fetcher, showDeleteModal]);
 
+  const handleAssignWebsite = useCallback(() => {
+    if (!showWebsiteModal || !websiteDomain) return;
+    
+    fetcher.submit(
+      {
+        intent: "assign-website",
+        appId: showWebsiteModal.id,
+        websiteDomain: websiteDomain,
+      },
+      { method: "POST" }
+    );
+    setShowWebsiteModal(null);
+    setWebsiteDomain("");
+  }, [fetcher, showWebsiteModal, websiteDomain]);
+
   const handleTogglePixel = useCallback((appId: string, enabled: boolean) => {
     fetcher.submit(
       { 
@@ -1384,91 +1466,91 @@ export default function DashboardPage() {
         }}
         secondaryActions={[
           {
-            content: mounted && isConnectedToFacebook 
-              ? `Connected: ${facebookUser?.name || 'Facebook'}` 
-              : "Connect Facebook",
+            content: "Connect Facebook",
             icon: ConnectIcon,
-            onAction: mounted && isConnectedToFacebook ? handleRefreshFacebookData : handleConnectToFacebook,
-            loading: isRefreshingToken,
+            onAction: handleConnectToFacebook,
           }
         ]}
+        fullWidth
       >
         <Layout>
           {/* Success/Error Banner */}
-          {fetcher.data?.success && (
-            <Layout.Section>
-              <Banner tone="success">
-                <p>{fetcher.data.message || "Action completed successfully"}</p>
+          {successMessage && (
+            <Layout.Section fullWidth>
+              <Banner tone="success" onDismiss={() => setSuccessMessage(null)}>
+                <p>{successMessage}</p>
               </Banner>
             </Layout.Section>
           )}
-          {fetcher.data?.error && (
-            <Layout.Section>
-              <Banner tone="critical">
-                <p>{fetcher.data.error}</p>
+          {errorMessage && (
+            <Layout.Section fullWidth>
+              <Banner tone="critical" onDismiss={() => setErrorMessage(null)}>
+                <p>{errorMessage}</p>
               </Banner>
             </Layout.Section>
           )}
 
           {/* Facebook Connection Status Card */}
-          {mounted && isConnectedToFacebook && facebookUser && (
-            <Layout.Section>
-              <Card>
-                <InlineStack align="space-between" blockAlign="center">
-                  <InlineStack gap="300" blockAlign="center">
-                    {facebookUser.picture ? (
-                      <img 
-                        src={facebookUser.picture} 
-                        alt={facebookUser.name}
-                        style={{
+          <ClientOnly>
+            {mounted && isConnectedToFacebook && facebookUser && (
+              <Layout.Section fullWidth>
+                <Card>
+                  <InlineStack align="space-between" blockAlign="center">
+                    <InlineStack gap="300" blockAlign="center">
+                      {facebookUser.picture ? (
+                        <img 
+                          src={facebookUser.picture} 
+                          alt={facebookUser.name}
+                          style={{
+                            width: "48px",
+                            height: "48px",
+                            borderRadius: "50%",
+                            objectFit: "cover",
+                            border: "3px solid #1877f2"
+                          }}
+                        />
+                      ) : (
+                        <div style={{
                           width: "48px",
                           height: "48px",
                           borderRadius: "50%",
-                          objectFit: "cover",
-                          border: "3px solid #1877f2"
-                        }}
-                      />
-                    ) : (
-                      <div style={{
-                        width: "48px",
-                        height: "48px",
-                        borderRadius: "50%",
-                        backgroundColor: "#1877f2",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        color: "white",
-                        fontWeight: "bold",
-                        fontSize: "20px"
-                      }}>
-                        {facebookUser.name.charAt(0).toUpperCase()}
-                      </div>
-                    )}
-                    <BlockStack gap="100">
-                      <InlineStack gap="200" blockAlign="center">
-                        <Text variant="headingMd" as="h3">Facebook Connected</Text>
-                        <Badge tone="success">Active</Badge>
-                      </InlineStack>
-                      <Text variant="bodySm" tone="subdued" as="p">
-                        Logged in as {facebookUser.name} • {facebookPixels.length} pixel(s) available
-                      </Text>
-                    </BlockStack>
+                          backgroundColor: "#1877f2",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          color: "white",
+                          fontWeight: "bold",
+                          fontSize: "20px"
+                        }}>
+                          {facebookUser.name.charAt(0).toUpperCase()}
+                        </div>
+                      )}
+                      <BlockStack gap="100">
+                        <InlineStack gap="200" blockAlign="center">
+                          <Text variant="headingMd" as="h3">Facebook Connected</Text>
+                          <Badge tone="success">Active</Badge>
+                        </InlineStack>
+                        <Text variant="bodySm" tone="subdued" as="p">
+                          Logged in as {facebookUser.name} • {facebookPixels.length} pixel(s) available
+                        </Text>
+                      </BlockStack>
+                    </InlineStack>
+                    <InlineStack gap="200">
+                      <Button onClick={handleRefreshFacebookData} loading={isRefreshingToken}>
+                        Refresh
+                      </Button>
+                      <Button variant="plain" tone="critical" onClick={handleDisconnectFacebook}>
+                        Disconnect
+                      </Button>
+                    </InlineStack>
                   </InlineStack>
-                  <InlineStack gap="200">
-                    <Button onClick={handleRefreshFacebookData} loading={isRefreshingToken}>
-                      Refresh
-                    </Button>
-                    <Button variant="plain" tone="critical" onClick={handleDisconnectFacebook}>
-                      Disconnect
-                    </Button>
-                  </InlineStack>
-                </InlineStack>
-              </Card>
-            </Layout.Section>
-          )}
+                </Card>
+              </Layout.Section>
+            )}
+          </ClientOnly>
 
           {/* Dashboard Overview Stats */}
-          <Layout.Section>
+          <Layout.Section fullWidth>
             <BlockStack gap="400">
               <Text variant="headingLg" as="h2">Performance Overview</Text>
               <InlineStack gap="400" wrap={false}>
@@ -1477,6 +1559,13 @@ export default function DashboardPage() {
                     <Text variant="bodySm" as="p" tone="subdued">Active Pixels</Text>
                     <Text variant="headingXl" as="p">{stats.totalPixels}</Text>
                     <Text variant="bodySm" as="p" tone="success">Facebook Pixels</Text>
+                  </BlockStack>
+                </Card>
+                <Card>
+                  <BlockStack gap="200">
+                    <Text variant="bodySm" as="p" tone="subdued">Assigned Domains</Text>
+                    <Text variant="headingXl" as="p">{apps.filter((app: any) => app.websiteDomain).length}</Text>
+                    <Text variant="bodySm" as="p" tone="info">Domain-specific pixels</Text>
                   </BlockStack>
                 </Card>
                 <Card>
@@ -1505,7 +1594,7 @@ export default function DashboardPage() {
           </Layout.Section>
 
           {/* Facebook Pixels List */}
-          <Layout.Section>
+          <Layout.Section fullWidth>
             <BlockStack gap="400">
               <InlineStack align="space-between" blockAlign="center">
                 <Text variant="headingLg" as="h2">Your Facebook Pixels</Text>
@@ -1513,19 +1602,22 @@ export default function DashboardPage() {
                   <Button
                     icon={ExportIcon}
                     onClick={() => {
-                      // Create CSV content for pixels
-                      const headers = ['Name', 'Pixel ID', 'Events', 'Sessions', 'Status', 'Meta Connected'];
+                      // Create CSV content for pixels with website domain info
+                      const headers = ['Pixel Name', 'Pixel ID', 'Website Domain', 'Status', 'Events', 'Sessions', 'Meta Connected', 'Timezone', 'Created Date'];
                       const csvContent = [
                         headers.join(','),
                         ...apps.map((app: any) => {
-                          const { name, settings, _count, enabled } = app;
+                          const { name, settings, _count, enabled, websiteDomain, createdAt } = app;
                           return [
                             `"${name}"`,
                             `"${settings?.metaPixelId || 'N/A'}"`,
+                            `"${websiteDomain || 'Unassigned'}"`,
+                            `"${enabled ? 'Enabled' : 'Disabled'}"`,
                             `"${_count.events.toLocaleString()}"`,
                             `"${_count.analyticsSessions.toLocaleString()}"`,
-                            `"${enabled ? 'Enabled' : 'Disabled'}"`,
-                            `"${settings?.metaPixelEnabled ? 'Yes' : 'No'}"`
+                            `"${settings?.metaPixelEnabled ? 'Yes' : 'No'}"`,
+                            `"${settings?.timezone || 'GMT+0'}"`,
+                            `"${new Date(createdAt).toLocaleDateString()}"`
                           ].join(',');
                         })
                       ].join('\n');
@@ -1535,7 +1627,7 @@ export default function DashboardPage() {
                       const link = document.createElement('a');
                       const url = URL.createObjectURL(blob);
                       link.setAttribute('href', url);
-                      link.setAttribute('download', `pixels-report-${new Date().toISOString().split('T')[0]}.csv`);
+                      link.setAttribute('download', `pixels-website-report-${new Date().toISOString().split('T')[0]}.csv`);
                       link.style.visibility = 'hidden';
                       document.body.appendChild(link);
                       link.click();
@@ -1547,69 +1639,126 @@ export default function DashboardPage() {
                   <Text as="h1" fontWeight="bold">Manage All Pixels</Text>
                 </InlineStack>
               </InlineStack>
+
+              {/* Website Assignment Info Banner */}
+              <Banner tone="warning">
+                <BlockStack gap="200">
+                  <Text as="p" variant="bodyMd" fontWeight="semibold">
+                    ⚠️ Strict Domain Matching - Pixels Only Fire on Assigned Domains
+                  </Text>
+                  <Text as="p" variant="bodySm">
+                    Each pixel must be assigned to a specific website domain. Pixels will ONLY track events from their assigned domain.
+                    If a domain is not assigned to any pixel, tracking will be disabled for that domain.
+                  </Text>
+                  <Text as="p" variant="bodySm">
+                    <strong>How to use:</strong> Click "Assign" to assign a pixel to your website domain (e.g., mystore.myshopify.com).
+                  </Text>
+                </BlockStack>
+              </Banner>
               
               <Card>
-                <BlockStack gap="400">
-                  {apps.map((app: any) => {
-                    const { id, appId, name, _count, settings, enabled } = app;
-                    return (
-                      <div key={id} style={{ padding: "16px", border: "1px solid #e5e7eb", borderRadius: "8px" }}>
-                        <BlockStack gap="300">
-                          <InlineStack align="space-between" blockAlign="center">
-                            <BlockStack gap="100">
-                              <InlineStack gap="200" blockAlign="center">
-                                <Text variant="bodyMd" fontWeight="bold" as="h3">{name}</Text>
-                                {settings?.metaPixelEnabled && (
-                                  <Badge tone="success">Meta Connected</Badge>
-                                )}
-                                <Badge tone={enabled ? "success" : "critical"}>
-                                  {enabled ? "Enabled" : "Disabled"}
-                                </Badge>
-                              </InlineStack>
-                              <Text variant="bodySm" as="p" tone="subdued">
-                                Pixel ID: {settings?.metaPixelId || appId} • {_count.events.toLocaleString()} events • {_count.analyticsSessions.toLocaleString()} sessions
-                              </Text>
-                            </BlockStack>
-                            <InlineStack gap="200">
-                              <Button 
-                                variant={enabled ? "primary" : "secondary"}
-                                tone={enabled ? "critical" : "success"}
-                                onClick={() => handleTogglePixel(id, enabled)}
-                                loading={isLoading}
-                              >
-                                {enabled ? "Disable" : "Enable"}
-                              </Button>
-                              <Button onClick={() => setShowSnippet(appId)}>
-                                Get Code
-                              </Button>
-                              <Button
-                                onClick={() => {
-                                  setShowRenameModal(app);
-                                  setRenameValue(app.name);
-                                }}
-                              >
-                                Rename
-                              </Button>
-                              <Button
-                                tone="critical"
-                                onClick={() => setShowDeleteModal(app)}
-                              >
-                                Delete
-                              </Button>
-                            </InlineStack>
+                <div style={{ width: '100%', overflowX: 'auto' }}>
+                  <DataTable
+                    columnContentTypes={[
+                      'text',
+                      'text', 
+                      'text',
+                      'text',
+                      'numeric',
+                      'numeric',
+                      'text',
+                      'text',
+                      'text'
+                    ]}
+                    headings={[
+                      'Pixel Name',
+                      'Pixel ID', 
+                      'Website Domain',
+                      'Status',
+                      'Events',
+                      'Sessions',
+                      'Meta Status',
+                      'Timezone',
+                      'Actions'
+                    ]}
+                    rows={apps.map((app: any) => {
+                      const { id, appId, name, _count, settings, enabled, websiteDomain } = app;
+                      return [
+                        <Text variant="bodyMd" fontWeight="semibold" as="span">{name}</Text>,
+                        <Text variant="bodySm" as="span" tone="subdued">{settings?.metaPixelId || appId}</Text>,
+                        websiteDomain ? (
+                          <InlineStack gap="100" blockAlign="center">
+                            <Badge tone="info">{`🌐 ${websiteDomain}`}</Badge>
                           </InlineStack>
-                        </BlockStack>
-                      </div>
-                    );
-                  })}
-                </BlockStack>
+                        ) : (
+                          <Badge tone="attention">Unassigned</Badge>
+                        ),
+                        <Badge tone={enabled ? "success" : "critical"}>
+                          {enabled ? "Enabled" : "Disabled"}
+                        </Badge>,
+                        <Text variant="bodySm" as="span">{_count.events.toLocaleString()}</Text>,
+                        <Text variant="bodySm" as="span">{_count.analyticsSessions.toLocaleString()}</Text>,
+                        settings?.metaPixelEnabled ? (
+                          <Badge tone="success">Connected</Badge>
+                        ) : (
+                          <Badge tone="critical">Not Connected</Badge>
+                        ),
+                        <Text variant="bodySm" as="span" tone="subdued">
+                          {settings?.timezone || 'GMT+0'}
+                        </Text>,
+                        <InlineStack gap="100">
+                          <Button 
+                            size="micro"
+                            variant={enabled ? "primary" : "secondary"}
+                            tone={enabled ? "critical" : "success"}
+                            onClick={() => handleTogglePixel(id, enabled)}
+                            loading={isLoading}
+                          >
+                            {enabled ? "Disable" : "Enable"}
+                          </Button>
+                          <Button 
+                            size="micro"
+                            onClick={() => {
+                              setShowWebsiteModal(app);
+                              setWebsiteDomain(websiteDomain || "");
+                            }}
+                          >
+                            {websiteDomain ? "Change" : "Assign"}
+                          </Button>
+                          <Button 
+                            size="micro"
+                            onClick={() => setShowSnippet(appId)}
+                          >
+                            Code
+                          </Button>
+                          <Button
+                            size="micro"
+                            onClick={() => {
+                              setShowRenameModal(app);
+                              setRenameValue(app.name);
+                            }}
+                          >
+                            Rename
+                          </Button>
+                          <Button
+                            size="micro"
+                            tone="critical"
+                            onClick={() => setShowDeleteModal(app)}
+                          >
+                            Delete
+                          </Button>
+                        </InlineStack>
+                      ];
+                    })}
+                  />
+                </div>
               </Card>
             </BlockStack>
           </Layout.Section>
 
           {/* Recent Purchase Events */}
           {recentPurchaseEvents.length > 0 && (
-            <Layout.Section>
+            <Layout.Section fullWidth>
               <Card>
                 <BlockStack gap="400">
                   <InlineStack align="space-between" blockAlign="center">
@@ -1622,7 +1771,7 @@ export default function DashboardPage() {
                           const headers = ['Order ID', 'Value', 'Currency', 'Pixel ID', 'Source', 'Purchase Time'];
                           const csvContent = [
                             headers.join(','),
-                            ...filteredPurchaseEvents.map(event => [
+                            ...filteredPurchaseEvents.map((event: any) => [
                               `"${event.orderId}"`,
                               event.value ? `"$${event.value.toFixed(2)}"` : '""',
                               `"${event.currency}"`,
@@ -1788,7 +1937,8 @@ export default function DashboardPage() {
               {enhancedCreateStep === 1 && (
                 <>
                   {/* Facebook Connection Status */}
-                  {mounted && isConnectedToFacebook && facebookUser ? (
+                  <ClientOnly>
+                    {mounted && isConnectedToFacebook && facebookUser ? (
                 <Card background="bg-surface-success">
                   <InlineStack align="space-between" blockAlign="center">
                     <InlineStack gap="200" blockAlign="center">
@@ -1869,6 +2019,7 @@ export default function DashboardPage() {
                   </InlineStack>
                 </Card>
               )}
+                  </ClientOnly>
 
               <div>
                 <Text as="p" variant="bodyMd" fontWeight="medium">
@@ -1889,7 +2040,8 @@ export default function DashboardPage() {
               </div>
 
               {/* Pixel Selection - Omega Style */}
-              {mounted && isConnectedToFacebook && facebookPixels.length > 0 ? (
+              <ClientOnly>
+                {mounted && isConnectedToFacebook && facebookPixels.length > 0 ? (
                 <div>
                   <Text as="p" variant="bodyMd" fontWeight="medium">
                     Select Facebook Pixel <Text as="span" tone="critical">*</Text>
@@ -1946,9 +2098,11 @@ export default function DashboardPage() {
                   )}
                 </div>
               ) : null}
+              </ClientOnly>
 
               {/* Manual Pixel ID Input */}
-              {(!mounted || !isConnectedToFacebook || selectedFacebookPixel === "manual") && (
+              <ClientOnly>
+                {(!mounted || !isConnectedToFacebook || selectedFacebookPixel === "manual") && (
                 <div>
                   <Text as="p" variant="bodyMd" fontWeight="medium">
                     Pixel ID (Dataset ID) <Text as="span" tone="critical">*</Text>
@@ -1986,9 +2140,11 @@ export default function DashboardPage() {
                   )}
                 </div>
               )}
+              </ClientOnly>
 
               {/* Access Token - Only for manual entry */}
-              {(!mounted || !isConnectedToFacebook || selectedFacebookPixel === "manual") && (
+              <ClientOnly>
+                {(!mounted || !isConnectedToFacebook || selectedFacebookPixel === "manual") && (
                 <div>
                   <Text as="p" variant="bodyMd" fontWeight="medium">
                     Access Token (Optional)
@@ -2035,9 +2191,11 @@ export default function DashboardPage() {
                   )}
                 </div>
               )}
+              </ClientOnly>
 
               {/* Pixel Validation Status - Auto validation for SDK-selected pixels */}
-              {mounted && isConnectedToFacebook && selectedFacebookPixel && selectedFacebookPixel !== "manual" && (
+              <ClientOnly>
+                {mounted && isConnectedToFacebook && selectedFacebookPixel && selectedFacebookPixel !== "manual" && (
                 <>
                   {isValidatingPixel ? (
                     <Banner tone="info">
@@ -2056,6 +2214,7 @@ export default function DashboardPage() {
                   ) : null}
                 </>
               )}
+              </ClientOnly>
               </>
               )}
 
@@ -2193,21 +2352,31 @@ export default function DashboardPage() {
 
               <div>
                 <Text as="p" variant="bodyMd" fontWeight="medium">
-                  Access Token (Optional)
+                  Connect Facebook Account
                 </Text>
-                <div style={{ marginTop: "8px", marginBottom: "4px" }}>
-                  <TextField
-                    label=""
-                    value={createForm.metaAccessToken}
-                    onChange={(value) => setCreateForm(prev => ({ ...prev, metaAccessToken: value }))}
-                    type="password"
-                    placeholder="EAAxxxxxxxx..."
-                    autoComplete="off"
-                  />
+                
+                <div style={{ marginTop: "12px", marginBottom: "12px" }}>
+                  <Button
+                    url="/auth/facebook?return=/app/dashboard"
+                    variant="primary"
+                    size="large"
+                    external
+                  >
+                    Connect with Facebook
+                  </Button>
                 </div>
+                
                 <Text as="p" variant="bodySm" tone="subdued">
-                  Generate in Meta Events Manager → Settings → Conversions API → Generate Access Token
+                  Click to connect your Facebook account. This will automatically get the required permissions for catalog management, ads, and pixel tracking.
                 </Text>
+                
+                <div style={{ marginTop: "16px" }}>
+                  <Banner tone="info">
+                    <Text as="p" variant="bodySm">
+                      <strong>One-click setup:</strong> No need to manually copy tokens. Just click the button above and authorize the app.
+                    </Text>
+                  </Banner>
+                </div>
               </div>
             </BlockStack>
           </Modal.Section>
@@ -2275,6 +2444,57 @@ export default function DashboardPage() {
                   <p>
                     Are you sure you want to delete "{showDeleteModal.name}"? This will permanently delete all associated events, sessions, and data. This action cannot be undone.
                   </p>
+                </Banner>
+              </BlockStack>
+            </Modal.Section>
+          </Modal>
+        )}
+
+        {/* Website Assignment Modal */}
+        {showWebsiteModal && (
+          <Modal
+            open={true}
+            onClose={() => {
+              setShowWebsiteModal(null);
+              setWebsiteDomain("");
+            }}
+            title="Assign Website Domain"
+            primaryAction={{
+              content: "Assign Website",
+              onAction: handleAssignWebsite,
+              loading: isLoading,
+              disabled: !websiteDomain,
+            }}
+            secondaryActions={[
+              { content: "Cancel", onAction: () => setShowWebsiteModal(null) }
+            ]}
+          >
+            <Modal.Section>
+              <BlockStack gap="400">
+                <Text as="p">
+                  Assign this pixel to a specific website domain. Only events from this domain will be tracked by this pixel.
+                </Text>
+                <TextField
+                  label="Website Domain"
+                  value={websiteDomain}
+                  onChange={setWebsiteDomain}
+                  placeholder="e.g., mystore.myshopify.com"
+                  helpText="Enter domain only. https://, www., and trailing / are automatically removed."
+                  autoComplete="off"
+                />
+                <Banner tone="warning">
+                  <BlockStack gap="200">
+                    <Text as="p" variant="bodyMd" fontWeight="semibold">
+                      ⚠️ Important: Strict Domain Matching
+                    </Text>
+                    <Text as="p" variant="bodySm">
+                      Pixels will ONLY fire on websites with matching domain assignments. 
+                      If no pixel is assigned to a domain, tracking will be disabled for that domain.
+                    </Text>
+                    <Text as="p" variant="bodySm">
+                      <strong>Accepted formats:</strong> mystore.myshopify.com, https://mystore.com/, www.mystore.com - all will be normalized to: mystore.myshopify.com or mystore.com
+                    </Text>
+                  </BlockStack>
                 </Banner>
               </BlockStack>
             </Modal.Section>
@@ -2502,14 +2722,14 @@ export default function DashboardPage() {
           <Card>
             <BlockStack gap="400">
               {/* Success/Error Banner */}
-              {fetcher.data?.success && (
-                <Banner tone="success">
-                  <p>{fetcher.data.message}</p>
+              {successMessage && (
+                <Banner tone="success" onDismiss={() => setSuccessMessage(null)}>
+                  <p>{successMessage}</p>
                 </Banner>
               )}
-              {fetcher.data?.error && (
-                <Banner tone="critical">
-                  <p>{fetcher.data.error}</p>
+              {errorMessage && (
+                <Banner tone="critical" onDismiss={() => setErrorMessage(null)}>
+                  <p>{errorMessage}</p>
                 </Banner>
               )}
 
@@ -2549,6 +2769,7 @@ export default function DashboardPage() {
                         fontWeight: inputMethod === "auto" ? "600" : "400",
                         color: inputMethod === "auto" ? "#1f2937" : "#6b7280"
                       }}
+                      suppressHydrationWarning={true}
                     >
                       Auto Input Pixel
                     </button>
@@ -2570,6 +2791,7 @@ export default function DashboardPage() {
                         fontWeight: inputMethod === "manual" ? "600" : "400",
                         color: inputMethod === "manual" ? "#1f2937" : "#6b7280"
                       }}
+                      suppressHydrationWarning={true}
                     >
                       Manual Input
                     </button>
@@ -2651,104 +2873,106 @@ export default function DashboardPage() {
                       </Banner>
                     )}
                     
-                    {!mounted || !isConnectedToFacebook ? (
-                      <Card background="bg-surface-secondary">
-                        <BlockStack gap="300">
-                          <InlineStack gap="200" blockAlign="center">
-                            <Icon source={ConnectIcon} tone="base" />
-                            <Text variant="headingSm" as="h3">
-                              Connect to Facebook
+                    <ClientOnly>
+                      {!mounted || !isConnectedToFacebook ? (
+                        <Card background="bg-surface-secondary">
+                          <BlockStack gap="300">
+                            <InlineStack gap="200" blockAlign="center">
+                              <Icon source={ConnectIcon} tone="base" />
+                              <Text variant="headingSm" as="h3">
+                                Connect to Facebook
+                              </Text>
+                            </InlineStack>
+                            <Text as="p" tone="subdued">
+                              Connect your Facebook account to automatically fetch your available pixels.
                             </Text>
-                          </InlineStack>
-                          <Text as="p" tone="subdued">
-                            Connect your Facebook account to automatically fetch your available pixels.
-                          </Text>
-                          <InlineStack gap="200">
-                            <Button 
-                              variant="primary" 
-                              onClick={handleConnectToFacebook}
-                            >
-                              Connect to Facebook
-                            </Button>
-                            <Button 
-                              variant="secondary" 
-                              onClick={() => setShowFacebookModal(true)}
-                            >
-                              Manual Token
-                            </Button>
-                          </InlineStack>
+                            <InlineStack gap="200">
+                              <Button 
+                                variant="primary" 
+                                onClick={handleConnectToFacebook}
+                              >
+                                Connect to Facebook
+                              </Button>
+                              <Button 
+                                variant="secondary" 
+                                onClick={() => setShowFacebookModal(true)}
+                              >
+                                Manual Token
+                              </Button>
+                            </InlineStack>
+                          </BlockStack>
+                        </Card>
+                      ) : (
+                        <BlockStack gap="300">
+                          <Banner tone="success">
+                            <p>✅ Connected to Facebook! Found {facebookPixels.length} pixel(s).</p>
+                          </Banner>
+                          
+                          {facebookPixels.length > 0 && (
+                            <>
+                              <Select
+                                label="Select a Facebook Pixel"
+                                options={[
+                                  { label: "Choose a pixel...", value: "" },
+                                  ...facebookPixels
+                                    .filter(pixel => {
+                                      // Filter out pixels that are already added
+                                      return !apps.some((app: any) => app.settings?.metaPixelId === pixel.id);
+                                    })
+                                    .map(pixel => ({
+                                      label: `${pixel.name} (${pixel.accountName})`,
+                                      value: pixel.id
+                                    }))
+                                ]}
+                                value={selectedFacebookPixel}
+                                onChange={(value) => {
+                                  setSelectedFacebookPixel(value);
+                                  const selectedPixel = facebookPixels.find(p => p.id === value);
+                                  if (selectedPixel) {
+                                    setPixelForm(prev => ({
+                                      ...prev,
+                                      pixelName: selectedPixel.name,
+                                      pixelId: selectedPixel.id,
+                                    }));
+                                  }
+                                }}
+                              />
+                              
+                              {/* Show message if some pixels are already added */}
+                              {facebookPixels.some(pixel => apps.some((app: any) => app.settings?.metaPixelId === pixel.id)) && (
+                                <Banner tone="info">
+                                  <p>
+                                    Some pixels are hidden because they're already added to your app. 
+                                    Each pixel can only be added once.
+                                  </p>
+                                </Banner>
+                              )}
+                              
+                              {/* Show message if all pixels are already added */}
+                              {facebookPixels.every(pixel => apps.some((app: any) => app.settings?.metaPixelId === pixel.id)) && (
+                                <Banner tone="warning">
+                                  <p>
+                                    All your Facebook pixels are already added to this app. 
+                                    You can manage them from the main dashboard.
+                                  </p>
+                                </Banner>
+                              )}
+                            </>
+                          )}
+                          
+                          <Button 
+                            onClick={() => {
+                              setIsConnectedToFacebook(false);
+                              setFacebookPixels([]);
+                              setSelectedFacebookPixel("");
+                            }}
+                            variant="plain"
+                          >
+                            Disconnect from Facebook
+                          </Button>
                         </BlockStack>
-                      </Card>
-                    ) : (
-                      <BlockStack gap="300">
-                        <Banner tone="success">
-                          <p>✅ Connected to Facebook! Found {facebookPixels.length} pixel(s).</p>
-                        </Banner>
-                        
-                        {facebookPixels.length > 0 && (
-                          <>
-                            <Select
-                              label="Select a Facebook Pixel"
-                              options={[
-                                { label: "Choose a pixel...", value: "" },
-                                ...facebookPixels
-                                  .filter(pixel => {
-                                    // Filter out pixels that are already added
-                                    return !apps.some((app: any) => app.settings?.metaPixelId === pixel.id);
-                                  })
-                                  .map(pixel => ({
-                                    label: `${pixel.name} (${pixel.accountName})`,
-                                    value: pixel.id
-                                  }))
-                              ]}
-                              value={selectedFacebookPixel}
-                              onChange={(value) => {
-                                setSelectedFacebookPixel(value);
-                                const selectedPixel = facebookPixels.find(p => p.id === value);
-                                if (selectedPixel) {
-                                  setPixelForm(prev => ({
-                                    ...prev,
-                                    pixelName: selectedPixel.name,
-                                    pixelId: selectedPixel.id,
-                                  }));
-                                }
-                              }}
-                            />
-                            
-                            {/* Show message if some pixels are already added */}
-                            {facebookPixels.some(pixel => apps.some((app: any) => app.settings?.metaPixelId === pixel.id)) && (
-                              <Banner tone="info">
-                                <p>
-                                  Some pixels are hidden because they're already added to your app. 
-                                  Each pixel can only be added once.
-                                </p>
-                              </Banner>
-                            )}
-                            
-                            {/* Show message if all pixels are already added */}
-                            {facebookPixels.every(pixel => apps.some((app: any) => app.settings?.metaPixelId === pixel.id)) && (
-                              <Banner tone="warning">
-                                <p>
-                                  All your Facebook pixels are already added to this app. 
-                                  You can manage them from the main dashboard.
-                                </p>
-                              </Banner>
-                            )}
-                          </>
-                        )}
-                        
-                        <Button 
-                          onClick={() => {
-                            setIsConnectedToFacebook(false);
-                            setFacebookPixels([]);
-                            setSelectedFacebookPixel("");
-                          }}
-                          variant="plain"
-                        >
-                          Disconnect from Facebook
-                        </Button>
-                      </BlockStack>
-                    )}
+                      )}
+                    </ClientOnly>
                   </BlockStack>
                 ) : (
                   // Manual Input

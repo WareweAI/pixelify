@@ -20,8 +20,15 @@
   var retryDelay = 1000;
   
   function fetchPixelConfig() {
-    // Fetch the pixel configuration from the API
-    return fetch(PROXY_URL + '/get-pixel-id?shop=' + encodeURIComponent(SHOP), {
+    // Get current domain for website-specific pixel assignment
+    var currentDomain = window.location.hostname;
+    
+    // Fetch the pixel configuration from the API with domain context
+    var url = PROXY_URL + '/get-pixel-id?shop=' + encodeURIComponent(SHOP) + '&domain=' + encodeURIComponent(currentDomain);
+    
+    if (DEBUG) console.log('[PixelTracker] Fetching config for domain:', currentDomain);
+    
+    return fetch(url, {
       method: 'GET',
       headers: { 'Accept': 'application/json' }
     })
@@ -49,25 +56,36 @@
   }
   
   function initializeTracker(data) {
-    if (data.error) {
-      console.warn('[PixelTracker] API error:', data.error);
-      return;
+    // Log the full response for debugging
+    console.log('[PixelTracker] Full API Response:', JSON.stringify(data, null, 2));
+
+    // STRICT: If tracking is disabled or domain doesn't match, DO NOT initialize pixel
+    if (data.error || data.trackingDisabled || data.domainMatch === false) {
+      console.warn('[PixelTracker] ❌ Tracking DISABLED for this domain');
+      console.warn('[PixelTracker] Domain Match:', data.domainMatch);
+      console.warn('[PixelTracker] Reason:', data.message || data.error || 'Domain not assigned to any pixel');
+      if (data.availableAssignments) {
+        console.warn('[PixelTracker] Available pixel assignments:', data.availableAssignments);
+      }
+      return; // DO NOT initialize any tracking
     }
+    
+    // Check if domainMatch is explicitly true
+    if (data.domainMatch !== true) {
+      console.warn('[PixelTracker] ⚠️ domainMatch is not true:', data.domainMatch);
+      console.warn('[PixelTracker] This might indicate a problem with domain assignment');
+    }
+    
+    // Domain matched - proceed with tracking
+    console.log('[PixelTracker] ✅ Domain match confirmed:', data.domainMatch);
+    console.log('[PixelTracker] ✅ Pixel:', data.appName, '| Assigned Domain:', data.websiteDomain, '| Current Domain:', data.currentDomain);
     
     // Store configuration globally
     window.PIXEL_TRACKER_ID = data.pixelId;
     window.PIXEL_TRACKER_NAME = data.appName;
     window.PIXEL_TRACKER_CONFIG = data.config || {};
     window.PIXEL_TRACKER_CUSTOM_EVENTS = data.customEvents || [];
-
-    if (DEBUG) {
-      console.log('[PixelTracker] ✅ Pixel loaded:', {
-        name: data.appName,
-        pixelId: data.pixelId,
-        metaPixelId: data.metaPixelId,
-        enabled: data.enabled
-      });
-    }
+    window.PIXEL_TRACKER_WEBSITE_DOMAIN = data.websiteDomain || null;
     
     // Load tracking script with the real pixel ID
     var params = new URLSearchParams();
@@ -78,7 +96,7 @@
     script.async = true;
     script.src = PROXY_URL + '/pixel.js?' + params.toString();
     script.onload = function() {
-      if (DEBUG) console.log('[PixelTracker] Tracking script loaded for:', data.appName);
+      console.log('[PixelTracker] ✅ Tracking script loaded for:', data.appName);
     };
     script.onerror = function() {
       console.error('[PixelTracker] Failed to load tracking script');
@@ -98,9 +116,9 @@
         'https://connect.facebook.net/en_US/fbevents.js');
         fbq('init', data.metaPixelId);
         fbq('track', 'PageView');
-        if (DEBUG) console.log('[PixelTracker] ✅ Facebook Pixel initialized:', data.metaPixelId);
+        console.log('[PixelTracker] ✅ Facebook Pixel initialized:', data.metaPixelId);
       } catch (fbError) {
-        if (DEBUG) console.warn('[PixelTracker] Facebook Pixel error:', fbError);
+        console.warn('[PixelTracker] Facebook Pixel error:', fbError);
       }
     }
   }

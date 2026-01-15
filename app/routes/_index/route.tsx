@@ -8,6 +8,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopDomain = request.headers.get("x-shopify-shop-domain");
   const referer = request.headers.get("referer") || "";
   const userAgent = request.headers.get("user-agent") || "";
+  const chargeId = url.searchParams.get("charge_id");
   
   // Check for Shopify admin context indicators
   const hasAppLoadId = url.searchParams.has("appLoadId");
@@ -31,14 +32,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     hasTimestamp ||
     isFromShopifyAdmin ||
     isShopifyUserAgent ||
+    chargeId || // If we have charge_id, it's from Shopify billing
     request.headers.get("sec-fetch-dest") === "iframe" ||
     request.headers.get("x-shopify-api-request-failure-reauthorize") ||
     request.headers.get("x-shopify-hmac-sha256");
   
-  // If this is a Shopify admin context, redirect to /app pricing
+  // If this is a Shopify admin context, redirect to /app
   if (isEmbeddedContext) {
     // Preserve any query parameters that might be needed for authentication
     const searchParams = url.searchParams.toString();
+    
+    // If we have charge_id, redirect to dashboard directly
+    if (chargeId) {
+      console.log(`[Index] Redirecting to dashboard with charge_id: ${chargeId}`);
+      return redirect(`/app/dashboard?charge_id=${chargeId}`);
+    }
+    
     const redirectUrl = searchParams ? `/app/pricing?${searchParams}` : "/app/pricing";
     return redirect(redirectUrl);
   }

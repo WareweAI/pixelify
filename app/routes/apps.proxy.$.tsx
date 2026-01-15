@@ -43,12 +43,29 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     });
 
     // Route: /apps/proxy/get-pixel-id (proxied from /apps/pixel-api/get-pixel-id)
+    // STRICT DOMAIN MATCHING - only return pixel if domain matches
     if (path === "get-pixel-id" || path.startsWith("get-pixel-id")) {
       const shopDomain = url.searchParams.get("shop");
+      const requestDomain = url.searchParams.get("domain");
       
       if (!shopDomain) {
         return createErrorResponse("Missing shop parameter", 400);
       }
+
+      // Helper function to normalize domain
+      const normalizeDomain = (domain: string | null | undefined): string | null => {
+        if (!domain) return null;
+        return domain
+          .toLowerCase()
+          .trim()
+          .replace(/^https?:\/\//, '')
+          .replace(/^www\./, '')
+          .replace(/\/+$/, '')
+          .trim();
+      };
+
+      const normalizedRequestDomain = normalizeDomain(requestDomain);
+      console.log(`[App Proxy] get-pixel-id for shop: ${shopDomain}, domain: "${normalizedRequestDomain}"`);
 
       try {
         // Check if database is available
@@ -66,34 +83,93 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
           return createErrorResponse("Shop not found", 404, { shop: shopDomain });
         }
 
-        const app = await prisma.app.findFirst({
-          where: { userId: user.id },
-          include: { settings: true },
-          orderBy: { createdAt: "desc" },
-        });
+        // Use raw SQL to get apps with websiteDomain field
+        const allApps = await prisma.$queryRaw`
+          SELECT 
+            a."id",
+            a."appId",
+            a."name",
+            a."enabled",
+            a."websiteDomain",
+            s."metaPixelId",
+            s."metaPixelEnabled",
+            s."metaAccessToken",
+            s."autoTrackPageviews",
+            s."autoTrackClicks",
+            s."autoTrackScroll",
+            s."autoTrackViewContent",
+            s."autoTrackAddToCart",
+            s."autoTrackInitiateCheckout",
+            s."autoTrackPurchase",
+            s."customEventsEnabled"
+          FROM "App" a
+          LEFT JOIN "AppSettings" s ON s."appId" = a."id"
+          WHERE a."userId" = ${user.id}
+          ORDER BY a."createdAt" DESC
+        ` as any[];
 
-        if (!app) {
-          console.log(`[App Proxy] No pixel configured for shop: ${shopDomain}`);
-          return createErrorResponse("No pixel configured", 404, { shop: shopDomain });
+        console.log(`[App Proxy] Found ${allApps.length} pixels for user`);
+        console.log(`[App Proxy] Pixels:`, allApps.map((a: any) => `${a.name}: "${a.websiteDomain}"`).join(', '));
+
+        // Find pixel with matching domain (STRICT)
+        let matchedApp = null;
+        for (const app of allApps) {
+          const normalizedStoredDomain = normalizeDomain(app.websiteDomain);
+          console.log(`[App Proxy] Checking pixel "${app.name}": stored="${normalizedStoredDomain}", requested="${normalizedRequestDomain}"`);
+          
+          if (normalizedStoredDomain && normalizedRequestDomain && 
+              normalizedStoredDomain === normalizedRequestDomain && app.enabled) {
+            matchedApp = app;
+            console.log(`[App Proxy] ✅ MATCH FOUND: "${app.name}" for domain "${normalizedRequestDomain}"`);
+            break;
+          }
         }
 
-        // Get custom events
-        const customEvents = await prisma.customEvent.findMany({
-          where: { appId: app.id, isActive: true },
-          select: { name: true, selector: true, eventType: true, metaEventName: true },
-        });
+        // STRICT MODE: If no domain match found, return error - NO FALLBACK
+        if (!matchedApp) {
+          console.log(`[App Proxy] ❌ No pixel assigned to domain: "${normalizedRequestDomain}"`);
+          
+          return createJsonResponse({
+            error: "No pixel assigned to this domain",
+            domain: normalizedRequestDomain,
+            domainMatch: false,
+            message: "This domain is not assigned to any pixel. Please assign a pixel to this domain in your dashboard.",
+            trackingDisabled: true,
+            availableAssignments: allApps.map((a: any) => ({
+              name: a.name,
+              websiteDomain: a.websiteDomain,
+              normalizedDomain: normalizeDomain(a.websiteDomain)
+            }))
+          }, 404);
+        }
 
-        console.log(`[App Proxy] Returning config for pixel: ${app.appId}`);
+        console.log(`[App Proxy] ✅ Using pixel: ${matchedApp.appId} (${matchedApp.name}) for domain: ${normalizedRequestDomain}`);
+
+        // Get custom events if enabled
+        let customEvents: any[] = [];
+        if (matchedApp.customEventsEnabled !== false) {
+          customEvents = await prisma.customEvent.findMany({
+            where: { appId: matchedApp.id, isActive: true },
+            select: { name: true, selector: true, eventType: true, metaEventName: true },
+          });
+        }
 
         return createJsonResponse({
-          pixelId: app.appId,
-          appName: app.name,
-          metaPixelId: app.settings?.metaPixelId || null,
-          enabled: app.settings?.metaPixelEnabled ?? true,
+          pixelId: matchedApp.appId,
+          appName: matchedApp.name,
+          metaPixelId: matchedApp.metaPixelId || null,
+          enabled: matchedApp.metaPixelEnabled ?? true,
+          websiteDomain: matchedApp.websiteDomain,
+          domainMatch: true,
+          currentDomain: normalizedRequestDomain,
           config: {
-            autoPageviews: app.settings?.autoTrackPageviews ?? true,
-            autoClicks: app.settings?.autoTrackClicks ?? true,
-            autoScroll: app.settings?.autoTrackScroll ?? false,
+            autoPageviews: matchedApp.autoTrackPageviews ?? true,
+            autoClicks: matchedApp.autoTrackClicks ?? true,
+            autoScroll: matchedApp.autoTrackScroll ?? false,
+            autoViewContent: matchedApp.autoTrackViewContent ?? true,
+            autoAddToCart: matchedApp.autoTrackAddToCart ?? true,
+            autoInitiateCheckout: matchedApp.autoTrackInitiateCheckout ?? true,
+            autoPurchase: matchedApp.autoTrackPurchase ?? true,
           },
           customEvents,
         });

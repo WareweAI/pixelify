@@ -28,6 +28,7 @@ model App {
   shopEmail         String?
   createdAt         DateTime           @default(now())
   userId            String?
+  websiteDomain     String?            // Domain this pixel is assigned to
   analyticsSessions AnalyticsSession[]
   user              User?              @relation(fields: [userId], references: [id])
   settings          AppSettings?
@@ -35,6 +36,8 @@ model App {
   dailyStats        DailyStats[]
   errorLogs         ErrorLog[]
   events            Event[]
+
+  @@index([websiteDomain])
 }
 
 model Event {
@@ -187,13 +190,35 @@ model AppSettings {
   metaVerified       Boolean @default(false)
   timezone           String? @default("GMT+0")
 
-  // Facebook Catalog settings
+  // Facebook Catalog settings (deprecated - use FacebookCatalog model)
   facebookCatalogId        String?
   facebookCatalogEnabled   Boolean @default(false)
   facebookCatalogSyncStatus String?
   facebookCatalogLastSync  DateTime?
 
   app                App     @relation(fields: [appId], references: [id])
+}
+
+// Facebook Catalogs created through Pixelify
+model FacebookCatalog {
+  id              String   @id @default(uuid())
+  catalogId       String   @unique  // Facebook Catalog ID
+  name            String
+  userId          String
+  businessId      String?
+  businessName    String?
+  pixelId         String?           // Connected pixel ID
+  pixelEnabled    Boolean  @default(true)
+  autoSync        Boolean  @default(true)
+  productCount    Int      @default(0)
+  lastSync        DateTime?
+  nextSync        DateTime?
+  syncStatus      String   @default("pending")  // pending, syncing, synced, error
+  variantMode     String   @default("separate") // separate, grouped, first
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
 }
 
 model ScriptInjection {

@@ -21,7 +21,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { errors };
   }
   
-  // If login is successful, authenticate and redirect to app
+  // If login is successful, authenticate and redirect to dashboard
   try {
     const { session } = await shopify.authenticate.admin(request);
     
@@ -43,6 +43,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       console.error("Database error during login:", dbError);
     }
 
+    // Always redirect to dashboard after successful login
     throw redirect("/app/dashboard");
   } catch (error) {
     if (error instanceof Response) {
@@ -74,16 +75,17 @@ export default function Auth() {
     }
   }, []);
 
+  // If in iframe, redirect to top
   if (isInIframe) {
     return (
       <AppProvider embedded={false}>
         <div style={{ padding: "40px", textAlign: "center" }}>
-          <p>Redirecting to login...</p>
+          <p>Redirecting...</p>
           <script
             dangerouslySetInnerHTML={{
               __html: `
                 if (window.top !== window.self) {
-                  window.top.location.href = '/auth';
+                  window.top.location.href = '/auth/login';
                 }
               `,
             }}
@@ -106,7 +108,7 @@ export default function Auth() {
               value={shop}
               onChange={(e) => setShop(e.currentTarget.value)}
               autocomplete="on"
-              error={errors.shop}
+              error={errors?.shop}
             ></s-text-field>
             <s-button type="submit">Log in</s-button>
           </s-section>

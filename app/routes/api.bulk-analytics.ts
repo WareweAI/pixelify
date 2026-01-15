@@ -1,8 +1,7 @@
-// Bulk Analytics API endpoint
+// Bulk Analytics API endpoint - OPTIMIZED for speed
 import type { LoaderFunctionArgs } from 'react-router';
 import prisma from '~/db.server';
 
-// Server-only route - no client bundle needed
 export const clientLoader = undefined;
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -25,114 +24,72 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const now = new Date();
     const startDate = new Date();
     switch (range) {
-      case '24h':
-        startDate.setHours(now.getHours() - 24);
-        break;
-      case '7d':
-        startDate.setDate(now.getDate() - 7);
-        break;
-      case '30d':
-        startDate.setDate(now.getDate() - 30);
-        break;
-      case '90d':
-        startDate.setDate(now.getDate() - 90);
-        break;
-      default:
-        startDate.setDate(now.getDate() - 7);
+      case '24h': startDate.setHours(now.getHours() - 24); break;
+      case '7d': startDate.setDate(now.getDate() - 7); break;
+      case '30d': startDate.setDate(now.getDate() - 30); break;
+      case '90d': startDate.setDate(now.getDate() - 90); break;
+      default: startDate.setDate(now.getDate() - 7);
     }
 
-    // First get the app records
+    // Get all apps with settings in one query
     const apps = await prisma.app.findMany({
       where: { appId: { in: appIds } },
-      select: { id: true, appId: true, name: true },
+      select: { 
+        id: true, 
+        appId: true, 
+        name: true,
+        settings: {
+          select: { metaPixelId: true }
+        }
+      },
     });
 
-    const appIdsMap = new Map(apps.map(app => [app.appId, app.id]));
-    const validAppIds = apps.map(app => app.id);
-
-    if (validAppIds.length === 0) {
+    if (apps.length === 0) {
       return Response.json([]);
     }
 
-    // Get analytics data for all apps
-    const results = await Promise.all(
-      apps.map(async (app) => {
-        try {
-          const [totalEvents, addToCartEvents, initiateCheckoutEvents, purchaseEvents, purchaseEventsData, currencyData] = await Promise.all([
-            prisma.event.count({
-              where: { appId: app.id, createdAt: { gte: startDate } },
-            }),
-            prisma.event.count({
-              where: { appId: app.id, eventName: 'add_to_cart', createdAt: { gte: startDate } },
-            }),
-            prisma.event.count({
-              where: { appId: app.id, eventName: 'initiate_checkout', createdAt: { gte: startDate } },
-            }),
-            prisma.event.count({
-              where: { appId: app.id, eventName: 'purchase', createdAt: { gte: startDate } },
-            }),
-            prisma.event.findMany({
-              where: {
-                appId: app.id,
-                eventName: 'purchase',
-                createdAt: { gte: startDate },
-              },
-              select: { value: true, currency: true },
-            }),
-            prisma.event.groupBy({
-              by: ['currency'],
-              where: {
-                appId: app.id,
-                createdAt: { gte: startDate },
-                currency: { not: null },
-              },
-              _count: true,
-              orderBy: { _count: { currency: 'desc' } },
-              take: 1,
-            }).then((results: any) => results[0]?.currency || 'USD'),
-          ]);
+    const appDbIds = apps.map(app => app.id);
 
-          const totalRevenue = purchaseEventsData.reduce((sum: number, event: any) => {
-            return sum + (event.value || 0);
-          }, 0);
+    // Single optimized query to get all stats for all apps at once
+    const bulkStats = await prisma.$queryRaw`
+      SELECT 
+        "appId",
+        COUNT(*) as "totalEvents",
+        COUNT(*) FILTER (WHERE "eventName" IN ('AddToCart', 'add_to_cart', 'addToCart')) as "addToCartEvents",
+        COUNT(*) FILTER (WHERE "eventName" IN ('InitiateCheckout', 'initiate_checkout', 'initiateCheckout')) as "initiateCheckoutEvents",
+        COUNT(*) FILTER (WHERE "eventName" IN ('Purchase', 'purchase')) as "purchaseEvents",
+        COALESCE(SUM("value") FILTER (WHERE "eventName" IN ('Purchase', 'purchase')), 0) as "totalRevenue",
+        MODE() WITHIN GROUP (ORDER BY "currency") FILTER (WHERE "currency" IS NOT NULL) as "currency"
+      FROM "Event"
+      WHERE "appId" = ANY(${appDbIds})
+        AND "createdAt" >= ${startDate}
+      GROUP BY "appId"
+    ` as any[];
 
-          // Get meta pixel ID from settings
-          const settings = await prisma.appSettings.findUnique({
-            where: { appId: app.appId },
-            select: { metaPixelId: true },
-          });
+    // Create a map for quick lookup
+    const statsMap = new Map(bulkStats.map((s: any) => [s.appId, s]));
 
-          return {
-            appId: app.appId,
-            name: app.name,
-            metaPixelId: settings?.metaPixelId || '',
-            totalEvents,
-            addToCartEvents,
-            initiateCheckoutEvents,
-            purchaseEvents,
-            totalRevenue,
-            currency: currencyData,
-          };
-        } catch (error) {
-          console.error(`Error fetching analytics for app ${app.appId}:`, error);
-          return null;
-        }
-      })
-    );
+    // Build results
+    const results = apps.map(app => {
+      const stats = statsMap.get(app.id) || {};
+      return {
+        appId: app.appId,
+        name: app.name,
+        metaPixelId: app.settings?.metaPixelId || '',
+        totalEvents: Number(stats.totalEvents) || 0,
+        addToCartEvents: Number(stats.addToCartEvents) || 0,
+        initiateCheckoutEvents: Number(stats.initiateCheckoutEvents) || 0,
+        purchaseEvents: Number(stats.purchaseEvents) || 0,
+        totalRevenue: Number(stats.totalRevenue) || 0,
+        currency: stats.currency || 'USD',
+      };
+    });
 
-    const validResults = results.filter(Boolean);
-
-    return Response.json(validResults, {
-      headers: {
-        'Cache-Control': 'public, max-age=300', // Cache for 5 minutes
-      },
+    return Response.json(results, {
+      headers: { 'Cache-Control': 'public, max-age=60' }, // Cache for 1 minute
     });
   } catch (error) {
     console.error('Bulk Analytics API error:', error);
-    if (error instanceof Error) {
-      console.error('Stack:', error.stack);
-      return Response.json({ error: 'Internal error', details: error.message }, { status: 500 });
-    }
-    return Response.json({ error: 'Internal error' }, { status: 500 });
+    return Response.json({ error: 'Internal error', details: error instanceof Error ? error.message : 'Unknown' }, { status: 500 });
   }
 }
