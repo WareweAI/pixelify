@@ -501,6 +501,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
+  // Refresh Facebook access tokens
+  if (intent === "refresh-facebook-token") {
+    try {
+      const { refreshAllUserTokens } = await import("~/services/facebook-token-refresh.server");
+      const refreshedCount = await refreshAllUserTokens(user.id);
+      
+      if (refreshedCount > 0) {
+        return { 
+          success: true, 
+          message: `Successfully refreshed ${refreshedCount} token(s)`,
+          intent: "refresh-facebook-token" 
+        };
+      } else {
+        return { 
+          error: "No tokens were refreshed. You may need to reconnect Facebook.",
+          intent: "refresh-facebook-token"
+        };
+      }
+    } catch (error) {
+      console.error("Error refreshing Facebook tokens:", error);
+      return { error: "Failed to refresh tokens. Please reconnect Facebook." };
+    }
+  }
+
   if (intent === "fetch-facebook-pixels") {
     const accessToken = formData.get("accessToken") as string;
     
@@ -964,19 +988,36 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!mounted) return;
     
+    console.log('[Dashboard] Checking localStorage for saved Facebook connection...');
     const savedToken = localStorage.getItem("facebook_access_token");
     const savedUser = localStorage.getItem("facebook_user");
     const savedPixels = localStorage.getItem("facebook_pixels");
     
-    if (savedToken && savedUser) {
+    console.log('[Dashboard] Saved token exists:', !!savedToken);
+    console.log('[Dashboard] Saved user exists:', !!savedUser);
+    
+    if (savedToken) {
+      console.log('[Dashboard] ✅ Found saved Facebook token, restoring connection...');
       setFacebookAccessToken(savedToken);
-      setFacebookUser(JSON.parse(savedUser));
       setIsConnectedToFacebook(true);
       
+      if (savedUser) {
+        try {
+          setFacebookUser(JSON.parse(savedUser));
+        } catch (err) {
+          console.error('[Dashboard] Error parsing saved user:', err);
+        }
+      }
+      
       if (savedPixels) {
-        setFacebookPixels(JSON.parse(savedPixels));
+        try {
+          setFacebookPixels(JSON.parse(savedPixels));
+        } catch (err) {
+          console.error('[Dashboard] Error parsing saved pixels:', err);
+        }
       } else {
         // Auto-fetch pixels if we have token but no cached pixels
+        console.log('[Dashboard] No saved pixels, fetching from API...');
         fetcher.submit(
           {
             intent: "fetch-facebook-pixels",
@@ -985,6 +1026,8 @@ export default function DashboardPage() {
           { method: "POST" }
         );
       }
+    } else {
+      console.log('[Dashboard] No saved Facebook token found');
     }
   }, [mounted, fetcher]);
 
@@ -1492,12 +1535,12 @@ export default function DashboardPage() {
 
           {/* Facebook Connection Status Card */}
           <ClientOnly>
-            {mounted && isConnectedToFacebook && facebookUser && (
+            {mounted && isConnectedToFacebook ? (
               <Layout.Section fullWidth>
                 <Card>
                   <InlineStack align="space-between" blockAlign="center">
                     <InlineStack gap="300" blockAlign="center">
-                      {facebookUser.picture ? (
+                      {facebookUser?.picture ? (
                         <img 
                           src={facebookUser.picture} 
                           alt={facebookUser.name}
@@ -1522,7 +1565,7 @@ export default function DashboardPage() {
                           fontWeight: "bold",
                           fontSize: "20px"
                         }}>
-                          {facebookUser.name.charAt(0).toUpperCase()}
+                          {facebookUser?.name?.charAt(0)?.toUpperCase() || "F"}
                         </div>
                       )}
                       <BlockStack gap="100">
@@ -1531,7 +1574,7 @@ export default function DashboardPage() {
                           <Badge tone="success">Active</Badge>
                         </InlineStack>
                         <Text variant="bodySm" tone="subdued" as="p">
-                          Logged in as {facebookUser.name} • {facebookPixels.length} pixel(s) available
+                          Logged in as {facebookUser?.name || "Facebook User"} • {facebookPixels.length} pixel(s) available
                         </Text>
                       </BlockStack>
                     </InlineStack>
@@ -1546,7 +1589,7 @@ export default function DashboardPage() {
                   </InlineStack>
                 </Card>
               </Layout.Section>
-            )}
+            ) : null}
           </ClientOnly>
 
           {/* Dashboard Overview Stats */}
@@ -1938,11 +1981,11 @@ export default function DashboardPage() {
                 <>
                   {/* Facebook Connection Status */}
                   <ClientOnly>
-                    {mounted && isConnectedToFacebook && facebookUser ? (
+                    {mounted && isConnectedToFacebook ? (
                 <Card background="bg-surface-success">
                   <InlineStack align="space-between" blockAlign="center">
                     <InlineStack gap="200" blockAlign="center">
-                      {facebookUser.picture ? (
+                      {facebookUser?.picture ? (
                         <img 
                           src={facebookUser.picture} 
                           alt={facebookUser.name}
@@ -1967,7 +2010,7 @@ export default function DashboardPage() {
                           fontWeight: "bold",
                           fontSize: "16px"
                         }}>
-                          {facebookUser.name.charAt(0).toUpperCase()}
+                          {facebookUser?.name?.charAt(0)?.toUpperCase() || "F"}
                         </div>
                       )}
                       <BlockStack gap="050">
@@ -1975,7 +2018,7 @@ export default function DashboardPage() {
                           Connected to Facebook
                         </Text>
                         <Text variant="bodySm" tone="subdued" as="span">
-                          {facebookUser.name} • {facebookPixels.length} pixel(s) available
+                          {facebookUser?.name || "Facebook User"} • {facebookPixels.length} pixel(s) available
                         </Text>
                       </BlockStack>
                     </InlineStack>
@@ -2014,7 +2057,7 @@ export default function DashboardPage() {
                       variant="primary"
                       size="slim"
                     >
-                      Connect Facebook
+                      Connect to Facebook
                     </Button>
                   </InlineStack>
                 </Card>

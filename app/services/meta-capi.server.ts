@@ -161,11 +161,13 @@ export async function validateMetaCredentials(
   }
 }
 
-// Forward event to Meta Conversions API
+// Forward event to Meta Conversions API with catalog integration
 export async function forwardToMeta(params: {
   pixelId: string;
   accessToken: string;
   testEventCode?: string;
+  catalogId?: string; // Facebook Catalog ID for product attribution
+  eventId?: string; // Event ID for deduplication (browser + server)
   event: {
     eventName: string;
     eventTime: number;
@@ -179,12 +181,35 @@ export async function forwardToMeta(params: {
     customData?: Record<string, unknown>;
   };
 }): Promise<void> {
-  const { pixelId, accessToken, testEventCode, event } = params;
+  const { pixelId, accessToken, testEventCode, catalogId, eventId, event } = params;
+
+  // Enhance custom_data with catalog information for better ad optimization
+  const enhancedCustomData = { ...event.customData };
+  
+  // For e-commerce events, ensure proper catalog integration
+  // NOTE: We do NOT add catalog_id to custom_data
+  // Meta infers catalog from pixel-catalog link automatically
+  if (catalogId && enhancedCustomData) {
+    // Ensure content_ids are properly formatted for catalog matching
+    if (enhancedCustomData.product_id && !enhancedCustomData.content_ids) {
+      enhancedCustomData.content_ids = [String(enhancedCustomData.product_id)];
+    }
+    
+    // Ensure content_type is set for catalog events
+    if (enhancedCustomData.content_ids && !enhancedCustomData.content_type) {
+      enhancedCustomData.content_type = "product";
+    }
+    
+    // For Purchase events, ensure order_id is included
+    if (event.eventName.toLowerCase() === "purchase" && !enhancedCustomData.order_id) {
+      enhancedCustomData.order_id = `order_${Date.now()}`;
+    }
+  }
 
   const metaEvent: MetaEventData = {
     event_name: mapEventName(event.eventName),
     event_time: event.eventTime,
-    event_id: `evt_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    event_id: eventId || `evt_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     event_source_url: event.eventSourceUrl,
     action_source: "website",
     user_data: {
@@ -192,7 +217,7 @@ export async function forwardToMeta(params: {
       client_user_agent: event.userData.clientUserAgent,
       external_id: event.userData.externalId ? hashData(event.userData.externalId) : undefined,
     },
-    custom_data: event.customData,
+    custom_data: Object.keys(enhancedCustomData).length > 0 ? enhancedCustomData : undefined,
   };
 
   await sendToMetaCAPI(pixelId, accessToken, [metaEvent], testEventCode);

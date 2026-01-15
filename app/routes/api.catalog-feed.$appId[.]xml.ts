@@ -110,8 +110,6 @@ async function fetchShopifyProducts(shop: string, accessToken: string) {
                     compareAtPrice
                     inventoryQuantity
                     barcode
-                    weight
-                    weightUnit
                     selectedOptions {
                       name
                       value

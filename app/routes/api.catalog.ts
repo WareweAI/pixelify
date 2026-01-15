@@ -38,13 +38,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const user = await prisma.user.findUnique({ where: { storeUrl: shop } });
   if (!user) return Response.json({ error: "User not found" }, { status: 404 });
 
-  // Get access token
-  const apps = await prisma.app.findMany({ 
-    where: { userId: user.id }, 
-    include: { settings: true } 
-  });
-  const appWithToken = apps.find(app => app.settings?.metaAccessToken);
-  const accessToken = appWithToken?.settings?.metaAccessToken;
+  // Get access token - use the most recent valid token
+  const { getValidTokenForUser, isTokenExpiredError, getTokenExpiredMessage } = await import("~/services/facebook-sdk-token.server");
+  const accessToken = await getValidTokenForUser(user.id);
 
   // Load Facebook user info
   if (intent === "load-facebook-user") {
@@ -59,6 +55,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const data = await res.json();
       
       if (data.error) {
+        // Check if token expired
+        if (isTokenExpiredError(data.error)) {
+          console.error('[Catalog API] Token expired:', data.error.message);
+          return Response.json({ 
+            success: true, 
+            facebookUser: null,
+            tokenExpired: true,
+            message: getTokenExpiredMessage()
+          });
+        }
         return Response.json({ success: true, facebookUser: null });
       }
       
@@ -76,7 +82,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (!accessToken) {
-    return Response.json({ error: "Please connect Facebook in Dashboard first" }, { status: 400 });
+    return Response.json({ 
+      error: "Please connect Facebook in Dashboard first",
+      tokenExpired: true,
+      message: getTokenExpiredMessage()
+    }, { status: 400 });
   }
 
   // Fetch businesses
@@ -163,6 +173,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         );
       }
 
+      // Fetch shop currency
+      const shopRes = await admin.graphql(`query { shop { currencyCode } }`);
+      const shopData = await shopRes.json();
+      const currency = shopData.data?.shop?.currencyCode || "USD";
+
       // Sync products
       const productsRes = await admin.graphql(
         `query {
@@ -203,40 +218,57 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         const variants = p.variants.edges;
         
         if (variantSubmission === "first" && variants.length > 0) {
-          fbProducts.push(makeFbProduct(p, variants[0].node, productId, shop));
+          fbProducts.push(makeFbProduct(p, variants[0].node, productId, shop, currency));
         } else if (variantSubmission === "grouped" && variants.length > 0) {
-          fbProducts.push(makeFbProduct(p, variants[0].node, productId, shop));
+          fbProducts.push(makeFbProduct(p, variants[0].node, productId, shop, currency));
         } else {
           variants.forEach((v: any) => 
-            fbProducts.push(makeFbProduct(p, v.node, productId, shop))
+            fbProducts.push(makeFbProduct(p, v.node, productId, shop, currency))
           );
         }
       });
 
       // Upload products in batches
       let synced = 0;
+      console.log(`[Create] Uploading ${fbProducts.length} products in batches of 1000...`);
       for (let i = 0; i < fbProducts.length; i += 1000) {
         const batch = fbProducts.slice(i, i + 1000);
+        console.log(`[Create] Batch ${Math.floor(i / 1000) + 1}: uploading ${batch.length} products...`);
         const uploadRes = await fetch(
-          `https://graph.facebook.com/v18.0/${catalogId}/products`,
+          `https://graph.facebook.com/v18.0/${catalogId}/batch`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               access_token: accessToken,
+              allow_upsert: true,
               requests: batch,
             }),
           }
         );
         const uploadData = await uploadRes.json();
-        if (uploadData.handles) {
+        console.log(`[Create] Batch response:`, JSON.stringify(uploadData, null, 2));
+        
+        // Handle different response formats
+        if (uploadData.validation_status && Array.isArray(uploadData.validation_status)) {
+          const batchFailed = uploadData.validation_status.filter((item: any) => item.errors && item.errors.length > 0).length;
+          const batchSuccess = batch.length - batchFailed;
+          synced += batchSuccess;
+          console.log(`[Create] Batch uploaded: ${batchSuccess} succeeded, ${batchFailed} failed (total: ${synced})`);
+        } else if (uploadData.handles) {
           synced += uploadData.handles.length;
+          console.log(`[Create] Batch uploaded via handles: ${uploadData.handles.length} (total: ${synced})`);
         } else if (uploadData.num_received) {
           synced += uploadData.num_received;
+          console.log(`[Create] Batch uploaded via num_received: ${uploadData.num_received} (total: ${synced})`);
         }
       }
+      console.log(`[Create] Total products synced: ${synced}`);
 
-      // Save catalog to database
+      // Save catalog to database - ensure productCount is integer
+      const finalSyncedCount = Math.max(0, Math.floor(Number(synced) || 0));
+      console.log(`[Create] DEBUG: Saving catalog with productCount = ${finalSyncedCount} (type: ${typeof finalSyncedCount})`);
+      
       const catalog = await prisma.facebookCatalog.create({
         data: {
           catalogId,
@@ -246,7 +278,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           businessName,
           pixelId: pixelId || null,
           pixelEnabled: !!pixelId,
-          productCount: synced,
+          productCount: finalSyncedCount,
           lastSync: new Date(),
           nextSync: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
           syncStatus: "synced",
@@ -254,9 +286,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         },
       });
 
+      console.log(`[Create] ✅ Catalog created successfully! Saved productCount: ${catalog.productCount}`);
+
       return Response.json({ 
         success: true, 
-        message: `Catalog created! ${synced} products synced.`,
+        message: `Catalog created! ${catalog.productCount} products synced.`,
         catalog: {
           id: catalog.id,
           catalogId: catalog.catalogId,
@@ -298,6 +332,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         where: { id }, 
         data: { syncStatus: "syncing" } 
       });
+
+      // Fetch shop currency
+      console.log(`[Sync] Fetching shop currency...`);
+      const shopRes = await admin.graphql(`query { shop { currencyCode } }`);
+      const shopData = await shopRes.json();
+      const currency = shopData.data?.shop?.currencyCode || "USD";
+      console.log(`[Sync] Shop currency: ${currency}`);
 
       console.log(`[Sync] Fetching products from Shopify...`);
       const productsRes = await admin.graphql(
@@ -368,14 +409,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }
         
         if (catalog.variantMode === "first" && variants.length > 0) {
-          const fbProduct = makeFbProduct(p, variants[0].node, productId, shop);
+          const fbProduct = makeFbProduct(p, variants[0].node, productId, shop, currency);
           if (fbProduct) fbProducts.push(fbProduct);
         } else if (catalog.variantMode === "grouped" && variants.length > 0) {
-          const fbProduct = makeFbProduct(p, variants[0].node, productId, shop);
+          const fbProduct = makeFbProduct(p, variants[0].node, productId, shop, currency);
           if (fbProduct) fbProducts.push(fbProduct);
         } else {
           variants.forEach((v: any) => {
-            const fbProduct = makeFbProduct(p, v.node, productId, shop);
+            const fbProduct = makeFbProduct(p, v.node, productId, shop, currency);
             if (fbProduct) fbProducts.push(fbProduct);
           });
         }
@@ -406,14 +447,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         console.log(`[Sync] Uploading batch ${Math.floor(i / 1000) + 1} with ${batch.length} products...`);
         
         try {
-          // Facebook Catalog API: POST /{catalog-id}/products (batch endpoint)
+          // Facebook Catalog Batch API: POST /{catalog-id}/batch
+          // Note: Using /batch endpoint (not /items_batch or /products)
           const uploadRes = await fetch(
-            `https://graph.facebook.com/v18.0/${catalog.catalogId}/products`,
+            `https://graph.facebook.com/v18.0/${catalog.catalogId}/batch`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 access_token: accessToken,
+                allow_upsert: true,
                 requests: batch,
               }),
             }
@@ -426,6 +469,25 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           // Handle error response
           if (uploadData.error) {
             console.error(`[Sync] ❌ Facebook API error:`, uploadData.error);
+            
+            // Check for token expiration
+            const { isTokenExpiredError, getTokenExpiredMessage } = await import("~/services/facebook-sdk-token.server");
+            if (isTokenExpiredError(uploadData.error)) {
+              console.error(`[Sync] Token expired - user needs to reconnect Facebook`);
+              await prisma.facebookCatalog.update({ 
+                where: { id }, 
+                data: { syncStatus: "error" } 
+              });
+              return Response.json({ 
+                error: getTokenExpiredMessage(),
+                tokenExpired: true,
+                catalog: {
+                  id: catalog.id,
+                  syncStatus: "error",
+                }
+              }, { status: 401 });
+            }
+            
             errors.push(`Facebook API error: ${uploadData.error.message} (Code: ${uploadData.error.code})`);
             
             // Check for specific error types
@@ -446,39 +508,54 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             throw new Error(`Facebook API returned ${uploadRes.status}: ${uploadRes.statusText}`);
           }
           
-          // Check for validation_status in response
-          if (uploadData.validation_status) {
-            console.log(`[Sync] Validation status:`, JSON.stringify(uploadData.validation_status, null, 2));
+          // Parse validation_status to count successes and failures
+          if (uploadData.validation_status && Array.isArray(uploadData.validation_status)) {
+            console.log(`[Sync] Processing validation status for ${uploadData.validation_status.length} products...`);
             
-            // Check for errors in validation
-            if (uploadData.validation_status.errors) {
-              console.error(`[Sync] ❌ Validation errors:`, uploadData.validation_status.errors);
-              errors.push(`Validation errors: ${JSON.stringify(uploadData.validation_status.errors)}`);
-            }
+            let batchFailed = 0;
+            const failedProducts: string[] = [];
             
-            // Check for warnings
-            if (uploadData.validation_status.warnings) {
-              console.warn(`[Sync] ⚠️ Validation warnings:`, uploadData.validation_status.warnings);
+            uploadData.validation_status.forEach((item: any) => {
+              if (item.errors && item.errors.length > 0) {
+                // Product has errors - failed
+                batchFailed++;
+                const errorMessages = item.errors.map((e: any) => e.message).join(', ');
+                failedProducts.push(`${item.retailer_id}: ${errorMessages}`);
+                console.error(`[Sync] ❌ Product ${item.retailer_id} failed: ${errorMessages}`);
+              }
+            });
+            
+            // Success = total sent - failed
+            const batchSuccess = batch.length - batchFailed;
+            synced += batchSuccess;
+            failed += batchFailed;
+            
+            console.log(`[Sync] ✅ Batch results: ${batchSuccess} succeeded, ${batchFailed} failed (total synced: ${synced})`);
+            
+            if (failedProducts.length > 0) {
+              console.error(`[Sync] Failed products:`, failedProducts);
+              // Store first 5 failed products for error message
+              errors.push(...failedProducts.slice(0, 5));
             }
           }
-          
-          // Count successful uploads
-          if (uploadData.handles && uploadData.handles.length > 0) {
-            synced += uploadData.handles.length;
-            console.log(`[Sync] ✅ Batch uploaded: ${uploadData.handles.length} products (total: ${synced})`);
-          } else if (uploadData.num_received && uploadData.num_received > 0) {
-            // Alternative response format
+          // Fallback: Check for handles (older API response format)
+          else if (uploadData.handles && uploadData.handles.length > 0) {
+            const handleCount = uploadData.handles.length;
+            synced += handleCount;
+            console.log(`[Sync] ✅ Batch uploaded via handles: ${handleCount} products (total: ${synced})`);
+          }
+          // Fallback: Check for num_received
+          else if (uploadData.num_received && uploadData.num_received > 0) {
             synced += uploadData.num_received;
-            console.log(`[Sync] ✅ Batch uploaded: ${uploadData.num_received} products (total: ${synced})`);
-          } else if (uploadData.num_invalid_entries !== undefined) {
-            // Check for invalid entries
-            failed += uploadData.num_invalid_entries || 0;
-            console.error(`[Sync] ❌ Invalid entries: ${uploadData.num_invalid_entries}`);
-            
-            if (uploadData.num_invalid_entries > 0 && uploadData.num_invalid_entries === batch.length) {
-              errors.push(`All ${batch.length} products in batch were rejected. Check product data format.`);
-            }
-          } else {
+            console.log(`[Sync] ✅ Batch uploaded via num_received: ${uploadData.num_received} products (total: ${synced})`);
+          }
+          // If no error and no validation_status, assume all products in batch succeeded
+          else if (uploadRes.ok) {
+            synced += batch.length;
+            console.log(`[Sync] ✅ Batch uploaded (assumed success): ${batch.length} products (total: ${synced})`);
+          }
+          // No recognizable success indicator
+          else {
             console.log(`[Sync] ⚠️ Unexpected response format. Full response:`, uploadData);
             errors.push(`Unexpected API response format. Response: ${JSON.stringify(uploadData).substring(0, 200)}`);
           }
@@ -515,11 +592,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
 
       console.log(`[Sync] ✅ Sync complete! Total synced: ${synced} products`);
+      
+      // DEBUG: Ensure productCount is stored as integer
+      console.log(`[Sync] DEBUG: fbProducts.length = ${fbProducts.length}`);
+      console.log(`[Sync] DEBUG: synced count = ${synced}`);
+      console.log(`[Sync] DEBUG: synced type = ${typeof synced}`);
+      console.log(`[Sync] DEBUG: about to save productCount = ${synced} (type: ${typeof synced})`);
+      
+      // Force integer type casting
+      const syncedCount = Math.max(0, Math.floor(Number(synced) || 0));
+      console.log(`[Sync] DEBUG: final syncedCount = ${syncedCount} (type: ${typeof syncedCount})`);
 
       const updatedCatalog = await prisma.facebookCatalog.update({
         where: { id },
         data: { 
-          productCount: synced, 
+          productCount: syncedCount,
           lastSync: new Date(), 
           nextSync: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000), 
           syncStatus: "synced" 
@@ -630,30 +717,93 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
   }
 
+  // Refresh product count from Facebook
+  if (intent === "refresh-count") {
+    const id = formData.get("id") as string;
+    
+    if (!id) {
+      return Response.json({ error: "Catalog ID required" }, { status: 400 });
+    }
+    
+    const catalog = await prisma.facebookCatalog.findUnique({ where: { id } });
+    if (!catalog) {
+      return Response.json({ error: "Catalog not found" }, { status: 404 });
+    }
+
+    try {
+      console.log(`[Refresh Count] Fetching actual product count from Facebook for catalog ${catalog.catalogId}...`);
+      
+      // Fetch product count from Facebook Catalog API
+      const countRes = await fetch(
+        `https://graph.facebook.com/v18.0/${catalog.catalogId}/products?fields=id&limit=1&summary=true&access_token=${accessToken}`
+      );
+      const countData = await countRes.json();
+      
+      if (countData.error) {
+        console.error(`[Refresh Count] Facebook API error:`, countData.error);
+        return Response.json({ error: countData.error.message }, { status: 400 });
+      }
+      
+      const actualCount = Math.max(0, Math.floor(countData.summary?.total_count || 0));
+      console.log(`[Refresh Count] Facebook returned: ${actualCount} products`);
+      console.log(`[Refresh Count] Database had: ${catalog.productCount} products`);
+      
+      // Update database with actual count - force integer
+      const updatedCatalog = await prisma.facebookCatalog.update({
+        where: { id },
+        data: { 
+          productCount: actualCount,
+          lastSync: new Date(),
+          syncStatus: "synced",
+        },
+      });
+      
+      console.log(`[Refresh Count] ✅ Updated catalog productCount to: ${updatedCatalog.productCount} (type: ${typeof updatedCatalog.productCount})`);
+      
+      return Response.json({ 
+        success: true, 
+        message: `Product count updated: ${actualCount} products`,
+        catalog: {
+          id: updatedCatalog.id,
+          productCount: updatedCatalog.productCount,
+          lastSync: updatedCatalog.lastSync?.toISOString(),
+          syncStatus: updatedCatalog.syncStatus,
+        }
+      });
+    } catch (e: any) {
+      console.error("[Refresh Count] Error:", e);
+      return Response.json({ error: e.message }, { status: 500 });
+    }
+  }
+
   return Response.json({ error: "Invalid action" }, { status: 400 });
 };
 
 // Helper function to format product for Facebook
-function makeFbProduct(product: any, variant: any, productId: string, shop: string) {
+function makeFbProduct(product: any, variant: any, productId: string, shop: string, currency: string = "USD") {
   const variantId = variant.id.split("/").pop();
   const retailerId = variant.sku || `${productId}_${variantId}`;
   
+  // Extract numeric price value - Facebook requires price in cents (integer)
+  const priceValue = Math.round((parseFloat(variant.price) || 0) * 100);
+  
+  // Facebook Catalog Batch API format - using correct field names
   return {
     method: "UPDATE",
     retailer_id: retailerId,
     data: {
-      id: retailerId,
-      title: variant.title !== "Default Title" 
-        ? `${product.title} - ${variant.title}` 
-        : product.title,
-      description: product.description?.substring(0, 5000) || product.title,
       availability: (variant.inventoryQuantity || 0) > 0 ? "in stock" : "out of stock",
       condition: "new",
-      price: `${variant.price} USD`,
-      link: product.onlineStoreUrl || `https://${shop}/products/${product.handle}`,
-      image_link: product.featuredImage?.url || "",
+      description: product.description?.substring(0, 5000) || product.title,
+      image_url: product.featuredImage?.url || "",
+      name: variant.title !== "Default Title" 
+        ? `${product.title} - ${variant.title}` 
+        : product.title,
+      price: priceValue,
+      currency: currency,
+      url: product.onlineStoreUrl || `https://${shop}/products/${product.handle}`,
       brand: product.vendor || shop.replace(".myshopify.com", ""),
-      item_group_id: productId,
+      retailer_product_group_id: productId,
     },
   };
 }

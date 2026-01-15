@@ -398,13 +398,67 @@ export async function action({ request }: ActionFunctionArgs) {
           eventData = { ...eventData, ...processedCustomData };
         }
 
+        // Fetch catalog information for e-commerce events
+        // This links the event to Facebook Catalog for better ad optimization
+        let catalogId: string | undefined;
+        const isEcommerceEvent = ['ViewContent', 'AddToCart', 'InitiateCheckout', 'Purchase', 'AddPaymentInfo'].includes(metaEventName);
+        
+        // Extract products from event data
+        let products: Array<{ id: string; quantity: number; price: number }> | undefined;
+        if (isEcommerceEvent && (productId || customData?.content_ids)) {
+          products = [];
+          
+          if (customData?.contents && Array.isArray(customData.contents)) {
+            // Use contents array if available
+            products = customData.contents.map((item: any) => ({
+              id: String(item.id || item.product_id),
+              quantity: item.quantity || 1,
+              price: item.item_price || item.price || 0,
+            }));
+          } else if (customData?.content_ids && Array.isArray(customData.content_ids)) {
+            // Use content_ids array
+            products = customData.content_ids.map((id: any) => ({
+              id: String(id),
+              quantity: quantity || 1,
+              price: value || 0,
+            }));
+          } else if (productId) {
+            // Single product
+            products = [{
+              id: String(productId),
+              quantity: quantity || 1,
+              price: value || 0,
+            }];
+          }
+        }
+
+        // Process event with unified catalog pipeline
+        const { processEventWithCatalog } = await import('~/services/catalog-event-handler.server');
+        const processedEvent = await processEventWithCatalog({
+          userId: app.userId || '',
+          pixelId: app.settings.metaPixelId!,
+          eventName: metaEventName,
+          products,
+          currency: currency || undefined,
+          orderId: customData?.order_id || undefined,
+          customData: eventData,
+        });
+
+        catalogId = processedEvent.catalogId;
+        eventData = processedEvent.customData;
+        const eventId = processedEvent.eventId;
+
         console.log(`[Track] Preparing to send to Facebook CAPI:`, {
           originalEvent: eventName,
           metaEvent: metaEventName,
           pixelId: app.settings.metaPixelId,
+          catalogId: catalogId || 'none',
+          isCatalogEvent: processedEvent.isCatalogEvent,
           hasAccessToken: !!app.settings.metaAccessToken,
           eventDataKeys: Object.keys(eventData),
           isCustomEvent: !!customEvent,
+          isEcommerceEvent,
+          eventId,
           mappingUsed: customEvent?.metaEventName ? 'custom' : (defaultEventMapping[eventName] ? 'default' : 'none')
         });
 
@@ -412,6 +466,8 @@ export async function action({ request }: ActionFunctionArgs) {
           pixelId: app.settings.metaPixelId!,
           accessToken: app.settings.metaAccessToken!,
           testEventCode: app.settings.metaTestEventCode || undefined,
+          catalogId, // Pass catalog ID for product attribution
+          eventId, // Pass event ID for deduplication
           event: {
             eventName: metaEventName,
             eventTime: Math.floor(Date.now() / 1000),
@@ -427,9 +483,52 @@ export async function action({ request }: ActionFunctionArgs) {
         });
         
         const eventType = customEvent ? 'CUSTOM' : 'DEFAULT';
-        console.log(`[Track] ✅ SUCCESS: ${eventType} Event "${eventName}" sent to Facebook CAPI as "${metaEventName}" (adblocker-proof)`);
-      } catch (error) {
+        const catalogInfo = catalogId ? ` (linked to catalog ${catalogId})` : '';
+        console.log(`[Track] ✅ SUCCESS: ${eventType} Event "${eventName}" sent to Facebook CAPI as "${metaEventName}"${catalogInfo} (adblocker-proof)`);
+      } catch (error: any) {
         console.error(`[Track] ❌ FAILED: Meta CAPI forwarding error for event "${eventName}":`, error);
+        
+        // Check if it's a token expiration error and attempt refresh
+        if (error?.code === 190 || error?.error_subcode === 463 || error?.type === 'OAuthException') {
+          console.log(`[Track] Detected token error, attempting to refresh token...`);
+          
+          try {
+            const { checkAndRefreshToken } = await import('~/services/facebook-token-refresh.server');
+            const newToken = await checkAndRefreshToken(app.id);
+            
+            if (newToken) {
+              console.log(`[Track] ✅ Token refreshed, retrying event send...`);
+              
+              // Retry with new token
+              await forwardToMeta({
+                pixelId: app.settings.metaPixelId!,
+                accessToken: newToken,
+                testEventCode: app.settings.metaTestEventCode || undefined,
+                catalogId,
+                event: {
+                  eventName: metaEventName,
+                  eventTime: Math.floor(Date.now() / 1000),
+                  eventSourceUrl: url,
+                  actionSource: 'website',
+                  userData: {
+                    clientIpAddress: ip,
+                    clientUserAgent: userAgent,
+                    externalId: fingerprint || visitorId,
+                  },
+                  customData: Object.keys(eventData).length > 0 ? eventData : undefined,
+                },
+              });
+              
+              const eventType = customEvent ? 'CUSTOM' : 'DEFAULT';
+              const catalogInfo = catalogId ? ` (linked to catalog ${catalogId})` : '';
+              console.log(`[Track] ✅ SUCCESS (after token refresh): ${eventType} Event "${eventName}" sent to Facebook CAPI as "${metaEventName}"${catalogInfo}`);
+            } else {
+              console.error(`[Track] ❌ Token refresh failed. User needs to reconnect Facebook in Dashboard.`);
+            }
+          } catch (refreshError) {
+            console.error(`[Track] ❌ Error during token refresh:`, refreshError);
+          }
+        }
         
         // Log detailed error information for debugging
         console.error('[Track] Meta CAPI Error Details:', {
@@ -439,7 +538,9 @@ export async function action({ request }: ActionFunctionArgs) {
           metaVerified: app.settings?.metaVerified,
           metaPixelEnabled: app.settings?.metaPixelEnabled,
           errorMessage: error instanceof Error ? error.message : 'Unknown error',
-          errorStack: error instanceof Error ? error.stack : undefined
+          errorCode: error?.code,
+          errorSubcode: error?.error_subcode,
+          errorType: error?.type,
         });
       }
     } else {

@@ -47,6 +47,28 @@ export async function action({ request }: ActionFunctionArgs) {
       quantity: item.quantity,
     }));
 
+    // Find the user's active catalog for product attribution
+    let catalogId: string | undefined;
+    if (app.settings?.metaPixelEnabled && app.settings?.metaAccessToken) {
+      try {
+        const catalog = await prisma.facebookCatalog.findFirst({
+          where: {
+            userId: user.id,
+            pixelId: app.settings.metaPixelId,
+            pixelEnabled: true,
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+        
+        if (catalog) {
+          catalogId = catalog.catalogId;
+          console.log(`[Webhook] Found catalog ${catalogId} for InitiateCheckout event`);
+        }
+      } catch (catalogError) {
+        console.error('[Webhook] Error fetching catalog:', catalogError);
+      }
+    }
+
     await prisma.event.create({
       data: {
         appId: app.id,
@@ -59,11 +81,53 @@ export async function action({ request }: ActionFunctionArgs) {
           checkout_token: checkout.token,
           products,
           source: "webhook",
+          ...(catalogId && { catalog_id: catalogId }),
         },
       },
     });
 
-    console.log(`[Webhook] InitiateCheckout tracked: $${totalPrice}`);
+    // Forward to Meta CAPI if enabled
+    if (app.settings?.metaPixelEnabled && app.settings?.metaAccessToken) {
+      try {
+        const metaEvent = {
+          event_name: "InitiateCheckout",
+          event_time: Math.floor(Date.now() / 1000),
+          action_source: "website",
+          user_data: {
+            em: checkout.email ? crypto.createHash("sha256").update(checkout.email.toLowerCase()).digest("hex") : undefined,
+            client_ip_address: checkout.browser_ip || "0.0.0.0",
+            client_user_agent: checkout.user_agent || "Shopify Webhook",
+          },
+          custom_data: {
+            currency,
+            value: totalPrice,
+            content_ids: products.map((p: any) => p.id),
+            content_type: "product",
+            contents: products.map((p: any) => ({ id: p.id, quantity: p.quantity })),
+            num_items: products.length,
+            // Link to catalog for better ad optimization
+            ...(catalogId && { catalog_id: catalogId }),
+          },
+        };
+
+        await fetch(`https://graph.facebook.com/v24.0/${app.settings.metaPixelId}/events`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            data: [metaEvent],
+            access_token: app.settings.metaAccessToken,
+            test_event_code: app.settings.metaTestEventCode || undefined,
+          }),
+        });
+        
+        const catalogInfo = catalogId ? ` (linked to catalog ${catalogId})` : '';
+        console.log(`[Webhook] InitiateCheckout forwarded to Meta CAPI${catalogInfo}`);
+      } catch (metaErr) {
+        console.error("[Webhook] Meta CAPI error:", metaErr);
+      }
+    }
+
+    console.log(`[Webhook] InitiateCheckout tracked: ${totalPrice}`);
     return new Response("OK", { status: 200 });
   } catch (error) {
     console.error("[Webhook] Error:", error);

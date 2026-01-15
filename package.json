@@ -44,7 +44,7 @@
     "react-dom": "^18.3.1",
     "react-router": "^7.9.3",
     "ua-parser-js": "^2.0.6",
-    "vercel": "^41.0.2",
+    "vercel": "^50.4.0",
     "vite-tsconfig-paths": "^5.1.4"
   },
   "devDependencies": {

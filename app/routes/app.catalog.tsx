@@ -54,35 +54,58 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const shop = session.shop;
 
-  const [user, productCountRes] = await Promise.all([
-    prisma.user.findUnique({ where: { storeUrl: shop } }),
-    admin.graphql(`query { productsCount { count } }`)
-      .then(r => r.json())
-      .catch(() => ({ data: { productsCount: { count: 0 } } })),
-  ]);
-
+  // Get user first
+  const user = await prisma.user.findUnique({ where: { storeUrl: shop } });
   if (!user) throw new Response("User not found", { status: 404 });
 
+  // Get apps with settings to find access token
   const apps = await prisma.app.findMany({ 
     where: { userId: user.id }, 
     include: { settings: true } 
   });
+  
+  console.log(`[Catalog Loader] Found ${apps.length} apps for user ${user.id}`);
+  
+  // Debug: Log all apps and their tokens
+  apps.forEach((app: any, index: number) => {
+    const hasToken = !!app.settings?.metaAccessToken;
+    const tokenPreview = app.settings?.metaAccessToken ? app.settings.metaAccessToken.substring(0, 20) + '...' : 'none';
+    console.log(`[Catalog Loader] App ${index + 1}: ${app.name}, hasSettings: ${!!app.settings}, hasToken: ${hasToken}, tokenPreview: ${tokenPreview}`);
+  });
+  
   const appWithToken = apps.find((app: any) => app.settings?.metaAccessToken);
   const accessToken = appWithToken?.settings?.metaAccessToken || null;
-  const productCount = productCountRes.data?.productsCount?.count || 0;
+  
+  console.log(`[Catalog Loader] User: ${user.id}, Apps: ${apps.length}, Has token: ${!!accessToken}`);
 
-  // Fetch Facebook user info and catalogs in parallel
-  const [facebookUser, dbCatalogs] = await Promise.all([
+  // Fetch product count and Facebook user info in parallel
+  const [productCountRes, facebookUser, dbCatalogs] = await Promise.all([
+    // Get active product count
+    admin.graphql(`query { products(first: 250, query: "status:active") { edges { node { id } } } }`)
+      .then(r => r.json())
+      .then(data => data.data?.products?.edges?.length || 0)
+      .catch(() => 0),
+    
     // Fetch Facebook user info if token exists
     accessToken
       ? fetch(`https://graph.facebook.com/v18.0/me?fields=id,name,picture.type(large)&access_token=${accessToken}`)
           .then(res => res.json())
-          .then(data => data.error ? null : {
-            id: data.id,
-            name: data.name,
-            picture: data.picture?.data?.url || null,
+          .then(data => {
+            if (data.error) {
+              console.error(`[Catalog Loader] Facebook API error:`, data.error);
+              return null;
+            }
+            console.log(`[Catalog Loader] Facebook user: ${data.name}`);
+            return {
+              id: data.id,
+              name: data.name,
+              picture: data.picture?.data?.url || null,
+            };
           })
-          .catch(() => null)
+          .catch((err) => {
+            console.error(`[Catalog Loader] Facebook fetch error:`, err);
+            return null;
+          })
       : Promise.resolve(null),
     
     // Get catalogs from DATABASE (only catalogs created through Pixelify)
@@ -92,7 +115,43 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }).catch(() => []),
   ]);
 
-  const catalogs: Catalog[] = dbCatalogs.map((cat: any) => ({
+  const productCount = productCountRes;
+
+  // Fetch actual product counts from Facebook for all catalogs to auto-fix incorrect counts
+  const catalogsWithCorrectCounts = await Promise.all(
+    dbCatalogs.map(async (cat: any) => {
+      try {
+        if (accessToken && cat.catalogId) {
+          console.log(`[Catalog Loader] Fetching actual count from Facebook for catalog ${cat.name}...`);
+          const countRes = await fetch(
+            `https://graph.facebook.com/v18.0/${cat.catalogId}/products?fields=id&limit=1&summary=true&access_token=${accessToken}`
+          );
+          const countData = await countRes.json();
+          
+          if (countData.summary?.total_count !== undefined) {
+            const actualCount = Math.max(0, Math.floor(countData.summary.total_count || 0));
+            console.log(`[Catalog Loader] Catalog ${cat.name}: DB has ${cat.productCount}, Facebook has ${actualCount}`);
+            
+            // If counts don't match, update database
+            if (actualCount !== cat.productCount) {
+              console.log(`[Catalog Loader] ⚠️ Mismatch detected! Updating database from ${cat.productCount} to ${actualCount}...`);
+              const updated = await prisma.facebookCatalog.update({
+                where: { id: cat.id },
+                data: { productCount: actualCount, lastSync: new Date() },
+              });
+              console.log(`[Catalog Loader] ✅ Updated catalog ${cat.name} productCount to ${updated.productCount}`);
+              return updated;
+            }
+          }
+        }
+      } catch (err) {
+        console.error(`[Catalog Loader] Error fetching count for ${cat.name}:`, err);
+      }
+      return cat;
+    })
+  );
+
+  const catalogs: Catalog[] = catalogsWithCorrectCounts.map((cat: any) => ({
     id: cat.id,
     catalogId: cat.catalogId,
     name: cat.name,
@@ -106,16 +165,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }));
 
   const syncedProductCount = catalogs.reduce((sum, c) => sum + c.productCount, 0);
+  const hasToken = !!accessToken;
+  const isConnected = hasToken && !!facebookUser;
+
+  console.log(`[Catalog Loader] ✅ Final counts - productCount: ${productCount}, syncedProductCount: ${syncedProductCount}`);
 
   return { 
     shop, 
-    hasToken: !!accessToken, 
+    hasToken, 
     productCount, 
     syncedProductCount, 
     catalogs, 
     userId: user.id,
     facebookUser,
-    isConnected: !!accessToken && !!facebookUser,
+    isConnected,
   };
 };
 
@@ -167,6 +230,28 @@ export default function CatalogPage() {
           );
         }, 500);
       }
+      
+      // If sync completed successfully, reload page to show updated counts
+      if (fetcher.data?.success && updatedCatalog.syncStatus === "synced") {
+        console.log('[Catalog] Sync completed successfully. Updated productCount:', updatedCatalog.productCount);
+        setTimeout(() => {
+          window.location.reload();
+        }, 1000);
+      }
+      
+      // If product count was refreshed, reload page to show updated global count
+      if (fetcher.data?.success && updatedCatalog.productCount !== undefined && fetcher.data?.message?.includes("Product count updated")) {
+        console.log('[Catalog] Product count refreshed to:', updatedCatalog.productCount);
+        setTimeout(() => {
+          window.location.reload();
+        }, 800);
+      }
+    }
+    
+    // Handle token expiration
+    if (fetcher.data?.tokenExpired) {
+      console.error('[Catalog] Token expired, user needs to reconnect Facebook');
+      // Show error banner with reconnect button
     }
     
     // Only reload for create/delete operations
@@ -234,6 +319,11 @@ export default function CatalogPage() {
     }
   };
 
+  const handleRefreshCount = (id: string) => {
+    fetcher.submit({ intent: "refresh-count", id }, { method: "POST", action: "/api/catalog" });
+    setActivePopover(null);
+  };
+
   const resetForm = () => {
     setSelectedBusiness(""); setSelectedBusinessName(""); setSelectedPixel(""); setCatalogName("");
     setProductSelection("all"); setVariantSubmission("separate");
@@ -243,32 +333,36 @@ export default function CatalogPage() {
 
   if (!hasToken) {
     return (
-      <Page title="Catalog manager" fullWidth primaryAction={{ content: "Create catalog", disabled: true }}>
-        <Layout><Layout.Section><Card>
-          <BlockStack gap="400" inlineAlign="center">
-            <div style={{ 
-              width: "80px", 
-              height: "80px", 
-              borderRadius: "50%", 
-              backgroundColor: "#f3f4f6", 
-              display: "flex", 
-              alignItems: "center", 
-              justifyContent: "center",
-              fontSize: "40px"
-            }}>
-              🔌
-            </div>
-            <BlockStack gap="200" inlineAlign="center">
-              <Text as="h2" variant="headingLg">Facebook Not Connected</Text>
-              <Text as="p" tone="subdued" alignment="center">
-                Connect your Facebook account in Dashboard to create and manage product catalogs.
-              </Text>
-            </BlockStack>
-            <Button variant="primary" size="large" onClick={() => navigate("/app/dashboard")}>
-              Go to Dashboard
-            </Button>
-          </BlockStack>
-        </Card></Layout.Section></Layout>
+      <Page title="Catalog manager" fullWidth>
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="400" inlineAlign="center">
+                <div style={{ 
+                  width: "80px", 
+                  height: "80px", 
+                  borderRadius: "50%", 
+                  backgroundColor: "#f3f4f6", 
+                  display: "flex", 
+                  alignItems: "center", 
+                  justifyContent: "center",
+                  fontSize: "40px"
+                }}>
+                  🔌
+                </div>
+                <BlockStack gap="200" inlineAlign="center">
+                  <Text as="h2" variant="headingLg">Facebook Not Connected</Text>
+                  <Text as="p" tone="subdued" alignment="center">
+                    Connect your Facebook account in Dashboard to create and manage product catalogs.
+                  </Text>
+                </BlockStack>
+                <Button variant="primary" size="large" onClick={() => navigate("/app/dashboard")}>
+                  Connect Facebook
+                </Button>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        </Layout>
       </Page>
     );
   }
@@ -277,7 +371,17 @@ export default function CatalogPage() {
     <Page title="Catalog manager" fullWidth primaryAction={{ content: "Create catalog", onAction: openCreateModal }}>
       <Layout>
         {fetcher.data?.message && <Layout.Section><Banner tone="success" onDismiss={() => {}}>{fetcher.data.message}</Banner></Layout.Section>}
-        {fetcher.data?.error && <Layout.Section><Banner tone="critical" onDismiss={() => {}}>{fetcher.data.error}</Banner></Layout.Section>}
+        {fetcher.data?.error && (
+          <Layout.Section>
+            <Banner 
+              tone="critical" 
+              onDismiss={() => {}}
+              action={fetcher.data?.tokenExpired ? { content: "Reconnect Facebook", url: "/app/dashboard" } : undefined}
+            >
+              {fetcher.data.error}
+            </Banner>
+          </Layout.Section>
+        )}
 
         {/* Product Stats */}
         <Layout.Section>
@@ -295,6 +399,7 @@ export default function CatalogPage() {
           <FacebookConnectionStatus
             isConnected={isConnected}
             facebookUser={facebookUser}
+            onConnect={() => navigate("/app/dashboard")}
             onDisconnect={() => navigate("/app/dashboard")}
             showActions={true}
           />
@@ -330,7 +435,9 @@ export default function CatalogPage() {
                   <IndexTable.Cell>
                     <BlockStack gap="050">
                       <Link url={`https://business.facebook.com/commerce/catalogs/${cat.catalogId}/products`} external>{cat.name}</Link>
-                      <Text as="p" variant="bodySm" tone="subdued">Catalog ID: {cat.catalogId}</Text>
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        Products synced: <Text as="span" fontWeight="bold">{cat.productCount}/{productCount}</Text> | Catalog ID: {cat.catalogId}
+                      </Text>
                     </BlockStack>
                   </IndexTable.Cell>
                   <IndexTable.Cell><Text as="p">{formatDate(cat.lastSync)}</Text></IndexTable.Cell>
@@ -350,13 +457,13 @@ export default function CatalogPage() {
                       <Button icon={ExternalIcon} variant="plain" url={`https://business.facebook.com/commerce/catalogs/${cat.catalogId}/products`} external accessibilityLabel="View" />
                       <Popover active={activePopover === cat.id} activator={<Button icon={MenuHorizontalIcon} variant="plain" onClick={() => setActivePopover(activePopover === cat.id ? null : cat.id)} accessibilityLabel="More" />} onClose={() => setActivePopover(null)}>
                         <ActionList items={[
-                          { content: "Change the tracking pixel", onAction: () => setActivePopover(null) },
-                          { content: "Edit", onAction: () => setActivePopover(null) },
+                          { content: "Sync Now", onAction: () => handleSync(cat.id) },
+                          { content: "Refresh product count", onAction: () => handleRefreshCount(cat.id) },
                           { content: "Delete", destructive: true, onAction: () => handleDelete(cat.id) },
                         ]} />
                       </Popover>
                       <Badge tone={cat.syncStatus === "synced" ? "success" : cat.syncStatus === "error" ? "critical" : "attention"}>
-                        {cat.syncStatus === "synced" ? "Completed" : cat.syncStatus === "syncing" ? "Syncing..." : cat.syncStatus === "error" ? "Error" : "Pending"}
+                        {cat.syncStatus === "synced" ? `${cat.productCount} synced` : cat.syncStatus === "syncing" ? "Syncing..." : cat.syncStatus === "error" ? "Error" : "Pending"}
                       </Badge>
                     </InlineStack>
                   </IndexTable.Cell>
@@ -380,9 +487,9 @@ export default function CatalogPage() {
           <Box padding="400">
             <InlineStack align="center" gap="200">
               <Text as="p" tone="subdued">ⓘ For more guidance, visit our</Text>
-              <Link url="https://help.shopify.com" external>knowledge base</Link>
-              <Text as="p" tone="subdued">or</Text>
-              <Link url="mailto:support@pixelify.com">request support</Link>
+              <Link url="https://pixelify-red.vercel.app/docs" external>knowledge base</Link>
+              <Text as="p" tone="subdued">or contact us on our mail</Text>
+              <Link url="mailto:support@warewe.online">support@warewe.online</Link>
             </InlineStack>
           </Box>
         </Layout.Section>

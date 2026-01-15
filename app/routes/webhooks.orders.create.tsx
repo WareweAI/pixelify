@@ -113,6 +113,26 @@ export async function action({ request }: ActionFunctionArgs) {
     // Forward to Meta CAPI if enabled
     if (app.settings?.metaPixelEnabled && app.settings?.metaAccessToken) {
       try {
+        // Find the user's active catalog for product attribution
+        let catalogId: string | undefined;
+        try {
+          const catalog = await prisma.facebookCatalog.findFirst({
+            where: {
+              userId: user.id,
+              pixelId: app.settings.metaPixelId,
+              pixelEnabled: true,
+            },
+            orderBy: { createdAt: 'desc' },
+          });
+          
+          if (catalog) {
+            catalogId = catalog.catalogId;
+            console.log(`[Webhook] Found catalog ${catalogId} for purchase event`);
+          }
+        } catch (catalogError) {
+          console.error('[Webhook] Error fetching catalog:', catalogError);
+        }
+
         const metaEvent = {
           event_name: "Purchase",
           event_time: Math.floor(Date.now() / 1000),
@@ -126,11 +146,16 @@ export async function action({ request }: ActionFunctionArgs) {
             currency,
             value: totalPrice,
             content_ids: products.map((p: any) => p.id),
+            content_type: "product",
             contents: products.map((p: any) => ({ id: p.id, quantity: p.quantity })),
+            order_id: orderId,
+            num_items: products.length,
+            // Link to catalog for better ad optimization
+            ...(catalogId && { catalog_id: catalogId }),
           },
         };
 
-        await fetch(`https://graph.facebook.com/v24.0/${app.settings.metaPixelId}/events`, {
+        const response = await fetch(`https://graph.facebook.com/v24.0/${app.settings.metaPixelId}/events`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -139,7 +164,48 @@ export async function action({ request }: ActionFunctionArgs) {
             test_event_code: app.settings.metaTestEventCode || undefined,
           }),
         });
-        console.log("[Webhook] Forwarded to Meta CAPI");
+        
+        const responseData = await response.json();
+        
+        // Check for token expiration error
+        if (responseData.error && (responseData.error.code === 190 || responseData.error.error_subcode === 463)) {
+          console.log(`[Webhook] Token expired, attempting refresh...`);
+          
+          try {
+            const { checkAndRefreshToken } = await import('~/services/facebook-token-refresh.server');
+            const newToken = await checkAndRefreshToken(app.id);
+            
+            if (newToken) {
+              console.log(`[Webhook] ✅ Token refreshed, retrying...`);
+              
+              // Retry with new token
+              const retryResponse = await fetch(`https://graph.facebook.com/v24.0/${app.settings.metaPixelId}/events`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  data: [metaEvent],
+                  access_token: newToken,
+                  test_event_code: app.settings.metaTestEventCode || undefined,
+                }),
+              });
+              
+              const retryData = await retryResponse.json();
+              if (retryData.error) {
+                console.error("[Webhook] Meta CAPI error after retry:", retryData.error);
+              } else {
+                const catalogInfo = catalogId ? ` (linked to catalog ${catalogId})` : '';
+                console.log(`[Webhook] Forwarded to Meta CAPI${catalogInfo} (after token refresh)`);
+              }
+            }
+          } catch (refreshError) {
+            console.error("[Webhook] Token refresh failed:", refreshError);
+          }
+        } else if (responseData.error) {
+          console.error("[Webhook] Meta CAPI error:", responseData.error);
+        } else {
+          const catalogInfo = catalogId ? ` (linked to catalog ${catalogId})` : '';
+          console.log(`[Webhook] Forwarded to Meta CAPI${catalogInfo}`);
+        }
       } catch (metaErr) {
         console.error("[Webhook] Meta CAPI error:", metaErr);
       }
