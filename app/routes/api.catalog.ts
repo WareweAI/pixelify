@@ -191,6 +191,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                 vendor
                 onlineStoreUrl
                 featuredImage { url }
+                images(first: 1) {
+                  edges {
+                    node { url }
+                  }
+                }
                 variants(first: 100) {
                   edges {
                     node {
@@ -353,6 +358,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                 vendor
                 onlineStoreUrl
                 featuredImage { url }
+                images(first: 1) {
+                  edges {
+                    node { url }
+                  }
+                }
                 variants(first: 100) {
                   edges {
                     node {
@@ -372,7 +382,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       
       const productsData = await productsRes.json();
       console.log(`[Sync] GraphQL response status:`, productsRes.status);
-      console.log(`[Sync] GraphQL response data:`, JSON.stringify(productsData, null, 2));
       
       const products = productsData.data?.products?.edges || [];
       console.log(`[Sync] ✅ Fetched ${products.length} products from Shopify`);
@@ -448,7 +457,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         
         try {
           // Facebook Catalog Batch API: POST /{catalog-id}/batch
-          // Note: Using /batch endpoint (not /items_batch or /products)
           const uploadRes = await fetch(
             `https://graph.facebook.com/v18.0/${catalog.catalogId}/batch`,
             {
@@ -519,9 +527,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               if (item.errors && item.errors.length > 0) {
                 // Product has errors - failed
                 batchFailed++;
-                const errorMessages = item.errors.map((e: any) => e.message).join(', ');
-                failedProducts.push(`${item.retailer_id}: ${errorMessages}`);
-                console.error(`[Sync] ❌ Product ${item.retailer_id} failed: ${errorMessages}`);
+                const errorDetails = item.errors.map((e: any) => {
+                  const parts = [`${e.message}`];
+                  if (e.code) parts.push(`code: ${e.code}`);
+                  if (e.error_subcode) parts.push(`subcode: ${e.error_subcode}`);
+                  return parts.join(' | ');
+                }).join('; ');
+                failedProducts.push(`${item.retailer_id}: ${errorDetails}`);
+                console.error(`[Sync] ❌ Product ${item.retailer_id} failed:`, JSON.stringify(item.errors, null, 2));
+              } else {
+                // Product succeeded
+                console.log(`[Sync] ✅ Product ${item.retailer_id} succeeded`);
               }
             });
             
@@ -543,11 +559,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             const handleCount = uploadData.handles.length;
             synced += handleCount;
             console.log(`[Sync] ✅ Batch uploaded via handles: ${handleCount} products (total: ${synced})`);
+            console.warn(`[Sync] ⚠️ WARNING: Sent ${batch.length} products but only got ${handleCount} handles back!`);
+            console.warn(`[Sync] ⚠️ This means ${batch.length - handleCount} products were silently rejected by Facebook.`);
+            console.warn(`[Sync] ⚠️ Possible reasons: duplicate retailer_id, invalid data, or catalog limits.`);
           }
           // Fallback: Check for num_received
           else if (uploadData.num_received && uploadData.num_received > 0) {
             synced += uploadData.num_received;
             console.log(`[Sync] ✅ Batch uploaded via num_received: ${uploadData.num_received} products (total: ${synced})`);
+            if (uploadData.num_received < batch.length) {
+              console.warn(`[Sync] ⚠️ WARNING: Sent ${batch.length} products but only ${uploadData.num_received} were received!`);
+            }
           }
           // If no error and no validation_status, assume all products in batch succeeded
           else if (uploadRes.ok) {
@@ -573,7 +595,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       if (synced === 0 && fbProducts.length > 0) {
         const errorMessage = errors.length > 0 
           ? `Failed to sync products. Errors: ${errors.join('; ')}` 
-          : `Failed to sync products. Facebook API did not accept any products. Check: 1) Access token is valid, 2) Catalog ID is correct, 3) Product data format is valid.`;
+          : `Failed to sync products. Facebook API did not accept any products.`;
         
         console.error(`[Sync] ❌ ${errorMessage}`);
         
@@ -592,12 +614,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
 
       console.log(`[Sync] ✅ Sync complete! Total synced: ${synced} products`);
-      
-      // DEBUG: Ensure productCount is stored as integer
-      console.log(`[Sync] DEBUG: fbProducts.length = ${fbProducts.length}`);
-      console.log(`[Sync] DEBUG: synced count = ${synced}`);
-      console.log(`[Sync] DEBUG: synced type = ${typeof synced}`);
-      console.log(`[Sync] DEBUG: about to save productCount = ${synced} (type: ${typeof synced})`);
       
       // Force integer type casting
       const syncedCount = Math.max(0, Math.floor(Number(synced) || 0));
@@ -701,6 +717,81 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
   }
 
+  // Connect pixel to catalog (manual connection)
+  if (intent === "connect-pixel-to-catalog") {
+    const id = formData.get("id") as string;
+    const pixelId = formData.get("pixelId") as string;
+    
+    if (!id) {
+      return Response.json({ error: "Catalog ID required" }, { status: 400 });
+    }
+    
+    const catalog = await prisma.facebookCatalog.findUnique({ where: { id } });
+    if (!catalog) {
+      return Response.json({ error: "Catalog not found" }, { status: 404 });
+    }
+
+    // Get the pixel ID from the user's app settings if not provided
+    let targetPixelId = pixelId;
+    if (!targetPixelId) {
+      const apps = await prisma.app.findMany({
+        where: { userId: user.id },
+        include: { settings: true },
+      });
+      const appWithPixel = apps.find(app => app.settings?.metaPixelId);
+      targetPixelId = appWithPixel?.settings?.metaPixelId || "";
+    }
+
+    if (!targetPixelId) {
+      return Response.json({ error: "No pixel found. Please add a pixel in Dashboard first." }, { status: 400 });
+    }
+
+    try {
+      console.log(`[Catalog API] Connecting pixel ${targetPixelId} to catalog ${catalog.catalogId}...`);
+      
+      // Connect pixel to catalog via Facebook API
+      const connectRes = await fetch(
+        `https://graph.facebook.com/v18.0/${catalog.catalogId}/external_event_sources?access_token=${accessToken}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ external_event_sources: [targetPixelId] }),
+        }
+      );
+      
+      const connectData = await connectRes.json();
+      
+      if (connectData.error) {
+        console.error(`[Catalog API] Failed to connect pixel:`, connectData.error);
+        return Response.json({ error: `Failed to connect pixel: ${connectData.error.message}` }, { status: 400 });
+      }
+      
+      // Update database
+      const updatedCatalog = await prisma.facebookCatalog.update({
+        where: { id },
+        data: { 
+          pixelId: targetPixelId,
+          pixelEnabled: true,
+        },
+      });
+      
+      console.log(`[Catalog API] ✅ Pixel ${targetPixelId} connected to catalog ${catalog.catalogId}`);
+      
+      return Response.json({ 
+        success: true, 
+        message: `Pixel ${targetPixelId} connected to catalog successfully!`,
+        catalog: {
+          id: updatedCatalog.id,
+          pixelId: updatedCatalog.pixelId,
+          pixelEnabled: updatedCatalog.pixelEnabled,
+        }
+      });
+    } catch (e: any) {
+      console.error("[Catalog API] Connect pixel error:", e);
+      return Response.json({ error: e.message }, { status: 500 });
+    }
+  }
+
   // Delete catalog
   if (intent === "delete-catalog") {
     const id = formData.get("id") as string;
@@ -779,31 +870,106 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return Response.json({ error: "Invalid action" }, { status: 400 });
 };
 
-// Helper function to format product for Facebook
+// Helper function to format product for Facebook Catalog Batch API
+// Batch API minimal required fields: availability, condition, description, image_url, name, price, url, brand
 function makeFbProduct(product: any, variant: any, productId: string, shop: string, currency: string = "USD") {
   const variantId = variant.id.split("/").pop();
-  const retailerId = variant.sku || `${productId}_${variantId}`;
   
-  // Extract numeric price value - Facebook requires price in cents (integer)
-  const priceValue = Math.round((parseFloat(variant.price) || 0) * 100);
+  // retailer_id MUST be unique and stable - use variant ID as primary identifier
+  // This ensures uniqueness across all products and variants
+  const retailerId = `${productId}_${variantId}`;
   
-  // Facebook Catalog Batch API format - using correct field names
+  // Price as number in cents (integer)
+  const priceInCents = Math.round((parseFloat(variant.price) || 0) * 100);
+  
+  // Ensure we have a valid image URL - use placeholder if no image exists
+  let imageUrl = product.featuredImage?.url || product.images?.edges?.[0]?.node?.url || "";
+  
+  // If no image, use a placeholder image (like Omega Pixel does)
+  if (!imageUrl || imageUrl.trim() === "") {
+    imageUrl = "https://cdn.shopify.com/s/files/1/0533/2089/files/placeholder-images-image_large.png";
+    console.log(`[makeFbProduct] Product ${productId} has no image, using placeholder`);
+  }
+  
+  // Build product URL - ensure it's a valid URL
+  const productUrl = product.onlineStoreUrl || `https://${shop}/products/${product.handle}`;
+  
+  // Product name - combine with variant if not default
+  const productName = variant.title && variant.title !== "Default Title" 
+    ? `${product.title} - ${variant.title}` 
+    : product.title;
+  
+  // Description - use product description or title as fallback
+  // Clean description: remove null bytes, control characters, and ensure valid UTF-8
+  let description = (product.description && product.description.trim() !== "") 
+    ? product.description 
+    : productName;
+  
+  // Sanitize description: remove problematic characters
+  description = description
+    .replace(/\0/g, '') // Remove null bytes
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') // Remove control characters except \n, \r, \t
+    .substring(0, 5000)
+    .trim();
+  
+  // Brand - use vendor or store name
+  const brand = product.vendor && product.vendor.trim() !== "" 
+    ? product.vendor.trim() 
+    : shop.replace(".myshopify.com", "");
+  
+  // Availability - based on inventory
+  const availability = (variant.inventoryQuantity === null || variant.inventoryQuantity > 0) 
+    ? "in stock" 
+    : "out of stock";
+
+  // Validate required fields (now image is always present due to placeholder)
+  if (!retailerId || !productName) {
+    const missing = [];
+    if (!retailerId) missing.push('retailer_id');
+    if (!productName) missing.push('name');
+    console.warn(`[makeFbProduct] Skipping product ${productId}: missing required fields: ${missing.join(', ')}`);
+    return null;
+  }
+  
+  // Validate price
+  if (priceInCents <= 0 || isNaN(priceInCents)) {
+    console.warn(`[makeFbProduct] Skipping product ${productId}: invalid price ${variant.price}`);
+    return null;
+  }
+
+  // Facebook Catalog Batch API format - MINIMAL REQUIRED FIELDS ONLY
+  const productData: any = {
+    availability: availability,
+    condition: "new",
+    description: description,
+    image_url: imageUrl,
+    name: productName,
+    price: priceInCents,
+    currency: currency,
+    url: productUrl,
+    brand: brand,
+  };
+  
+  // Add optional fields only if they have valid values
+  if (productId) {
+    productData.retailer_product_group_id = productId;
+  }
+  
+  if (variant.sku && variant.sku.trim() !== "") {
+    productData.gtin = variant.sku.trim();
+  }
+
+  // Validate the entire object can be JSON-encoded
+  try {
+    JSON.stringify(productData);
+  } catch (e) {
+    console.error(`[makeFbProduct] Skipping product ${productId}: cannot JSON encode`, e);
+    return null;
+  }
+
   return {
     method: "UPDATE",
     retailer_id: retailerId,
-    data: {
-      availability: (variant.inventoryQuantity || 0) > 0 ? "in stock" : "out of stock",
-      condition: "new",
-      description: product.description?.substring(0, 5000) || product.title,
-      image_url: product.featuredImage?.url || "",
-      name: variant.title !== "Default Title" 
-        ? `${product.title} - ${variant.title}` 
-        : product.title,
-      price: priceValue,
-      currency: currency,
-      url: product.onlineStoreUrl || `https://${shop}/products/${product.handle}`,
-      brand: product.vendor || shop.replace(".myshopify.com", ""),
-      retailer_product_group_id: productId,
-    },
+    data: productData,
   };
 }

@@ -132,10 +132,14 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
         meta: ce.metaEventName,
       }));
 
+    // Get Facebook Pixel ID from settings
+    const metaPixelId = settings?.metaPixelId || null;
+    const metaPixelEnabled = settings?.metaPixelEnabled ?? false;
+
     // Get the base URL for API calls
     const baseUrl = process.env.SHOPIFY_APP_URL || "https://pixelify-red.vercel.app";
     
-    // CORB-PROOF SCRIPT
+    // CORB-PROOF SCRIPT WITH FACEBOOK PIXEL INTEGRATION
     const script = `
 (function() {
   'use strict';
@@ -148,6 +152,91 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
   var VISITOR_KEY = 'px_visitor_${id}';
   var DEBUG = true;
   var CUSTOM_EVENTS = ${JSON.stringify(autoTrackEvents)};
+  
+  // Facebook Pixel Configuration
+  var FB_PIXEL_ID = ${metaPixelId ? `'${metaPixelId}'` : 'null'};
+  var FB_PIXEL_ENABLED = ${metaPixelEnabled};
+
+  // Initialize Facebook Pixel (if enabled)
+  function initFacebookPixel() {
+    if (!FB_PIXEL_ENABLED || !FB_PIXEL_ID) {
+      if (DEBUG) console.log('[PixelAnalytics] Facebook Pixel not configured');
+      return;
+    }
+    
+    // Check if fbq already exists
+    if (window.fbq) {
+      if (DEBUG) console.log('[PixelAnalytics] Facebook Pixel already initialized');
+      return;
+    }
+    
+    // Facebook Pixel base code
+    !function(f,b,e,v,n,t,s) {
+      if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+      n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+      if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+      n.queue=[];t=b.createElement(e);t.async=!0;
+      t.src=v;s=b.getElementsByTagName(e)[0];
+      s.parentNode.insertBefore(t,s)
+    }(window, document,'script','https://connect.facebook.net/en_US/fbevents.js');
+    
+    fbq('init', FB_PIXEL_ID);
+    if (DEBUG) console.log('[PixelAnalytics] Facebook Pixel initialized:', FB_PIXEL_ID);
+  }
+  
+  // Fire Facebook Pixel event
+  function fireFacebookEvent(eventName, params) {
+    if (!FB_PIXEL_ENABLED || !FB_PIXEL_ID || !window.fbq) return;
+    
+    // Map internal event names to Facebook standard events
+    var fbEventMap = {
+      'pageview': 'PageView',
+      'viewContent': 'ViewContent',
+      'addToCart': 'AddToCart',
+      'initiateCheckout': 'InitiateCheckout',
+      'purchase': 'Purchase',
+      'addPaymentInfo': 'AddPaymentInfo',
+      'lead': 'Lead',
+      'search': 'Search'
+    };
+    
+    var fbEventName = fbEventMap[eventName] || eventName;
+    
+    // Build Facebook event parameters
+    var fbParams = {};
+    
+    // Map content_ids for catalog matching (CRITICAL for Dynamic Ads)
+    if (params.product_id) {
+      fbParams.content_ids = [String(params.product_id)];
+      fbParams.content_type = 'product';
+    }
+    if (params.products && Array.isArray(params.products)) {
+      fbParams.content_ids = params.products.map(p => String(p.product_id || p.id));
+      fbParams.contents = params.products.map(p => ({
+        id: String(p.product_id || p.id),
+        quantity: p.quantity || 1,
+        item_price: p.value || p.price || 0
+      }));
+      fbParams.content_type = 'product';
+    }
+    
+    // Standard parameters
+    if (params.value) fbParams.value = params.value;
+    if (params.currency) fbParams.currency = params.currency;
+    if (params.product_name) fbParams.content_name = params.product_name;
+    if (params.category) fbParams.content_category = params.category;
+    if (params.quantity) fbParams.num_items = params.quantity;
+    if (params.order_id) fbParams.order_id = params.order_id;
+    
+    // Fire the event
+    if (fbEventName === 'PageView') {
+      fbq('track', 'PageView');
+    } else {
+      fbq('track', fbEventName, fbParams);
+    }
+    
+    if (DEBUG) console.log('[PixelAnalytics] Facebook Pixel event:', fbEventName, fbParams);
+  }
 
   function generateId() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
@@ -194,7 +283,7 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
     };
   }
 
-  // TRIPLE FALLBACK TRACKING (CORB-PROOF)
+  // TRIPLE FALLBACK TRACKING (CORB-PROOF) + FACEBOOK PIXEL
   function track(eventName, properties = {}) {
     var utmParams = getUtmParams();
     var data = {
@@ -207,6 +296,10 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
 
     if (DEBUG) console.log('[PixelAnalytics] Tracking:', eventName, data);
 
+    // FIRE FACEBOOK PIXEL EVENT (Browser-side)
+    fireFacebookEvent(eventName, properties);
+
+    // SEND TO SERVER (for CAPI + database)
     // PRIORITY 1: sendBeacon (Shopify-recommended, page-unload safe)
     if (navigator.sendBeacon) {
       sendBeacon(data, eventName);
@@ -542,6 +635,9 @@ window.PixelAnalytics = { track: () => console.warn('Tracking disabled - invalid
       }
     }, true);
   });
+
+  // Initialize Facebook Pixel at script load
+  initFacebookPixel();
 
   if (DEBUG) console.log('[PixelAnalytics] Initialized:', APP_ID);
 })();

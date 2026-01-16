@@ -324,6 +324,11 @@ export default function CatalogPage() {
     setActivePopover(null);
   };
 
+  const handleConnectPixel = (id: string) => {
+    fetcher.submit({ intent: "connect-pixel-to-catalog", id }, { method: "POST", action: "/api/catalog" });
+    setActivePopover(null);
+  };
+
   const resetForm = () => {
     setSelectedBusiness(""); setSelectedBusinessName(""); setSelectedPixel(""); setCatalogName("");
     setProductSelection("all"); setVariantSubmission("separate");
@@ -457,6 +462,7 @@ export default function CatalogPage() {
                       <Button icon={ExternalIcon} variant="plain" url={`https://business.facebook.com/commerce/catalogs/${cat.catalogId}/products`} external accessibilityLabel="View" />
                       <Popover active={activePopover === cat.id} activator={<Button icon={MenuHorizontalIcon} variant="plain" onClick={() => setActivePopover(activePopover === cat.id ? null : cat.id)} accessibilityLabel="More" />} onClose={() => setActivePopover(null)}>
                         <ActionList items={[
+                          { content: "Connect pixel to catalog", onAction: () => handleConnectPixel(cat.id) },
                           { content: "Sync Now", onAction: () => handleSync(cat.id) },
                           { content: "Refresh product count", onAction: () => handleRefreshCount(cat.id) },
                           { content: "Delete", destructive: true, onAction: () => handleDelete(cat.id) },

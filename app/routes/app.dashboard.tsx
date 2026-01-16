@@ -716,6 +716,10 @@ export default function DashboardPage() {
     pixelName: "",
     pixelId: "",
     trackingPages: "all",
+    selectedCollections: [] as string[],
+    selectedProductTypes: [] as string[],
+    selectedProductTags: [] as string[],
+    selectedProducts: [] as string[],
   });
 
   // Enhanced create modal state
@@ -1260,6 +1264,9 @@ export default function DashboardPage() {
         setSelectedFacebookPixel("");
         setPixelValidationResult(null);
         setCreatedAppId(null);
+        setSelectedTimezone("GMT+0");
+        // Reload page to show new pixel
+        setTimeout(() => window.location.reload(), 500);
       } else {
         setCurrentStep(3); // Move to next step in onboarding
       }
@@ -1923,12 +1930,14 @@ export default function DashboardPage() {
         <Modal
           open={showEnhancedCreateModal}
           onClose={() => {
+            // Force close modal and reset all state
             setShowEnhancedCreateModal(false);
             setEnhancedCreateStep(1);
             setEnhancedCreateForm({ appName: "", pixelId: "", accessToken: "" });
             setSelectedFacebookPixel("");
             setPixelValidationResult(null);
             setCreatedAppId(null);
+            setSelectedTimezone("GMT+0");
           }}
           title={enhancedCreateStep === 1 ? "Create New Pixel" : "Choose Timezone"}
           primaryAction={{
@@ -1969,6 +1978,7 @@ export default function DashboardPage() {
                   setSelectedFacebookPixel("");
                   setPixelValidationResult(null);
                   setCreatedAppId(null);
+                  setSelectedTimezone("GMT+0");
                 }
               },
             },
@@ -2800,7 +2810,15 @@ export default function DashboardPage() {
                     <button
                       onClick={() => {
                         setInputMethod("auto");
-                        setPixelForm({ pixelName: "", pixelId: "", trackingPages: "all" });
+                        setPixelForm({ 
+                          pixelName: "", 
+                          pixelId: "", 
+                          trackingPages: "all",
+                          selectedCollections: [],
+                          selectedProductTypes: [],
+                          selectedProductTags: [],
+                          selectedProducts: [],
+                        });
                       }}
                       style={{
                         flex: 1,
@@ -2819,7 +2837,15 @@ export default function DashboardPage() {
                     <button
                       onClick={() => {
                         setInputMethod("manual");
-                        setPixelForm({ pixelName: "", pixelId: "", trackingPages: "all" });
+                        setPixelForm({ 
+                          pixelName: "", 
+                          pixelId: "", 
+                          trackingPages: "all",
+                          selectedCollections: [],
+                          selectedProductTypes: [],
+                          selectedProductTags: [],
+                          selectedProducts: [],
+                        });
                         setIsConnectedToFacebook(false);
                         setFacebookPixels([]);
                         setSelectedFacebookPixel("");
@@ -3144,6 +3170,101 @@ export default function DashboardPage() {
                           onChange={() => setPixelForm(prev => ({ ...prev, trackingPages: "excluded" }))}
                         />
                       </BlockStack>
+
+                      {/* Collection/Product/Tag Selectors */}
+                      {(pixelForm.trackingPages === "selected" || pixelForm.trackingPages === "excluded") && (
+                        <div style={{ marginTop: "16px" }}>
+                          <BlockStack gap="300">
+                            {/* Collection Selector */}
+                            <div style={{ 
+                              padding: "12px", 
+                              backgroundColor: "#f6f6f7", 
+                              borderRadius: "8px" 
+                            }}>
+                              <BlockStack gap="200">
+                                <Button 
+                                  onClick={() => {/* TODO: Open collection selector modal */}}
+                                  variant="plain"
+                                  textAlign="left"
+                                >
+                                  + Select collection(s)
+                                </Button>
+                                {pixelForm.selectedCollections.length > 0 && (
+                                  <Text as="p" variant="bodySm" tone="subdued">
+                                    {pixelForm.selectedCollections.length} collection(s) {pixelForm.trackingPages === "selected" ? "selected" : "excluded"}
+                                  </Text>
+                                )}
+                              </BlockStack>
+                            </div>
+
+                            {/* Product Type Selector */}
+                            <div style={{ 
+                              padding: "12px", 
+                              backgroundColor: "#f6f6f7", 
+                              borderRadius: "8px" 
+                            }}>
+                              <BlockStack gap="200">
+                                <Button 
+                                  onClick={() => {/* TODO: Open product type selector modal */}}
+                                  variant="plain"
+                                  textAlign="left"
+                                >
+                                  + Product with Type(s)
+                                </Button>
+                                {pixelForm.selectedProductTypes.length > 0 && (
+                                  <Text as="p" variant="bodySm" tone="subdued">
+                                    {pixelForm.selectedProductTypes.length} type(s) {pixelForm.trackingPages === "selected" ? "selected" : "excluded"}
+                                  </Text>
+                                )}
+                              </BlockStack>
+                            </div>
+
+                            {/* Product Tag Selector */}
+                            <div style={{ 
+                              padding: "12px", 
+                              backgroundColor: "#f6f6f7", 
+                              borderRadius: "8px" 
+                            }}>
+                              <BlockStack gap="200">
+                                <Button 
+                                  onClick={() => {/* TODO: Open product tag selector modal */}}
+                                  variant="plain"
+                                  textAlign="left"
+                                >
+                                  + Product with Tag(s)
+                                </Button>
+                                {pixelForm.selectedProductTags.length > 0 && (
+                                  <Text as="p" variant="bodySm" tone="subdued">
+                                    {pixelForm.selectedProductTags.length} tag(s) {pixelForm.trackingPages === "selected" ? "selected" : "excluded"}
+                                  </Text>
+                                )}
+                              </BlockStack>
+                            </div>
+
+                            {/* Product Selector */}
+                            <div style={{ 
+                              padding: "12px", 
+                              backgroundColor: "#f6f6f7", 
+                              borderRadius: "8px" 
+                            }}>
+                              <BlockStack gap="200">
+                                <Button 
+                                  onClick={() => {/* TODO: Open product selector modal */}}
+                                  variant="plain"
+                                  textAlign="left"
+                                >
+                                  + Select Product(s)
+                                </Button>
+                                {pixelForm.selectedProducts.length > 0 && (
+                                  <Text as="p" variant="bodySm" tone="subdued">
+                                    {pixelForm.selectedProducts.length} product(s) {pixelForm.trackingPages === "selected" ? "selected" : "excluded"}
+                                  </Text>
+                                )}
+                              </BlockStack>
+                            </div>
+                          </BlockStack>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

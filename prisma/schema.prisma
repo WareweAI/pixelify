@@ -190,6 +190,13 @@ model AppSettings {
   metaVerified       Boolean @default(false)
   timezone           String? @default("GMT+0")
 
+  // Page tracking settings (for pixel events)
+  trackingPages        String? @default("all")  // all, selected, excluded
+  selectedCollections  String?  // JSON array of collection IDs
+  selectedProductTypes String?  // JSON array of product types
+  selectedProductTags  String?  // JSON array of product tags
+  selectedProducts     String?  // JSON array of product IDs
+
   // Facebook Catalog settings (deprecated - use FacebookCatalog model)
   facebookCatalogId        String?
   facebookCatalogEnabled   Boolean @default(false)
