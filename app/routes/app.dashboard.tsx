@@ -63,6 +63,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    // Fetch store pages - fallback to system defaults (can be extended with custom pages later)
+    const storePages = [
+      { label: "All Pages", value: "all", type: "system" },
+      { label: "Home Page", value: "/", type: "system" },
+      { label: "Cart Page", value: "/cart", type: "system" },
+      { label: "Checkout Page", value: "/checkout", type: "system" },
+      { label: "Search Results", value: "/search", type: "system" },
+      { label: "Account Page", value: "/account", type: "system" },
+      { label: "Product Pages", value: "/products/*", type: "system" },
+      { label: "Collection Pages", value: "/collections/*", type: "system" },
+    ];
+
     // Run ALL queries in parallel for faster load
     const [apps, totalPurchaseEvents, recentPurchaseEvents, todayEvents] = await Promise.all([
       // Apps with counts - single optimized query
@@ -122,6 +134,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       totalPurchaseEvents,
       purchaseOffset,
       purchaseLimit,
+      storePages,
     };
   } catch (error: any) {
     console.error("[Dashboard Loader] Database error:", error);
@@ -354,6 +367,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         metaAppId,
         metaAccessToken: metaAccessToken || "",
       });
+
+      // Save page tracking settings
+      const trackingPages = formData.get("trackingPages") as string || "all";
+      const selectedPageTypes = formData.get("selectedPageTypes") as string;
+      
+      if (trackingPages && trackingPages !== "all") {
+        await prisma.appSettings.updateMany({
+          where: { appId: result.app.id },
+          data: {
+            trackingPages: trackingPages,
+            selectedProductTypes: selectedPageTypes ? selectedPageTypes : undefined,
+          }
+        });
+      }
 
       // Get app with counts for response
       const app = await prisma.app.findUnique({
@@ -642,14 +669,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function DashboardPage() {
-  const { apps, hasPixels, stats, recentPurchaseEvents, totalPurchaseEvents, purchaseOffset, purchaseLimit, connectionError } = useLoaderData<typeof loader>();
+  const { apps, hasPixels, stats, recentPurchaseEvents, totalPurchaseEvents, purchaseOffset, purchaseLimit, connectionError, storePages } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
   const [searchParams] = useSearchParams();
   const [mounted, setMounted] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
   const [inputMethod, setInputMethod] = useState("auto");
   const [showFacebookModal, setShowFacebookModal] = useState(false);
-  const [showCreateModal, setShowCreateModal] = useState(false);
   const [showRenameModal, setShowRenameModal] = useState<any>(null);
   const [showDeleteModal, setShowDeleteModal] = useState<any>(null);
   const [showWebsiteModal, setShowWebsiteModal] = useState<any>(null);
@@ -674,7 +700,6 @@ export default function DashboardPage() {
   const [selectedTimezone, setSelectedTimezone] = useState("GMT+0");
   const [createdAppId, setCreatedAppId] = useState<string | null>(null);
   
-  // Comprehensive GMT timezone options (like Omega Pixel)
   const timezoneOptions = [
     { label: "(GMT+0:00) UTC - Coordinated Universal Time", value: "GMT+0" },
     { label: "(GMT+0:00) London, Dublin, Lisbon", value: "GMT+0" },
@@ -729,18 +754,22 @@ export default function DashboardPage() {
     appName: "",
     pixelId: "",
     accessToken: "",
+    trackingPages: "all",
+    selectedPageTypes: [] as string[],
   });
+
+  // Get store pages from loader data - use as page type options
+  const pageTypeOptions = storePages || [
+    { label: "All Pages", value: "all", type: "system" },
+    { label: "Home Page", value: "/", type: "system" },
+    { label: "Cart Page", value: "/cart", type: "system" },
+    { label: "Checkout Page", value: "/checkout", type: "system" },
+    { label: "Search Results", value: "/search", type: "system" },
+  ];
 
   // Purchase reports search state
   const [purchaseSearchTerm, setPurchaseSearchTerm] = useState("");
   const [currentPurchaseOffset, setCurrentPurchaseOffset] = useState(0);
-
-  // Create form state (for manual pixel creation)
-  const [createForm, setCreateForm] = useState({
-    name: "",
-    metaAppId: "", // Pixel ID
-    metaAccessToken: "",
-  });
 
   // Rename form state
   const [renameValue, setRenameValue] = useState("");
@@ -811,7 +840,6 @@ export default function DashboardPage() {
       FB.api('/me/businesses', 'GET', {}, function(businessResponse: any) {
         if (businessResponse.error) {
           console.error('[Facebook SDK] Error fetching businesses:', businessResponse.error);
-          // Try fallback to ad accounts
           fetchPixelsFromAdAccounts(FB, accessToken);
           return;
         }
@@ -1063,23 +1091,6 @@ export default function DashboardPage() {
     }
   }, [searchParams, fetcher]);
 
-  const handleCreatePixel = useCallback(() => {
-    if (!pixelForm.pixelName || !pixelForm.pixelId) return;
-    
-    // For manual input, access token is also required
-    if (inputMethod === "manual" && !facebookAccessToken) return;
-
-    fetcher.submit(
-      {
-        intent: "create-pixel",
-        pixelName: pixelForm.pixelName,
-        pixelId: pixelForm.pixelId,
-        accessToken: facebookAccessToken,
-      },
-      { method: "POST" }
-    );
-  }, [fetcher, pixelForm, inputMethod, facebookAccessToken]);
-
   const handleConnectToFacebook = useCallback(() => {
     const scope = "ads_read,business_management,ads_management,pages_show_list,pages_read_engagement,catalog_management";
     
@@ -1200,11 +1211,12 @@ export default function DashboardPage() {
     const selectedPixel = facebookPixels.find(p => p.id === selectedFacebookPixel);
     if (!selectedPixel) return;
 
-    setPixelForm({
+    setPixelForm(prev => ({
+      ...prev,
       pixelName: selectedPixel.name,
       pixelId: selectedPixel.id,
       trackingPages: "all",
-    });
+    }));
   }, [facebookPixels, selectedFacebookPixel]);
 
   // Handle fetcher response
@@ -1260,7 +1272,13 @@ export default function DashboardPage() {
         // Close modal and refresh
         setShowEnhancedCreateModal(false);
         setEnhancedCreateStep(1);
-        setEnhancedCreateForm({ appName: "", pixelId: "", accessToken: "" });
+        setEnhancedCreateForm({ 
+          appName: "", 
+          pixelId: "", 
+          accessToken: "",
+          trackingPages: "all",
+          selectedPageTypes: []
+        });
         setSelectedFacebookPixel("");
         setPixelValidationResult(null);
         setCreatedAppId(null);
@@ -1403,12 +1421,19 @@ export default function DashboardPage() {
       return;
     }
 
+    // Validate page selection if not in "all" mode
+    if (enhancedCreateForm.trackingPages !== "all" && enhancedCreateForm.selectedPageTypes.length === 0) {
+      return;
+    }
+
     fetcher.submit(
       {
         intent: "create",
         name: enhancedCreateForm.appName,
         metaAppId: pixelId,
         metaAccessToken: accessToken || "",
+        trackingPages: enhancedCreateForm.trackingPages,
+        selectedPageTypes: JSON.stringify(enhancedCreateForm.selectedPageTypes),
       },
       { method: "POST" }
     );
@@ -1417,24 +1442,36 @@ export default function DashboardPage() {
     // Modal will move to step 2 when fetcher.data.step === 2
   }, [fetcher, enhancedCreateForm, selectedFacebookPixel, facebookAccessToken]);
 
-  const handleCreate = useCallback(() => {
-    if (!createForm.name || !createForm.metaAppId) {
+  const handleCreatePixel = useCallback(() => {
+    if (!pixelForm.pixelId) {
+      return;
+    }
+
+    if (inputMethod === "auto" && (!pixelForm.pixelId || !selectedFacebookPixel)) {
+      return;
+    }
+
+    if (inputMethod === "manual" && (!pixelForm.pixelName || !pixelForm.pixelId || !facebookAccessToken)) {
       return;
     }
 
     fetcher.submit(
       {
-        intent: "create",
-        name: createForm.name,
-        metaAppId: createForm.metaAppId,
-        metaAccessToken: createForm.metaAccessToken,
+        intent: "create-pixel",
+        pixelName: pixelForm.pixelName || "My Pixel",
+        pixelId: pixelForm.pixelId,
+        metaAccessToken: facebookAccessToken || "",
+        trackingPages: pixelForm.trackingPages,
+        selectedCollections: JSON.stringify(pixelForm.selectedCollections),
+        selectedProductTypes: JSON.stringify(pixelForm.selectedProductTypes),
+        selectedProductTags: JSON.stringify(pixelForm.selectedProductTags),
+        selectedProducts: JSON.stringify(pixelForm.selectedProducts),
       },
       { method: "POST" }
     );
 
-    setShowCreateModal(false);
-    setCreateForm({ name: "", metaAppId: "", metaAccessToken: "" });
-  }, [fetcher, createForm]);
+    setCurrentStep(2);
+  }, [fetcher, pixelForm, inputMethod, selectedFacebookPixel, facebookAccessToken]);
 
   const handleRename = useCallback(() => {
     if (!renameValue.trim()) return;
@@ -1480,11 +1517,6 @@ export default function DashboardPage() {
       { method: "POST" }
     );
   }, [fetcher]);
-
-  const handleCreateModalClose = useCallback(() => {
-    setShowCreateModal(false);
-    setCreateForm({ name: "", metaAppId: "", metaAccessToken: "" });
-  }, []);
 
   const [snippetText, setSnippetText] = useState("");
   useEffect(() => {
@@ -1933,7 +1965,7 @@ export default function DashboardPage() {
             // Force close modal and reset all state
             setShowEnhancedCreateModal(false);
             setEnhancedCreateStep(1);
-            setEnhancedCreateForm({ appName: "", pixelId: "", accessToken: "" });
+            setEnhancedCreateForm({ appName: "", pixelId: "", accessToken: "", trackingPages: "all", selectedPageTypes: [] });
             setSelectedFacebookPixel("");
             setPixelValidationResult(null);
             setCreatedAppId(null);
@@ -1942,8 +1974,8 @@ export default function DashboardPage() {
           title={enhancedCreateStep === 1 ? "Create New Pixel" : "Choose Timezone"}
           primaryAction={{
             content: enhancedCreateStep === 1 
-              ? (isValidatingPixel ? "Validating..." : "Create Pixel")
-              : (isLoading ? "Saving..." : "Save & Continue"),
+              ? (isValidatingPixel ? "Validating..." : "Continue")
+              : (isLoading ? "Saving..." : "Save & Complete"),
             onAction: enhancedCreateStep === 1 ? handleEnhancedCreate : () => {
               if (createdAppId) {
                 fetcher.submit(
@@ -1962,6 +1994,7 @@ export default function DashboardPage() {
                  (!enhancedCreateForm.pixelId && !selectedFacebookPixel) ||
                  apps.some((app: any) => app.settings?.metaPixelId === (enhancedCreateForm.pixelId || selectedFacebookPixel)) ||
                  (selectedFacebookPixel && selectedFacebookPixel !== "manual" && !pixelValidationResult?.valid) ||
+                 (enhancedCreateForm.trackingPages !== "all" && enhancedCreateForm.selectedPageTypes.length === 0) ||
                  isValidatingPixel)
               : false,
           }}
@@ -1974,7 +2007,7 @@ export default function DashboardPage() {
                 } else {
                   setShowEnhancedCreateModal(false);
                   setEnhancedCreateStep(1);
-                  setEnhancedCreateForm({ appName: "", pixelId: "", accessToken: "" });
+                  setEnhancedCreateForm({ appName: "", pixelId: "", accessToken: "", trackingPages: "all", selectedPageTypes: [] });
                   setSelectedFacebookPixel("");
                   setPixelValidationResult(null);
                   setCreatedAppId(null);
@@ -2268,6 +2301,160 @@ export default function DashboardPage() {
                 </>
               )}
               </ClientOnly>
+
+              {/* Step 1 Continued: Page Tracking Configuration */}
+              {enhancedCreateStep === 1 && (
+                <>
+                  <Divider />
+                  
+                  <div>
+                    <Text as="p" variant="headingMd" fontWeight="semibold">
+                      📄 Page Tracking Configuration
+                    </Text>
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      Choose which pages this pixel should track events on
+                    </Text>
+                  </div>
+
+                  {/* Tracking Pages Radio Group */}
+                  <Card>
+                    <BlockStack gap="300">
+                      <div>
+                        <Text as="p" variant="bodyMd" fontWeight="medium">
+                          Tracking Mode <Text as="span" tone="critical">*</Text>
+                        </Text>
+                      </div>
+
+                      <div style={{ paddingLeft: "16px" }}>
+                        <BlockStack gap="200">
+                          <label style={{ display: "flex", gap: "12px", alignItems: "center", cursor: "pointer" }}>
+                            <RadioButton
+                              label=""
+                              checked={enhancedCreateForm.trackingPages === "all"}
+                              onChange={() => setEnhancedCreateForm(prev => ({
+                                ...prev,
+                                trackingPages: "all",
+                                selectedPageTypes: []
+                              }))}
+                            />
+                            <BlockStack gap="100">
+                              <Text variant="bodyMd" as="span">All Pages</Text>
+                              <Text variant="bodySm" tone="subdued" as="span">
+                                Track events on every page of your store
+                              </Text>
+                            </BlockStack>
+                          </label>
+
+                          <label style={{ display: "flex", gap: "12px", alignItems: "center", cursor: "pointer" }}>
+                            <RadioButton
+                              label=""
+                              checked={enhancedCreateForm.trackingPages === "selected"}
+                              onChange={() => setEnhancedCreateForm(prev => ({
+                                ...prev,
+                                trackingPages: "selected"
+                              }))}
+                            />
+                            <BlockStack gap="100">
+                              <Text variant="bodyMd" as="span">Selected Pages</Text>
+                              <Text variant="bodySm" tone="subdued" as="span">
+                                Track events only on specific page types
+                              </Text>
+                            </BlockStack>
+                          </label>
+
+                          <label style={{ display: "flex", gap: "12px", alignItems: "center", cursor: "pointer" }}>
+                            <RadioButton
+                              label=""
+                              checked={enhancedCreateForm.trackingPages === "excluded"}
+                              onChange={() => setEnhancedCreateForm(prev => ({
+                                ...prev,
+                                trackingPages: "excluded"
+                              }))}
+                            />
+                            <BlockStack gap="100">
+                              <Text variant="bodyMd" as="span">Excluded Pages</Text>
+                              <Text variant="bodySm" tone="subdued" as="span">
+                                Track events everywhere except selected pages
+                              </Text>
+                            </BlockStack>
+                          </label>
+                        </BlockStack>
+                      </div>
+                    </BlockStack>
+                  </Card>
+
+                  {/* Page Type Selection - Show when selected or excluded mode */}
+                  {enhancedCreateForm.trackingPages !== "all" && (
+                    <Card>
+                      <BlockStack gap="300">
+                        <div>
+                          <Text as="p" variant="bodyMd" fontWeight="medium">
+                            {enhancedCreateForm.trackingPages === "selected" ? "Select Pages to Track" : "Select Pages to Exclude"} <Text as="span" tone="critical">*</Text>
+                          </Text>
+                          <Text as="p" variant="bodySm" tone="subdued">
+                            {enhancedCreateForm.trackingPages === "selected" 
+                              ? "Check the page types where you want to track pixel events"
+                              : "Check the page types you want to exclude from tracking"}
+                          </Text>
+                        </div>
+
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: "12px" }}>
+                          {(pageTypeOptions as any[])
+                            .filter((page: any) => page.value !== "all") // Don't show "All Pages" option in checkbox list
+                            .map((pageType: any) => (
+                            <label
+                              key={pageType.value}
+                              style={{
+                                display: "flex",
+                                gap: "12px",
+                                alignItems: "center",
+                                padding: "12px",
+                                border: "1px solid #d9d9db",
+                                borderRadius: "6px",
+                                cursor: "pointer",
+                                backgroundColor: enhancedCreateForm.selectedPageTypes.includes(pageType.value)
+                                  ? "#f0f5ff"
+                                  : "transparent",
+                                transition: "all 0.2s"
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={enhancedCreateForm.selectedPageTypes.includes(pageType.value)}
+                                onChange={(e) => {
+                                  setEnhancedCreateForm(prev => ({
+                                    ...prev,
+                                    selectedPageTypes: e.target.checked
+                                      ? [...prev.selectedPageTypes, pageType.value]
+                                      : prev.selectedPageTypes.filter(p => p !== pageType.value)
+                                  }));
+                                }}
+                                style={{ cursor: "pointer", width: "18px", height: "18px" }}
+                              />
+                              <BlockStack gap="050">
+                                <Text variant="bodyMd" as="span">{pageType.label}</Text>
+                                {pageType.type && (
+                                  <Text variant="bodySm" tone="subdued" as="span">
+                                    {pageType.type}
+                                  </Text>
+                                )}
+                              </BlockStack>
+                            </label>
+                          ))}
+                        </div>
+
+                        {enhancedCreateForm.selectedPageTypes.length === 0 && enhancedCreateForm.trackingPages !== "all" && (
+                          <Banner tone="warning">
+                            <p>Please select at least one page type</p>
+                          </Banner>
+                        )}
+                      </BlockStack>
+                    </Card>
+                  )}
+
+                  <Divider />
+                </>
+              )}
               </>
               )}
 
@@ -2329,108 +2516,6 @@ export default function DashboardPage() {
                   </Banner>
                 </>
               )}
-            </BlockStack>
-          </Modal.Section>
-        </Modal>
-
-        {/* Create Modal - Enhanced Facebook Pixel Manager Style */}
-        <Modal
-          open={showCreateModal}
-          onClose={handleCreateModalClose}
-          title="Create New Pixel"
-          primaryAction={{
-            content: "Create Pixel",
-            onAction: handleCreate,
-            loading: isLoading,
-            disabled: 
-              !createForm.name || 
-              !createForm.metaAppId ||
-              apps.some((app: any) => app.settings?.metaPixelId === createForm.metaAppId),
-          }}
-          secondaryActions={[
-            {
-              content: "Cancel",
-              onAction: handleCreateModalClose,
-            },
-          ]}
-        >
-          <Modal.Section>
-            <BlockStack gap="400">
-              <TextField
-                label="App Name"
-                value={createForm.name}
-                onChange={(value) => setCreateForm(prev => ({ ...prev, name: value }))}
-                placeholder="e.g., My Store Pixel"
-                helpText="Name for your pixel in this app"
-                autoComplete="off"
-                requiredIndicator
-              />
-
-              <div>
-                <Text as="p" variant="bodyMd" fontWeight="medium">
-                  Pixel ID (Dataset ID) <Text as="span" tone="critical">*</Text>
-                </Text>
-                <div style={{ marginTop: "8px", marginBottom: "4px" }}>
-                  <TextField
-                    label=""
-                    value={createForm.metaAppId}
-                    onChange={(value) => setCreateForm(prev => ({ ...prev, metaAppId: value }))}
-                    placeholder="e.g., 1234567890123456"
-                    autoComplete="off"
-                    error={
-                      createForm.metaAppId && 
-                      apps.some((app: any) => app.settings?.metaPixelId === createForm.metaAppId)
-                        ? "This pixel is already added to your app"
-                        : undefined
-                    }
-                  />
-                </div>
-                <Text as="p" variant="bodySm" tone="subdued">
-                  Find in Meta Events Manager → Data Sources → Select your dataset → Dataset ID
-                </Text>
-                
-                {/* Show warning if pixel already exists */}
-                {createForm.metaAppId && 
-                 apps.some((app: any) => app.settings?.metaPixelId === createForm.metaAppId) && (
-                  <div style={{ marginTop: "8px" }}>
-                    <Banner tone="critical">
-                      <p>
-                        This pixel ID is already added to your app as "{apps.find((app: any) => app.settings?.metaPixelId === createForm.metaAppId)?.name}". 
-                        Each pixel can only be added once.
-                      </p>
-                    </Banner>
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <Text as="p" variant="bodyMd" fontWeight="medium">
-                  Connect Facebook Account
-                </Text>
-                
-                <div style={{ marginTop: "12px", marginBottom: "12px" }}>
-                  <Button
-                    url="/auth/facebook?return=/app/dashboard"
-                    variant="primary"
-                    size="large"
-                    external
-                  >
-                    Connect with Facebook
-                  </Button>
-                </div>
-                
-                <Text as="p" variant="bodySm" tone="subdued">
-                  Click to connect your Facebook account. This will automatically get the required permissions for catalog management, ads, and pixel tracking.
-                </Text>
-                
-                <div style={{ marginTop: "16px" }}>
-                  <Banner tone="info">
-                    <Text as="p" variant="bodySm">
-                      <strong>One-click setup:</strong> No need to manually copy tokens. Just click the button above and authorize the app.
-                    </Text>
-                  </Banner>
-                </div>
-              </div>
             </BlockStack>
           </Modal.Section>
         </Modal>
@@ -3433,4 +3518,5 @@ export default function DashboardPage() {
     </div>
   );
 }
+
 

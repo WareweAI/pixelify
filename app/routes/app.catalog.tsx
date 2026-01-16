@@ -6,7 +6,7 @@ import prisma from "../db.server";
 import {
   Page, Card, Button, TextField, Layout, Text, BlockStack, InlineStack,
   Banner, Select, Badge, Box, Spinner, Link, IndexTable,
-  Pagination, Popover, ActionList, Modal, RadioButton,
+  Pagination, Popover, ActionList, Modal, RadioButton, Checkbox,
 } from "@shopify/polaris";
 import { RefreshIcon, MenuHorizontalIcon, ExternalIcon } from "@shopify/polaris-icons";
 import { FacebookConnectionStatus } from "../components/FacebookConnectionStatus";
@@ -197,7 +197,7 @@ export default function CatalogPage() {
   const [pixels, setPixels] = useState<Pixel[]>([]);
   const [selectedBusiness, setSelectedBusiness] = useState("");
   const [selectedBusinessName, setSelectedBusinessName] = useState("");
-  const [selectedPixel, setSelectedPixel] = useState("");
+  const [selectedPixels, setSelectedPixels] = useState<string[]>([]);
   const [catalogName, setCatalogName] = useState("");
   const [productSelection, setProductSelection] = useState<"all" | "selected">("all");
   const [variantSubmission, setVariantSubmission] = useState<"separate" | "grouped" | "first">("separate");
@@ -205,13 +205,20 @@ export default function CatalogPage() {
   const [isLoadingPixels, setIsLoadingPixels] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activePopover, setActivePopover] = useState<string | null>(null);
+  const [filterBusiness, setFilterBusiness] = useState<string>("all");
+  const [isLoadingFilterBusinesses, setIsLoadingFilterBusinesses] = useState(false);
 
   const isLoading = fetcher.state !== "idle";
-  const filteredCatalogs = catalogs.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filteredCatalogs = catalogs.filter(c => {
+    const matchesSearch = c.name.toLowerCase().includes(searchQuery.toLowerCase());
+    // Business filter would require storing businessId in Catalog, handled via UI display
+    return matchesSearch;
+  });
 
   useEffect(() => {
     if (fetcher.data?.businesses) { setBusinesses(fetcher.data.businesses); setIsLoadingBusinesses(false); }
     if (fetcher.data?.pixels) { setPixels(fetcher.data.pixels); setIsLoadingPixels(false); }
+    if (fetcher.data?.filterBusinesses) { setBusinesses(fetcher.data.filterBusinesses); setIsLoadingFilterBusinesses(false); }
     
     // Handle catalog updates without full page reload
     if (fetcher.data?.catalog) {
@@ -269,6 +276,14 @@ export default function CatalogPage() {
     } else { setPixels([]); }
   }, [selectedBusiness]);
 
+  // Load filter businesses on component mount
+  useEffect(() => {
+    if (isConnected && filterBusiness === "all" && businesses.length === 0) {
+      setIsLoadingFilterBusinesses(true);
+      fetcher.submit({ intent: "fetch-filter-businesses" }, { method: "POST", action: "/api/catalog" });
+    }
+  }, [isConnected]);
+
   const openCreateModal = () => {
     setShowCreateModal(true);
     setIsLoadingBusinesses(true);
@@ -281,7 +296,7 @@ export default function CatalogPage() {
       intent: "create-catalog",
       businessId: selectedBusiness,
       businessName: selectedBusinessName,
-      pixelId: selectedPixel,
+      pixelIds: JSON.stringify(selectedPixels),
       catalogName: catalogName.trim(),
       variantSubmission,
     }, { method: "POST", action: "/api/catalog" });
@@ -330,7 +345,7 @@ export default function CatalogPage() {
   };
 
   const resetForm = () => {
-    setSelectedBusiness(""); setSelectedBusinessName(""); setSelectedPixel(""); setCatalogName("");
+    setSelectedBusiness(""); setSelectedBusinessName(""); setSelectedPixels([]); setCatalogName("");
     setProductSelection("all"); setVariantSubmission("separate");
   };
 
@@ -414,7 +429,18 @@ export default function CatalogPage() {
         <Layout.Section>
           <InlineStack align="space-between" blockAlign="end">
             <InlineStack gap="400">
-              <Box minWidth="250px"><Select label="Choose Business account" options={[{ label: "All", value: "all" }]} value="all" onChange={() => {}} /></Box>
+              <Box minWidth="250px">
+                <Select 
+                  label="Choose Business account" 
+                  options={[
+                    { label: "All", value: "all" },
+                    ...businesses.map(b => ({ label: b.name, value: b.id }))
+                  ]} 
+                  value={filterBusiness} 
+                  onChange={setFilterBusiness}
+                  disabled={isLoadingFilterBusinesses}
+                />
+              </Box>
               <Box minWidth="300px"><TextField label="Search" value={searchQuery} onChange={setSearchQuery} placeholder="Search by catalog name" autoComplete="off" clearButton onClearButtonClick={() => setSearchQuery("")} /></Box>
             </InlineStack>
             <Button icon={RefreshIcon} onClick={() => window.location.reload()}>Refresh</Button>
@@ -517,9 +543,29 @@ export default function CatalogPage() {
 
             {selectedBusiness && (
               <BlockStack gap="200">
-                <Text variant="headingSm" as="h3">Choose Pixel (Optional)</Text>
-                {isLoadingPixels ? <InlineStack gap="200"><Spinner size="small" /><Text as="span">Loading...</Text></InlineStack> : (
-                  <Select label="" labelHidden options={[{ label: "No pixel", value: "" }, ...pixels.map(p => ({ label: `${p.name} (${p.id})`, value: p.id }))]} value={selectedPixel} onChange={setSelectedPixel} />
+                <Text variant="headingSm" as="h3">Choose Pixels (Optional - Multiple allowed)</Text>
+                {isLoadingPixels ? (
+                  <InlineStack gap="200"><Spinner size="small" /><Text as="span">Loading pixels...</Text></InlineStack>
+                ) : pixels.length === 0 ? (
+                  <Text as="p" tone="subdued">No pixels available for this business account</Text>
+                ) : (
+                  <BlockStack gap="200">
+                    {pixels.map(pixel => (
+                      <div key={pixel.id}>
+                        <Checkbox
+                          label={`${pixel.name} (${pixel.id})`}
+                          checked={selectedPixels.includes(pixel.id)}
+                          onChange={(checked) => {
+                            if (checked) {
+                              setSelectedPixels([...selectedPixels, pixel.id]);
+                            } else {
+                              setSelectedPixels(selectedPixels.filter(id => id !== pixel.id));
+                            }
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </BlockStack>
                 )}
               </BlockStack>
             )}

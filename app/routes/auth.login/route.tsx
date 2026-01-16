@@ -21,9 +21,31 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { errors };
   }
   
+  // Extract return URL from query params
+  const url = new URL(request.url);
+  const returnUrl = url.searchParams.get('return') || '/app/dashboard';
+  
   // If login is successful, authenticate and redirect to dashboard
   try {
-    const { session } = await shopify.authenticate.admin(request);
+    const authResult = await shopify.authenticate.admin(request);
+    
+    // Check if authentication returned a redirect (indicates an issue)
+    if (authResult instanceof Response) {
+      console.warn("Authentication returned redirect after login - may indicate session issue");
+      return {
+        errors: { shop: "Authentication failed. Please try again or contact support." },
+      };
+    }
+    
+    const { session } = authResult;
+    
+    // Validate session
+    if (!session || !session.shop) {
+      console.warn("Authentication succeeded but session is invalid");
+      return {
+        errors: { shop: "Session validation failed. Please try logging in again." },
+      };
+    }
     
     // Create or update user in database
     try {
@@ -41,18 +63,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
     } catch (dbError) {
       console.error("Database error during login:", dbError);
+      // Don't fail login for database issues - user can still access
     }
 
-    // Always redirect to dashboard after successful login
-    throw redirect("/app/dashboard");
+    // Redirect to original return URL or dashboard
+    throw redirect(returnUrl);
   } catch (error) {
     if (error instanceof Response) {
       throw error;
     }
     
-    console.error("Authentication error:", error);
+    console.error("Authentication error:", {
+      message: error instanceof Error ? error.message : 'Unknown error',
+      timestamp: new Date().toISOString(),
+    });
     return {
-      errors: { shop: "Failed to authenticate. Please try again." },
+      errors: { shop: "Authentication failed. Please try again with your shop domain." },
     };
   }
 };

@@ -4,15 +4,44 @@ import { getShopifyInstance } from "../shopify.server";
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   try {
     const shopify = getShopifyInstance();
-    
-    // Handle session token authentication - this should complete the auth flow
-    const { session } = await shopify.authenticate.admin(request);
-    
-    // If authentication succeeds, redirect to the original destination
     const url = new URL(request.url);
-    const shopifyReload = url.searchParams.get('shopify-reload');
     const chargeId = url.searchParams.get('charge_id');
+    const shopifyReload = url.searchParams.get('shopify-reload');
     
+    // Attempt session token authentication
+    const authResult = await shopify.authenticate.admin(request);
+    
+    // Check if authentication returned a redirect response (indicates failed auth)
+    if (authResult instanceof Response) {
+      console.warn("Session token authentication returned a redirect response - likely session expired or invalid");
+      
+      // Always redirect to login for re-authentication
+      const loginUrl = chargeId ? `/auth/login?charge_id=${chargeId}&return=${encodeURIComponent(shopifyReload || '/app/dashboard')}` : `/auth/login?return=${encodeURIComponent(shopifyReload || '/app/dashboard')}`;
+      
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: loginUrl,
+        },
+      });
+    }
+    
+    const { session } = authResult;
+    
+    // Validate that we have a valid session
+    if (!session || !session.shop) {
+      console.warn("Session token authentication succeeded but session data is invalid");
+      
+      const loginUrl = chargeId ? `/auth/login?charge_id=${chargeId}` : '/auth/login';
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: loginUrl,
+        },
+      });
+    }
+    
+    // Authentication successful - redirect to original destination or dashboard
     if (shopifyReload) {
       // Preserve charge_id if present
       const reloadUrl = new URL(shopifyReload, request.url);
@@ -37,12 +66,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       },
     });
   } catch (error) {
-    console.error("Session token authentication failed:", error);
+    console.error("Session token authentication error:", {
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : undefined,
+      timestamp: new Date().toISOString(),
+    });
     
-    // If session token auth fails, preserve charge_id in login redirect
+    // Extract URL parameters for retry
     const url = new URL(request.url);
     const chargeId = url.searchParams.get('charge_id');
-    const loginUrl = chargeId ? `/auth/login?charge_id=${chargeId}` : '/auth/login';
+    const shopifyReload = url.searchParams.get('shopify-reload');
+    
+    // Redirect to login for re-authentication with optional return URL
+    const loginUrl = chargeId 
+      ? `/auth/login?charge_id=${chargeId}&return=${encodeURIComponent(shopifyReload || '/app/dashboard')}`
+      : `/auth/login?return=${encodeURIComponent(shopifyReload || '/app/dashboard')}`;
     
     return new Response(null, {
       status: 302,

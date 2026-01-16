@@ -1,356 +1,410 @@
-import { useState, useCallback } from "react";
-import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
-import { useLoaderData, useSubmit, useNavigation, useActionData } from "react-router";
+import { useState, useEffect } from "react";
+import type { LoaderFunctionArgs } from "react-router";
+import { useLoaderData, useFetcher } from "react-router";
+import { getShopifyInstance } from "../shopify.server";
+import prisma from "../db.server";
 import {
   Page,
-  Layout,
   Card,
+  Button,
+  TextField,
+  Layout,
   Text,
   BlockStack,
   InlineStack,
-  Badge,
-  Button,
-  TextField,
   Banner,
-  Box,
+  Badge,
+  IndexTable,
   Modal,
-  FormLayout,
-  Divider,
+  Select,
+  Box,
 } from "@shopify/polaris";
-import { authenticate } from "~/shopify.server";
-import prisma from "~/db.server";
+import { EditIcon } from "@shopify/polaris-icons";
 
-export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
-
-  // Find user and their app
-  const user = await prisma.user.findUnique({
-    where: { storeUrl: shop },
-    include: {
-      apps: {
-        include: { settings: true },
-        orderBy: { createdAt: "desc" },
-        take: 1,
-      },
-    },
-  });
-
-  if (!user || user.apps.length === 0) {
-    return {
-      app: null,
-      settings: null,
-      shop,
-    };
-  }
-
-  const app = user.apps[0];
-  return {
-    app: {
-      id: app.id,
-      appId: app.appId,
-      name: app.name,
-    },
-    settings: app.settings,
-    shop,
-  };
+interface PixelData {
+  id: string;
+  appId: string;
+  name: string;
+  enabled: boolean;
+  metaPixelId: string | null;
+  metaPixelEnabled: boolean;
+  testEventCode: string | null;
+  trackingPages: string;
+  serverSideEnabled: boolean;
 }
 
-export async function action({ request }: ActionFunctionArgs) {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
-  const formData = await request.formData();
-  const actionType = formData.get("action");
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const shopify = getShopifyInstance();
+  if (!shopify?.authenticate) throw new Response("Shopify not configured", { status: 500 });
 
-  const user = await prisma.user.findUnique({
-    where: { storeUrl: shop },
-    include: {
-      apps: {
-        include: { settings: true },
-        orderBy: { createdAt: "desc" },
-        take: 1,
-      },
-    },
+  let session;
+  try {
+    const authResult = await shopify.authenticate.admin(request);
+    session = authResult.session;
+  } catch (error) {
+    if (error instanceof Response) throw error;
+    throw new Response("Authentication failed", { status: 401 });
+  }
+
+  const shop = session.shop;
+  const user = await prisma.user.findUnique({ where: { storeUrl: shop } });
+  if (!user) throw new Response("User not found", { status: 404 });
+
+  // Get valid access token using the token refresh service
+  const { getValidTokenForUser } = await import("~/services/facebook-sdk-token.server");
+  const accessToken = await getValidTokenForUser(user.id);
+
+  const apps = await prisma.app.findMany({
+    where: { userId: user.id },
+    include: { settings: true },
+    orderBy: { createdAt: "desc" },
   });
 
-  if (!user || user.apps.length === 0) {
-    return { error: "No app found" };
-  }
+  const pixels: PixelData[] = apps.map((app: any) => ({
+    id: app.id,
+    appId: app.appId,
+    name: app.name,
+    enabled: app.enabled,
+    metaPixelId: app.settings?.metaPixelId || null,
+    metaPixelEnabled: app.settings?.metaPixelEnabled || false,
+    testEventCode: app.settings?.metaTestEventCode || null,
+    trackingPages: app.settings?.trackingPages || "all",
+    serverSideEnabled: !!(app.settings?.metaPixelId && accessToken), // Use valid token instead of stored token
+  }));
 
-  const app = user.apps[0];
-
-  if (actionType === "update-meta") {
-    const metaPixelId = formData.get("metaPixelId") as string;
-    const metaAccessToken = formData.get("metaAccessToken") as string;
-
-    if (!app.settings) {
-      await prisma.appSettings.create({
-        data: {
-          appId: app.id,
-          metaPixelId: metaPixelId || null,
-          metaAccessToken: metaAccessToken || null,
-          metaPixelEnabled: !!metaPixelId,
-        },
-      });
-    } else {
-      await prisma.appSettings.update({
-        where: { id: app.settings.id },
-        data: {
-          metaPixelId: metaPixelId || null,
-          metaAccessToken: metaAccessToken || null,
-          metaPixelEnabled: !!metaPixelId,
-        },
-      });
-    }
-
-    return { success: true, message: "Meta Pixel settings updated" };
-  }
-
-  if (actionType === "validate-meta") {
-    const metaPixelId = formData.get("metaPixelId") as string;
-    const metaAccessToken = formData.get("metaAccessToken") as string;
-
-    if (!metaPixelId || !metaAccessToken) {
-      return { error: "Both Pixel ID and Access Token are required" };
-    }
-
-    try {
-      const response = await fetch(
-        `https://graph.facebook.com/v24.0/${metaPixelId}?fields=id,name&access_token=${metaAccessToken}`
-      );
-      const data = await response.json();
-
-      if (data.error) {
-        return { error: data.error.message || "Invalid credentials" };
-      }
-
-      // Update settings with verified status
-      if (app.settings) {
-        await prisma.appSettings.update({
-          where: { id: app.settings.id },
-          data: {
-            metaPixelId,
-            metaAccessToken,
-            metaPixelEnabled: true,
-            metaVerified: true,
-          },
-        });
-      } else {
-        await prisma.appSettings.create({
-          data: {
-            appId: app.id,
-            metaPixelId,
-            metaAccessToken,
-            metaPixelEnabled: true,
-            metaVerified: true,
-          },
-        });
-      }
-
-      return { success: true, message: `Connected to ${data.name || "Meta Pixel"}` };
-    } catch (error) {
-      return { error: "Failed to validate Meta credentials" };
-    }
-  }
-
-  return { error: "Unknown action" };
-}
+  return { pixels, shop };
+};
 
 export default function PixelsPage() {
-  const { app, settings, shop } = useLoaderData<typeof loader>();
-  const actionData = useActionData<any>();
-  const submit = useSubmit();
-  const navigation = useNavigation();
-  const isLoading = navigation.state === "submitting";
-
-  const [metaPixelId, setMetaPixelId] = useState(settings?.metaPixelId || "");
-  const [metaAccessToken, setMetaAccessToken] = useState(settings?.metaAccessToken || "");
-  const [showMetaModal, setShowMetaModal] = useState(false);
+  const { pixels: initialPixels } = useLoaderData<typeof loader>();
+  const fetcher = useFetcher();
   
-  const handleValidateMeta = useCallback(() => {
-    const formData = new FormData();
-    formData.append("action", "validate-meta");
-    formData.append("metaPixelId", metaPixelId);
-    formData.append("metaAccessToken", metaAccessToken);
-    submit(formData, { method: "post" });
-    setShowMetaModal(false);
-  }, [metaPixelId, metaAccessToken, submit]);
+  const [pixels, setPixels] = useState<PixelData[]>(initialPixels);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [showTestModal, setShowTestModal] = useState(false);
+  const [selectedPixel, setSelectedPixel] = useState<PixelData | null>(null);
+  const [testEventName, setTestEventName] = useState("TestEvent");
+  const [isSendingTest, setIsSendingTest] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
-  if (!app) {
-    return (
-      <Page title="Facebook Pixel Manager">
-        <Layout>
-          <Layout.Section>
-            <Banner tone="warning">
-              <p>No pixel configured. Please set up your pixel first.</p>
-            </Banner>
-          </Layout.Section>
-        </Layout>
-      </Page>
+  const isLoading = fetcher.state !== "idle";
+  const filteredPixels = pixels.filter(p => 
+    p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    p.appId.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (p.metaPixelId && p.metaPixelId.toLowerCase().includes(searchQuery.toLowerCase()))
+  );
+
+  useEffect(() => {
+    if (fetcher.data?.pixels) {
+      setPixels(fetcher.data.pixels);
+    }
+    if (fetcher.data?.testResult) {
+      setTestResult(fetcher.data.testResult);
+      setIsSendingTest(false);
+    }
+  }, [fetcher.data]);
+
+  const handleToggleServerSide = (pixelId: string, enabled: boolean) => {
+    setPixels(prev => prev.map(p => 
+      p.id === pixelId ? { ...p, serverSideEnabled: !enabled } : p
+    ));
+    fetcher.submit(
+      { intent: "toggle-server-side", pixelId, enabled: String(!enabled) },
+      { method: "POST", action: "/api/pixel" }
     );
-  }
+  };
+
+  const handleSendTestEvent = () => {
+    if (!selectedPixel) return;
+    setIsSendingTest(true);
+    setTestResult(null);
+    
+    fetcher.submit(
+      {
+        intent: "send-test-event",
+        pixelId: selectedPixel.id,
+        eventName: testEventName,
+      },
+      { method: "POST", action: "/api/pixel" }
+    );
+  };
+
+  const openTestModal = (pixel: PixelData) => {
+    setSelectedPixel(pixel);
+    setShowTestModal(true);
+    setTestResult(null);
+  };
+
+  const getTrackingPagesLabel = (trackingPages: string) => {
+    switch (trackingPages) {
+      case "all": return "All pages";
+      case "selected": return "Selected pages";
+      case "excluded": return "Excluded pages";
+      default: return "All pages";
+    }
+  };
 
   return (
-    <Page title="Facebook Pixel Manager">
+    <Page 
+      title="Pixel" 
+      primaryAction={{
+        content: "Add Pixel",
+        url: "/app/dashboard",
+      }}
+    >
       <Layout>
+        {fetcher.data?.message && (
+          <Layout.Section>
+            <Banner tone="success" onDismiss={() => {}}>
+              {fetcher.data.message}
+            </Banner>
+          </Layout.Section>
+        )}
+        {fetcher.data?.error && (
+          <Layout.Section>
+            <Banner tone="critical" onDismiss={() => {}}>
+              {fetcher.data.error}
+            </Banner>
+          </Layout.Section>
+        )}
+
+        {/* Search Bar */}
         <Layout.Section>
-          <BlockStack gap="400">
-            {/* Success/Error Messages */}
-            {actionData?.success && (
-              <Banner tone="success">
-                <p>{actionData.message}</p>
-              </Banner>
-            )}
-            {actionData?.error && (
-              <Banner tone="critical">
-                <p>{actionData.error}</p>
-              </Banner>
-            )}
+          <Card padding="400">
+            <TextField
+              label=""
+              labelHidden
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder="Filter by pixel title, pixel ID"
+              autoComplete="off"
+              clearButton
+              onClearButtonClick={() => setSearchQuery("")}
+            />
+          </Card>
+        </Layout.Section>
 
-            {/* Pixel Info Card */}
-            <Card>
-              <BlockStack gap="400">
-                <Text as="h2" variant="headingMd">Your Pixel</Text>
-                <InlineStack gap="200" align="start">
-                  <Text as="span" variant="bodyMd">Pixel ID:</Text>
-                  <Text as="span" variant="bodyMd" fontWeight="semibold">{app.appId}</Text>
-                  <Badge tone="success">Active</Badge>
-                </InlineStack>
-              </BlockStack>
-            </Card>
+        {/* Pixels Table */}
+        <Layout.Section>
+          <Card padding="0">
+            <IndexTable
+              itemCount={filteredPixels.length}
+              headings={[
+                { title: "Status" },
+                { title: "Pixel ID" },
+                { title: "Title" },
+                { title: "Pages" },
+                { title: "Server-Side API ⓘ" },
+                { title: "Test Server Events" },
+                { title: "Action" },
+              ]}
+              selectable={false}
+            >
+              {filteredPixels.map((pixel, index) => (
+                <IndexTable.Row id={pixel.id} key={pixel.id} position={index}>
+                  {/* Status */}
+                  <IndexTable.Cell>
+                    <Badge tone={pixel.enabled ? "success" : "critical"}>
+                      {pixel.enabled ? "Active" : "Inactive"}
+                    </Badge>
+                  </IndexTable.Cell>
 
-            {/* Meta/Facebook Pixel Integration */}
-            <Card>
-              <BlockStack gap="400">
-                <InlineStack align="space-between">
-                  <Text as="h2" variant="headingMd">Meta (Facebook) Pixel</Text>
-                  {settings?.metaPixelEnabled && settings?.metaPixelId && settings?.metaAccessToken ? (
-                    <Badge tone="success">Connected</Badge>
-                  ) : (
-                    <Badge tone="critical">Not Connected</Badge>
-                  )}
-                </InlineStack>
-                
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  Connect your Meta Pixel to send events via the Conversions API (CAPI) for better tracking accuracy.
+                  {/* Pixel ID */}
+                  <IndexTable.Cell>
+                    <Text as="span" variant="bodyMd" fontWeight="medium">
+                      {pixel.metaPixelId || pixel.appId}
+                    </Text>
+                  </IndexTable.Cell>
+
+                  {/* Title */}
+                  <IndexTable.Cell>
+                    <Text as="span" variant="bodyMd">
+                      {pixel.name}
+                    </Text>
+                  </IndexTable.Cell>
+
+                  {/* Pages */}
+                  <IndexTable.Cell>
+                    <Badge tone="success">
+                      {getTrackingPagesLabel(pixel.trackingPages)}
+                    </Badge>
+                  </IndexTable.Cell>
+
+                  {/* Server-Side API Toggle */}
+                  <IndexTable.Cell>
+                    <div 
+                      onClick={() => handleToggleServerSide(pixel.id, pixel.serverSideEnabled)}
+                      style={{ 
+                        width: "44px", 
+                        height: "24px", 
+                        borderRadius: "12px", 
+                        backgroundColor: pixel.serverSideEnabled ? "#000" : "#ccc", 
+                        position: "relative", 
+                        cursor: "pointer",
+                        display: "inline-block"
+                      }}
+                    >
+                      <div style={{ 
+                        width: "18px", 
+                        height: "18px", 
+                        borderRadius: "50%", 
+                        backgroundColor: "#fff", 
+                        position: "absolute", 
+                        top: "3px", 
+                        right: pixel.serverSideEnabled ? "3px" : "23px", 
+                        transition: "right 0.2s" 
+                      }} />
+                    </div>
+                  </IndexTable.Cell>
+
+                  {/* Test Server Events */}
+                  <IndexTable.Cell>
+                    {pixel.serverSideEnabled && pixel.testEventCode ? (
+                      <Button 
+                        size="slim" 
+                        onClick={() => openTestModal(pixel)}
+                      >
+                        Set up
+                      </Button>
+                    ) : (
+                      <Text as="span" tone="subdued">-</Text>
+                    )}
+                  </IndexTable.Cell>
+
+                  {/* Action */}
+                  <IndexTable.Cell>
+                    <Button 
+                      icon={EditIcon} 
+                      variant="plain" 
+                      url={`/app/dashboard`}
+                      accessibilityLabel="Edit pixel"
+                    />
+                  </IndexTable.Cell>
+                </IndexTable.Row>
+              ))}
+            </IndexTable>
+
+            {filteredPixels.length === 0 && (
+              <Box padding="600">
+                <Text as="p" tone="subdued" alignment="center">
+                  No pixels found. Add a pixel to get started.
                 </Text>
+              </Box>
+            )}
 
-                {settings?.metaPixelEnabled && settings?.metaPixelId && settings?.metaAccessToken ? (
-                  <BlockStack gap="200">
-                    <InlineStack gap="200">
-                      <Text as="span" variant="bodyMd">Meta Pixel ID:</Text>
-                      <Text as="span" variant="bodyMd" fontWeight="semibold">{settings.metaPixelId}</Text>
-                    </InlineStack>
-                    <InlineStack gap="200">
-                      <Text as="span" variant="bodyMd">CAPI Status:</Text>
-                      <Badge tone="success">Enabled</Badge>
-                    </InlineStack>
-                    <InlineStack gap="200">
-                      <Text as="span" variant="bodyMd">Access Token:</Text>
-                      <Text as="span" variant="bodyMd" fontWeight="semibold">
-                        {settings.metaAccessToken ? `${settings.metaAccessToken.substring(0, 10)}...` : 'Not set'}
-                      </Text>
-                    </InlineStack>
-                  </BlockStack>
-                ) : (
-                  <Banner tone="info">
-                    <p>🔗 Connect your Meta Pixel to enable server-side tracking via Conversions API.</p>
-                  </Banner>
-                )}
-
-                <Button onClick={() => setShowMetaModal(true)}>
-                  {settings?.metaPixelEnabled && settings?.metaPixelId && settings?.metaAccessToken ? "Edit Meta Pixel" : "Connect Meta Pixel"}
-                </Button>
-              </BlockStack>
-            </Card>
-
-            {/* Installation Instructions */}
-            <Card>
-              <BlockStack gap="400">
-                <Text as="h2" variant="headingMd">Installation</Text>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  The pixel is automatically installed via the theme app extension. Make sure it's enabled in your theme settings.
-                </Text>
-                <Box paddingBlockStart="200">
-                  <Text as="p" variant="bodySm" tone="subdued">
-                    Go to Online Store → Themes → Customize → App embeds → Enable "Pixel Tracker"
+            {/* Pagination */}
+            {filteredPixels.length > 0 && (
+              <Box padding="400">
+                <InlineStack align="center" gap="200">
+                  <Text as="span" variant="bodySm" tone="subdued">
+                    Rows per page:
                   </Text>
-                </Box>
-              </BlockStack>
-            </Card>
-          </BlockStack>
+                  <Select
+                    label=""
+                    labelHidden
+                    options={[
+                      { label: "5", value: "5" },
+                      { label: "10", value: "10" },
+                      { label: "20", value: "20" },
+                    ]}
+                    value="5"
+                    onChange={() => {}}
+                  />
+                  <Text as="span" variant="bodySm" tone="subdued">
+                    1/1
+                  </Text>
+                </InlineStack>
+              </Box>
+            )}
+          </Card>
+        </Layout.Section>
+
+        {/* Footer */}
+        <Layout.Section>
+          <Box padding="400">
+            <InlineStack align="center" gap="200">
+              <Text as="p" tone="subdued">ⓘ For more guidance, visit our</Text>
+              <a href="https://pixelify-red.vercel.app/docs" target="_blank" rel="noopener noreferrer" style={{ color: "#2563eb" }}>
+                knowledge base
+              </a>
+              <Text as="p" tone="subdued">or</Text>
+              <a href="mailto:support@warewe.online" style={{ color: "#2563eb" }}>
+                request support
+              </a>
+            </InlineStack>
+          </Box>
         </Layout.Section>
       </Layout>
 
-      {/* Meta Pixel Modal */}
+      {/* Test Event Modal */}
       <Modal
-        open={showMetaModal}
-        onClose={() => setShowMetaModal(false)}
-        title="Connect Meta Pixel"
+        open={showTestModal}
+        onClose={() => {
+          setShowTestModal(false);
+          setTestResult(null);
+        }}
+        title="Test Server Event"
         primaryAction={{
-          content: "Validate & Connect",
-          onAction: handleValidateMeta,
-          loading: isLoading,
-          disabled: !metaPixelId || !metaAccessToken,
+          content: isSendingTest ? "Sending..." : "Send Test Event",
+          onAction: handleSendTestEvent,
+          loading: isSendingTest,
+          disabled: !testEventName || isSendingTest,
         }}
         secondaryActions={[
           {
             content: "Cancel",
-            onAction: () => setShowMetaModal(false),
+            onAction: () => {
+              setShowTestModal(false);
+              setTestResult(null);
+            },
           },
         ]}
       >
         <Modal.Section>
           <BlockStack gap="400">
-            {/* Current Status */}
-            {settings?.metaPixelEnabled && settings?.metaPixelId && settings?.metaAccessToken && (
-              <Banner tone="success">
-                <p>✅ Currently connected to Meta Pixel ID: <strong>{settings.metaPixelId}</strong></p>
+            {selectedPixel && (
+              <Banner tone="info">
+                <p>
+                  Testing pixel: <strong>{selectedPixel.name}</strong> ({selectedPixel.metaPixelId})
+                </p>
+                <p style={{ marginTop: "8px" }}>
+                  Test Event Code: <strong>{selectedPixel.testEventCode}</strong>
+                </p>
               </Banner>
             )}
-            
-            <FormLayout>
-              <TextField
-                label="Meta Pixel ID (Dataset ID)"
-                value={metaPixelId}
-                onChange={setMetaPixelId}
-                placeholder="123456789012345"
-                helpText="Find this in Meta Events Manager → Data Sources → Select your dataset → Dataset ID"
-                autoComplete="off"
-                requiredIndicator
-              />
-              <TextField
-                label="Conversions API Access Token"
-                value={metaAccessToken}
-                onChange={setMetaAccessToken}
-                placeholder="EAAxxxxxxx..."
-                helpText="Generate in Meta Events Manager → Settings → Conversions API → Generate Access Token"
-                autoComplete="off"
-                type="password"
-                requiredIndicator
-              />
-            </FormLayout>
+
+            <TextField
+              label="Event Name"
+              value={testEventName}
+              onChange={setTestEventName}
+              placeholder="TestEvent"
+              autoComplete="off"
+              helpText="Name of the test event to send (e.g., TestEvent, PageView, Purchase)"
+            />
+
+            {testResult && (
+              <Banner tone={testResult.success ? "success" : "critical"}>
+                <p>{testResult.message}</p>
+              </Banner>
+            )}
 
             <Banner tone="info">
               <BlockStack gap="100">
-                <Text as="p" variant="bodyMd" fontWeight="medium">How to get your credentials:</Text>
+                <Text as="p" variant="bodyMd" fontWeight="medium">How to verify:</Text>
                 <Text as="p" variant="bodySm">
-                  1. Go to <a href="https://business.facebook.com/events_manager2" target="_blank" rel="noopener noreferrer" style={{color: "#2563eb"}}>Meta Events Manager</a>
+                  1. Send the test event using this form
                 </Text>
                 <Text as="p" variant="bodySm">
-                  2. Select your pixel → Data Sources → Copy the Dataset ID
+                  2. Go to Meta Events Manager → Test Events tab
                 </Text>
                 <Text as="p" variant="bodySm">
-                  3. Go to Settings → Conversions API → Generate Access Token
+                  3. Enter your test event code: <strong>{selectedPixel?.testEventCode}</strong>
+                </Text>
+                <Text as="p" variant="bodySm">
+                  4. You should see the test event appear within a few seconds
                 </Text>
               </BlockStack>
             </Banner>
-
-            {(!metaPixelId || !metaAccessToken) && (
-              <Banner tone="warning">
-                <p>Both Pixel ID and Access Token are required to establish connection.</p>
-              </Banner>
-            )}
           </BlockStack>
         </Modal.Section>
       </Modal>

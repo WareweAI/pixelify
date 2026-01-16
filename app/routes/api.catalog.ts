@@ -90,7 +90,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   // Fetch businesses
-  if (intent === "fetch-businesses") {
+  if (intent === "fetch-businesses" || intent === "fetch-filter-businesses") {
     try {
       const res = await fetch(
         `https://graph.facebook.com/v18.0/me/businesses?fields=id,name&access_token=${accessToken}`
@@ -101,6 +101,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         return Response.json({ error: data.error.message }, { status: 400 });
       }
       
+      // Return as filterBusinesses for filter context, or businesses for modal context
+      if (intent === "fetch-filter-businesses") {
+        return Response.json({ success: true, filterBusinesses: data.data || [] });
+      }
       return Response.json({ success: true, businesses: data.data || [] });
     } catch (e: any) {
       return Response.json({ error: e.message }, { status: 500 });
@@ -135,7 +139,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "create-catalog") {
     const businessId = formData.get("businessId") as string;
     const businessName = formData.get("businessName") as string;
-    const pixelId = formData.get("pixelId") as string;
+    const pixelIdsJson = formData.get("pixelIds") as string;
+    const pixelIds = pixelIdsJson ? JSON.parse(pixelIdsJson) : [];
     const catalogName = formData.get("catalogName") as string;
     const variantSubmission = (formData.get("variantSubmission") as string) || "separate";
 
@@ -161,14 +166,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       
       const catalogId = createData.id;
 
-      // Connect pixel if provided
-      if (pixelId) {
+      // Connect pixels if provided
+      if (pixelIds && pixelIds.length > 0) {
         await fetch(
           `https://graph.facebook.com/v18.0/${catalogId}/external_event_sources?access_token=${accessToken}`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ external_event_sources: [pixelId] }),
+            body: JSON.stringify({ external_event_sources: pixelIds }),
           }
         );
       }

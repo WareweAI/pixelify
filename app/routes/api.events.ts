@@ -1,4 +1,4 @@
-// Events API endpoint
+// Events API endpoint - optimized for performance
 import type { LoaderFunctionArgs } from 'react-router';
 import prisma from '~/db.server';
 
@@ -24,44 +24,36 @@ export async function loader({ request }: LoaderFunctionArgs) {
       return Response.json({ error: 'App not found' }, { status: 404 });
     }
 
-    // Build where clause
-    let whereClause = 'WHERE "appId" = $1';
-    const params: any[] = [app.id];
+    // Build where clause - OPTIMIZED: Use app.id directly and combine queries
+    const whereFilter = eventName 
+      ? { appId: app.id, eventName }
+      : { appId: app.id };
 
-    if (eventName) {
-      whereClause += ' AND "eventName" = $2';
-      params.push(eventName);
-    }
-
-    // Get total count
-    const totalQuery = `SELECT COUNT(*) as total FROM "Event" ${whereClause}`;
-    const totalResult = await prisma.$queryRawUnsafe(totalQuery, ...params) as any;
-    const total = parseInt(totalResult[0].total);
-
-    // Get events with raw SQL for better performance
-    const eventsQuery = `
-      SELECT
-        "id",
-        "eventName",
-        "url",
-        "city",
-        "country",
-        "browser",
-        "deviceType",
-        "customData",
-        "createdAt"
-      FROM "Event"
-      ${whereClause}
-      ORDER BY "createdAt" DESC
-      LIMIT $${params.length + 1} OFFSET $${params.length + 2}
-    `;
-
-    params.push(limit, offset);
-    const events = await prisma.$queryRawUnsafe(eventsQuery, ...params) as any;
+    // Use Promise.all to run count and fetch in parallel
+    const [total, events] = await Promise.all([
+      prisma.event.count({ where: whereFilter }),
+      prisma.event.findMany({
+        where: whereFilter,
+        select: {
+          id: true,
+          eventName: true,
+          url: true,
+          city: true,
+          country: true,
+          browser: true,
+          deviceType: true,
+          customData: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        skip: offset,
+      }),
+    ]);
 
     return Response.json({ events, total }, {
       headers: {
-        'Cache-Control': 'public, max-age=60', // Cache for 1 minute
+        'Cache-Control': 'public, max-age=30', // Cache for 30 seconds - more responsive
       },
     });
   } catch (error) {

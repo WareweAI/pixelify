@@ -1,5 +1,5 @@
   import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-  import { Outlet, useLoaderData, useRouteError } from "react-router";
+  import { Outlet, useLoaderData, useRouteError, isRouteErrorResponse } from "react-router";
   import { boundary } from "@shopify/shopify-app-react-router/server";
   import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
   import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
@@ -7,6 +7,7 @@
   import enTranslations from "@shopify/polaris/locales/en.json";
   import { getShopifyInstance } from "../shopify.server";
   import { BillingRedirect } from "../components/BillingRedirect";
+  import { SessionErrorBoundary } from "../components/SessionErrorBoundary";
 
   export const loader = async ({ request }: LoaderFunctionArgs) => {
     const url = new URL(request.url);
@@ -36,7 +37,25 @@
 
     // Authenticate for all other requests
     try {
-      await shopifyInstance.authenticate.admin(request);
+      const authResult = await shopifyInstance.authenticate.admin(request);
+      
+      // Check if it's a redirect response (indicates failed auth)
+      if (authResult instanceof Response) {
+        const contentType = authResult.headers.get('content-type');
+        console.warn("[App] Authentication returned redirect", {
+          status: authResult.status,
+          contentType,
+          isHTML: contentType?.includes('text/html'),
+        });
+        
+        // If it's an HTML response (session expired), trigger re-auth
+        if (contentType?.includes('text/html') && authResult.status === 200) {
+          console.error("[App] Session expired - HTML bounce page detected");
+          throw new Response("Your session has expired. Please re-authenticate by reloading the app.", { status: 401 });
+        }
+        
+        throw authResult;
+      }
     } catch (error) {
       // If it's a redirect response (302/401), re-throw it for proper redirect handling
       if (error instanceof Response) {
@@ -51,7 +70,10 @@
         throw error;
       }
       
-      console.error("[App] Authentication error:", error);
+      console.error("[App] Authentication error:", {
+        message: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString(),
+      });
       // For other errors, throw a 401 to trigger re-authentication
       throw new Response("Session expired. Please reload the app.", { status: 401 });
     }
@@ -104,7 +126,15 @@
   }
 
   export function ErrorBoundary() {
-    return boundary.error(useRouteError());
+    const error = useRouteError();
+    
+    // Check if this is a session/auth error (401, 403, or error from auth failure)
+    if (isRouteErrorResponse(error) && (error.status === 401 || error.status === 403)) {
+      return <SessionErrorBoundary />;
+    }
+    
+    // For other errors, use Shopify's default boundary
+    return boundary.error(error);
   }
 
   export const headers: HeadersFunction = (headersArgs) => {
