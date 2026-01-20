@@ -1,0 +1,64 @@
+/* Minimal top navigation styles - most styling is inline */
+
+/* Smooth transitions */
+nav a,
+nav button {
+  transition: all 0.2s ease;
+}
+
+/* Focus states for accessibility */
+nav a:focus-visible,
+nav button:focus-visible {
+  outline: 2px solid #2c6ecb;
+  outline-offset: 2px;
+}
+
+/* Ensure proper box-sizing */
+* {
+  box-sizing: border-box;
+}
+
+/* Desktop styles */
+@media (min-width: 768px) {
+  .desktop-nav {
+    display: flex !important;
+  }
+  .mobile-menu-btn {
+    display: none !important;
+  }
+  .mobile-nav {
+    display: none !important;
+  }
+}
+
+/* Mobile styles */
+@media (max-width: 767px) {
+  .desktop-nav {
+    display: none !important;
+  }
+  .mobile-menu-btn {
+    display: flex !important;
+  }
+}
+
+/* Hide scrollbar */
+.desktop-nav > div::-webkit-scrollbar {
+  display: none;
+}
+
+/* Prevent overflow */
+nav {
+  box-sizing: border-box;
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+nav * {
+  box-sizing: border-box;
+}
+
+/* Prevent body overflow */
+html, body {
+  overflow-x: hidden;
+  max-width: 100vw;
+}
