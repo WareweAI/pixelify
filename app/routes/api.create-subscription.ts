@@ -1,10 +1,12 @@
-import { ActionFunctionArgs } from "react-router";
+import { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { sendPlanPurchaseEmail } from "../services/email.server";
 import db from "../db.server";
 
-// Server-only route - no client bundle needed
-export const clientLoader = undefined;
+// This is an API route - only POST requests are allowed
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  return Response.json({ error: "Method not allowed. Use POST." }, { status: 405 });
+};
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);

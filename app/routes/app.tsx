@@ -9,7 +9,7 @@
   import { BillingRedirect } from "../components/BillingRedirect";
   import { SessionErrorBoundary } from "../components/SessionErrorBoundary";
 
-  export const loader = async ({ request }: LoaderFunctionArgs) => {
+export const loader = async ({ request }: LoaderFunctionArgs) => {
     const url = new URL(request.url);
     const chargeId = url.searchParams.get('charge_id');
 

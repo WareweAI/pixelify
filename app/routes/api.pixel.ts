@@ -1,10 +1,7 @@
 import type { ActionFunctionArgs } from "react-router";
 import { getShopifyInstance } from "../shopify.server";
 
-/**
- * API Route for Pixel Operations
- * Handles toggle server-side API and send test events
- */
+
 export const action = async ({ request }: ActionFunctionArgs) => {
   const prisma = (await import("../db.server")).default;
   

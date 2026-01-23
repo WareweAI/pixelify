@@ -1,8 +1,6 @@
-// Event types API endpoint for faster filtering
 import type { LoaderFunctionArgs } from 'react-router';
 import prisma from '~/db.server';
 
-// Server-only route - no client bundle needed
 export const clientLoader = undefined;
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -14,7 +12,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 
   try {
-    // Find app
     const app = await prisma.app.findUnique({
       where: { appId },
       select: { id: true },

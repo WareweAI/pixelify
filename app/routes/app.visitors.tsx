@@ -128,7 +128,7 @@ export default function VisitorsPage() {
         <Layout.Section>
           <InlineStack gap="300">
             <Badge>
-              Showing {events.length} of {events.length >= 200 ? "200+" : "recent"} events
+              {`Showing ${events.length.toString()} of ${events.length >= 200 ? "200+" : "recent"} events`}
             </Badge>
           </InlineStack>
         </Layout.Section>

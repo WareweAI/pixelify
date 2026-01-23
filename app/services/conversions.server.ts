@@ -108,7 +108,7 @@ export class ConversionsService {
     let totalCheckouts = 0;
     let totalViewContent = 0;
 
-    const conversionStats: ConversionStats[] = statsResult.map(stat => {
+    const conversionStats: ConversionStats[] = statsResult.map((stat: any) => {
       const eventName = stat.eventName;
       const count = stat._count.eventName;
 
@@ -128,7 +128,7 @@ export class ConversionsService {
     const conversionRate = totalViewContent > 0 ? ((totalPurchases / totalViewContent) * 100).toFixed(2) : "0.00";
 
     // Format conversions for frontend
-    const conversions: ConversionEvent[] = events.map(event => ({
+    const conversions: ConversionEvent[] = events.map((event: any) => ({
       id: event.id,
       eventName: event.eventName,
       url: event.url || '',

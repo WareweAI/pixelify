@@ -10,12 +10,11 @@ import { AppProvider } from "@shopify/polaris";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import { getShopifyInstance } from "./shopify.server";
-import prisma from "./db.server";
 import { GlobalLayout } from "./components/GlobalLayout";
 
-import tailwindStyles from "./styles/tailwind.css?url";
-import topNavStyles from "./styles/top-navigation.css?url";
-import appLayoutStyles from "./styles/app-layout.css?url";
+import "./styles/tailwind.css";
+import "./styles/top-navigation.css";
+import "./styles/app-layout.css";
 
 const polarisStyles = "https://unpkg.com/@shopify/polaris@13.9.5/build/esm/styles.css";
 const interFontStyles = "https://cdn.shopify.com/static/fonts/inter/v4/styles.css";
@@ -24,28 +23,14 @@ export const links: LinksFunction = () => [
   // Preconnect to CDN for faster resource loading
   { rel: "preconnect", href: "https://cdn.shopify.com/" },
   { rel: "dns-prefetch", href: "https://unpkg.com" },
-  
-  // Async load Polaris CSS (non-blocking)
-  {
-    rel: "preload",
-    href: polarisStyles,
-    as: "style",
-    // @ts-ignore - onLoad is valid for preload
-    onLoad: "this.onload=null;this.rel='stylesheet'",
-  },
-  
-  // Async load Inter font (non-blocking)
-  {
-    rel: "preload",
-    href: interFontStyles,
-    as: "style",
-    onLoad: "this.onload=null;this.rel='stylesheet'",
-  },
-  
-  // App CSS - loaded normally (small files)
-  { rel: "stylesheet", href: tailwindStyles },
-  { rel: "stylesheet", href: topNavStyles },
-  { rel: "stylesheet", href: appLayoutStyles },
+
+  // Load Polaris CSS
+  { rel: "stylesheet", href: polarisStyles },
+
+  // Load Inter font
+  { rel: "stylesheet", href: interFontStyles },
+
+  // App CSS is imported directly - no need to link
 ];
 
 export const headers: HeadersFunction = (headersArgs) => {
@@ -147,16 +132,35 @@ export default function App() {
         <script
           dangerouslySetInnerHTML={{
             __html: `
+              const captureNavigationTiming = () => {
+                const navEntries = performance.getEntriesByType('navigation');
+                if (navEntries.length > 0) {
+                  const nav = navEntries[0];
+                  console.log(' FULL NAVIGATION TIMING:', {
+                    'Redirect Time': nav.redirectEnd - nav.redirectStart,
+                    'DNS Time': nav.domainLookupEnd - nav.domainLookupStart,
+                    'TCP Time': nav.connectEnd - nav.connectStart,
+                    'Request Time': nav.responseStart - nav.requestStart,
+                    'Response Time': nav.responseEnd - nav.responseStart,
+                    'Processing Time': nav.domComplete - nav.domInteractive,
+                    'Load Complete': nav.loadEventEnd - nav.fetchStart,
+                    'Total Time': nav.loadEventEnd - nav.startTime
+                  });
+                }
+              };
+
               // Defer heavy operations
               if ('requestIdleCallback' in window) {
                 requestIdleCallback(() => {
                   // Initialize non-critical features here
                   console.log('Non-critical JS loaded');
+                  captureNavigationTiming();
                 });
               } else {
                 setTimeout(() => {
                   // Fallback for browsers without requestIdleCallback
                   console.log('Non-critical JS loaded (fallback)');
+                  captureNavigationTiming();
                 }, 2000);
               }
             `,

@@ -10,7 +10,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const userAgent = request.headers.get("user-agent") || "";
   const chargeId = url.searchParams.get("charge_id");
   
-  // Check for Shopify admin context indicators
   const hasAppLoadId = url.searchParams.has("appLoadId");
   const hasShopParam = url.searchParams.has("shop");
   const hasShopifyShop = url.searchParams.has("shopify-shop");

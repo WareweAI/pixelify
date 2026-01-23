@@ -10,6 +10,8 @@ import {
 } from "@shopify/polaris";
 import { RefreshIcon, MenuHorizontalIcon, ExternalIcon } from "@shopify/polaris-icons";
 import { FacebookConnectionStatus } from "../components/FacebookConnectionStatus";
+import { ClientOnly } from "../components/ClientOnly";
+import { CollectionSelector } from "../components/CollectionSelector";
 
 interface Catalog {
   id: string;
@@ -37,15 +39,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     session = authResult.session;
     admin = authResult.admin;
   } catch (error) {
-    // If it's a redirect response, re-throw it for proper redirect handling
     if (error instanceof Response) {
-      // Check if it's an HTML response (Shopify bounce page) instead of proper redirect
       const contentType = error.headers.get('content-type');
       if (contentType?.includes('text/html') && error.status === 200) {
         console.error("[Catalog] Session expired - Shopify returned HTML bounce page");
         throw new Response("Session expired. Please reload the app to re-authenticate.", { status: 401 });
       }
-      // Otherwise, it's a proper redirect (302/401) - re-throw it
       throw error;
     }
     console.error("[Catalog] Authentication error:", error);
@@ -78,15 +77,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   
   console.log(`[Catalog Loader] User: ${user.id}, Apps: ${apps.length}, Has token: ${!!accessToken}`);
 
-  // Fetch product count and Facebook user info in parallel
   const [productCountRes, facebookUser, dbCatalogs] = await Promise.all([
-    // Get active product count
     admin.graphql(`query { products(first: 250, query: "status:active") { edges { node { id } } } }`)
       .then(r => r.json())
       .then(data => data.data?.products?.edges?.length || 0)
       .catch(() => 0),
     
-    // Fetch Facebook user info if token exists
     accessToken
       ? fetch(`https://graph.facebook.com/v18.0/me?fields=id,name,picture.type(large)&access_token=${accessToken}`)
           .then(res => res.json())
@@ -199,7 +195,9 @@ export default function CatalogPage() {
   const [selectedBusinessName, setSelectedBusinessName] = useState("");
   const [selectedPixels, setSelectedPixels] = useState<string[]>([]);
   const [catalogName, setCatalogName] = useState("");
-  const [productSelection, setProductSelection] = useState<"all" | "selected">("all");
+  const [productSelection, setProductSelection] = useState<"all" | "collections">("all");
+  const [selectedCollectionIds, setSelectedCollectionIds] = useState<string[]>([]);
+  const [showCollectionSelector, setShowCollectionSelector] = useState(false);
   const [variantSubmission, setVariantSubmission] = useState<"separate" | "grouped" | "first">("separate");
   const [isLoadingBusinesses, setIsLoadingBusinesses] = useState(false);
   const [isLoadingPixels, setIsLoadingPixels] = useState(false);
@@ -292,14 +290,19 @@ export default function CatalogPage() {
 
   const handleCreate = () => {
     if (!selectedBusiness || !catalogName.trim()) return;
-    fetcher.submit({
+    const data: any = {
       intent: "create-catalog",
       businessId: selectedBusiness,
       businessName: selectedBusinessName,
       pixelIds: JSON.stringify(selectedPixels),
       catalogName: catalogName.trim(),
+      productSelection,
       variantSubmission,
-    }, { method: "POST", action: "/api/catalog" });
+    };
+    if (productSelection === "collections") {
+      data.collectionIds = JSON.stringify(selectedCollectionIds);
+    }
+    fetcher.submit(data, { method: "POST", action: "/api/catalog" });
     setShowCreateModal(false);
     resetForm();
   };
@@ -346,7 +349,7 @@ export default function CatalogPage() {
 
   const resetForm = () => {
     setSelectedBusiness(""); setSelectedBusinessName(""); setSelectedPixels([]); setCatalogName("");
-    setProductSelection("all"); setVariantSubmission("separate");
+    setProductSelection("all"); setSelectedCollectionIds([]); setVariantSubmission("separate");
   };
 
   const formatDate = (d: string | null) => d ? new Date(d).toLocaleString("en-US", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).replace(",", "") : "-";
@@ -471,8 +474,8 @@ export default function CatalogPage() {
                       </Text>
                     </BlockStack>
                   </IndexTable.Cell>
-                  <IndexTable.Cell><Text as="p">{formatDate(cat.lastSync)}</Text></IndexTable.Cell>
-                  <IndexTable.Cell><Text as="p">{formatDate(cat.nextSync)}</Text></IndexTable.Cell>
+                  <IndexTable.Cell><ClientOnly fallback={<Text as="p">-</Text>}><Text as="p">{formatDate(cat.lastSync)}</Text></ClientOnly></IndexTable.Cell>
+                  <IndexTable.Cell><ClientOnly fallback={<Text as="p">-</Text>}><Text as="p">{formatDate(cat.nextSync)}</Text></ClientOnly></IndexTable.Cell>
                   <IndexTable.Cell>
                     <InlineStack gap="200" blockAlign="center">
                       <Text as="p">{cat.pixelId || "-"}</Text>
@@ -577,10 +580,20 @@ export default function CatalogPage() {
 
             <BlockStack gap="200">
               <Text variant="headingSm" as="h3">Product on Feed</Text>
-              <InlineStack gap="400">
+              <BlockStack gap="200">
                 <RadioButton label="All products" checked={productSelection === "all"} onChange={() => setProductSelection("all")} />
-                <RadioButton label="Selected products" checked={productSelection === "selected"} onChange={() => setProductSelection("selected")} />
-              </InlineStack>
+                <RadioButton label="Select by collections" checked={productSelection === "collections"} onChange={() => setProductSelection("collections")} />
+              </BlockStack>
+              {productSelection === "collections" && (
+                <BlockStack gap="200">
+                  <Button onClick={() => setShowCollectionSelector(true)} variant="secondary">
+                    {selectedCollectionIds.length > 0 ? `Selected ${selectedCollectionIds.length} collections` : "Select Collections"}
+                  </Button>
+                  {selectedCollectionIds.length > 0 && (
+                    <Text as="p" tone="subdued">Collections selected: {selectedCollectionIds.length}</Text>
+                  )}
+                </BlockStack>
+              )}
             </BlockStack>
 
             <BlockStack gap="200">
@@ -594,6 +607,13 @@ export default function CatalogPage() {
           </BlockStack>
         </Modal.Section>
       </Modal>
+
+      <CollectionSelector
+        open={showCollectionSelector}
+        onClose={() => setShowCollectionSelector(false)}
+        onSelectCollections={setSelectedCollectionIds}
+        initialSelectedCollections={selectedCollectionIds}
+      />
     </Page>
   );
 }

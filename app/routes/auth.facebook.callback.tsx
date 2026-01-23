@@ -3,7 +3,6 @@ import { redirect } from "react-router";
 import { getShopifyInstance } from "../shopify.server";
 import prisma from "../db.server";
 
-// Facebook OAuth Callback - Exchange code for token
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
   const code = url.searchParams.get('code');

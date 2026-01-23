@@ -5,6 +5,7 @@ import { getShopifyInstance } from "../shopify.server";
 import prisma from "../db.server";
 import { generateRandomPassword } from "~/lib/crypto.server";
 import { createAppWithSettings, renameApp, deleteAppWithData } from "~/services/app.service.server";
+
 import {
   Page,
   Card,
@@ -25,6 +26,7 @@ import {
 } from "@shopify/polaris";
 import { CheckIcon, ConnectIcon, ExportIcon } from "@shopify/polaris-icons";
 import { ClientOnly } from "~/components/ClientOnly";
+import { PageSelector } from "~/components/PageSelector";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopify = getShopifyInstance();
@@ -34,10 +36,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     throw new Response("Shopify configuration not found", { status: 500 });
   }
 
-  let session;
+  let session, admin;
   try {
     const authResult = await shopify.authenticate.admin(request);
     session = authResult.session;
+    admin = authResult.admin;
   } catch (error) {
     if (error instanceof Response && error.status === 302) throw error;
     console.error("Authentication error:", error);
@@ -63,19 +66,78 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    // Fetch store pages - fallback to system defaults (can be extended with custom pages later)
-    const storePages = [
+    // Fetch dynamic product and collection pages from Shopify
+    let storePages = [
       { label: "All Pages", value: "all", type: "system" },
       { label: "Home Page", value: "/", type: "system" },
       { label: "Cart Page", value: "/cart", type: "system" },
       { label: "Checkout Page", value: "/checkout", type: "system" },
       { label: "Search Results", value: "/search", type: "system" },
       { label: "Account Page", value: "/account", type: "system" },
-      { label: "Product Pages", value: "/products/*", type: "system" },
-      { label: "Collection Pages", value: "/collections/*", type: "system" },
     ];
 
-    // Run ALL queries in parallel for faster load
+    try {
+      // Fetch products and collections from Shopify in parallel
+      const [productsRes, collectionsRes] = await Promise.all([
+        admin.graphql(`
+          query {
+            products(first: 250, query: "status:active") {
+              edges {
+                node {
+                  id
+                  title
+                  handle
+                }
+              }
+            }
+          }
+        `),
+        admin.graphql(`
+          query {
+            collections(first: 50, sortKey: TITLE) {
+              edges {
+                node {
+                  id
+                  title
+                  handle
+                }
+              }
+            }
+          }
+        `)
+      ]);
+      
+      const productsData = await productsRes.json();
+      const collectionsData = await collectionsRes.json();
+      
+      const products = productsData.data?.products?.edges || [];
+      const collections = collectionsData.data?.collections?.edges || [];
+      
+      console.log(`[Dashboard] Fetched ${products.length} products and ${collections.length} collections from Shopify`);
+      
+      // Add collection pages
+      const collectionPages = collections.map((edge: any) => ({
+        label: `Collection: ${edge.node.title}`,
+        value: `/collections/${edge.node.handle}`,
+        type: "collection",
+        collectionId: edge.node.id,
+      }));
+      
+      // Add individual product pages
+      const productPages = products.map((edge: any) => ({
+        label: `Product: ${edge.node.title}`,
+        value: `/products/${edge.node.handle}`,
+        type: "product",
+        productId: edge.node.id,
+      }));
+      
+      storePages = [...storePages, ...collectionPages, ...productPages];
+      console.log(`[Dashboard] Total store pages: ${storePages.length} (${collectionPages.length} collections + ${productPages.length} products + 6 system)`);
+    } catch (error) {
+      console.error("[Dashboard] Error fetching products/collections:", error);
+      // Continue with system pages only if fetch fails
+    }
+
     const [apps, totalPurchaseEvents, recentPurchaseEvents, todayEvents] = await Promise.all([
       // Apps with counts - single optimized query
       prisma.$queryRaw`
@@ -750,6 +812,7 @@ export default function DashboardPage() {
   // Enhanced create modal state
   const [showEnhancedCreateModal, setShowEnhancedCreateModal] = useState(false);
   const [enhancedCreateStep, setEnhancedCreateStep] = useState(1); // 1: Create, 2: Timezone
+  const [showPageSelector, setShowPageSelector] = useState(false);
   const [enhancedCreateForm, setEnhancedCreateForm] = useState({
     appName: "",
     pixelId: "",
@@ -765,6 +828,7 @@ export default function DashboardPage() {
     { label: "Cart Page", value: "/cart", type: "system" },
     { label: "Checkout Page", value: "/checkout", type: "system" },
     { label: "Search Results", value: "/search", type: "system" },
+    { label: "Account Page", value: "/account", type: "system" },
   ];
 
   // Purchase reports search state
@@ -2393,55 +2457,22 @@ export default function DashboardPage() {
                           </Text>
                           <Text as="p" variant="bodySm" tone="subdued">
                             {enhancedCreateForm.trackingPages === "selected" 
-                              ? "Check the page types where you want to track pixel events"
-                              : "Check the page types you want to exclude from tracking"}
+                              ? "Click below to choose specific pages where you want to track pixel events"
+                              : "Click below to choose specific pages you want to exclude from tracking"}
                           </Text>
                         </div>
 
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: "12px" }}>
-                          {(pageTypeOptions as any[])
-                            .filter((page: any) => page.value !== "all") // Don't show "All Pages" option in checkbox list
-                            .map((pageType: any) => (
-                            <label
-                              key={pageType.value}
-                              style={{
-                                display: "flex",
-                                gap: "12px",
-                                alignItems: "center",
-                                padding: "12px",
-                                border: "1px solid #d9d9db",
-                                borderRadius: "6px",
-                                cursor: "pointer",
-                                backgroundColor: enhancedCreateForm.selectedPageTypes.includes(pageType.value)
-                                  ? "#f0f5ff"
-                                  : "transparent",
-                                transition: "all 0.2s"
-                              }}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={enhancedCreateForm.selectedPageTypes.includes(pageType.value)}
-                                onChange={(e) => {
-                                  setEnhancedCreateForm(prev => ({
-                                    ...prev,
-                                    selectedPageTypes: e.target.checked
-                                      ? [...prev.selectedPageTypes, pageType.value]
-                                      : prev.selectedPageTypes.filter(p => p !== pageType.value)
-                                  }));
-                                }}
-                                style={{ cursor: "pointer", width: "18px", height: "18px" }}
-                              />
-                              <BlockStack gap="050">
-                                <Text variant="bodyMd" as="span">{pageType.label}</Text>
-                                {pageType.type && (
-                                  <Text variant="bodySm" tone="subdued" as="span">
-                                    {pageType.type}
-                                  </Text>
-                                )}
-                              </BlockStack>
-                            </label>
-                          ))}
-                        </div>
+                        <Button onClick={() => setShowPageSelector(true)} variant="secondary">
+                          {enhancedCreateForm.selectedPageTypes.length > 0 
+                            ? `Selected ${enhancedCreateForm.selectedPageTypes.length} pages` 
+                            : "Select Pages"}
+                        </Button>
+
+                        {enhancedCreateForm.selectedPageTypes.length > 0 && (
+                          <Text as="p" tone="subdued">
+                            {enhancedCreateForm.selectedPageTypes.length} page(s) {enhancedCreateForm.trackingPages === "selected" ? "selected" : "excluded"}
+                          </Text>
+                        )}
 
                         {enhancedCreateForm.selectedPageTypes.length === 0 && enhancedCreateForm.trackingPages !== "all" && (
                           <Banner tone="warning">
@@ -3515,8 +3546,20 @@ export default function DashboardPage() {
           </BlockStack>
         </Modal.Section>
       </Modal>
+
+      {/* Page Selector Modal */}
+      <PageSelector
+        open={showPageSelector}
+        onClose={() => setShowPageSelector(false)}
+        onSelectPages={(pages) => {
+          setEnhancedCreateForm(prev => ({
+            ...prev,
+            selectedPageTypes: pages
+          }));
+        }}
+        initialSelectedPages={enhancedCreateForm.selectedPageTypes}
+        availablePages={pageTypeOptions.filter((p: any) => p.value !== "all")}
+      />
     </div>
   );
 }
-
-

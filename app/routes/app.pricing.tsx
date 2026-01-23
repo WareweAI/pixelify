@@ -1,6 +1,6 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useFetcher } from "react-router";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import {
@@ -13,7 +13,9 @@ import {
   Banner,
   InlineStack,
   ButtonGroup,
-  Spinner
+  Spinner,
+  TextField,
+  FormLayout
 } from "@shopify/polaris";
 import { CheckIcon, StarIcon } from "@shopify/polaris-icons";
 
@@ -78,8 +80,32 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 export default function PricingPage() {
   const { userPlan, shop, appHandle, hasActivePayment, error } = useLoaderData<typeof loader>();
   const [billingInterval, setBillingInterval] = useState<'monthly' | 'yearly'>('monthly');
+  const [discountCode, setDiscountCode] = useState('');
+  const [discountMessage, setDiscountMessage] = useState('');
+  const discountFetcher = useFetcher();
+
+  const hasActivePaidSubscription = userPlan?.planName !== 'free' && hasActivePayment;
 
   const storeHandle = process.env.STORE_HANDLE || shop.replace('.myshopify.com', '');
+
+  // Handle discount application response
+  useEffect(() => {
+    if (discountFetcher.data) {
+      if (discountFetcher.data.success) {
+        setDiscountMessage(discountFetcher.data.message);
+        setDiscountCode(''); // Clear the input
+
+        // If there's a confirmation URL, redirect to it after a short delay
+        if (discountFetcher.data.confirmationUrl) {
+          setTimeout(() => {
+            window.location.href = discountFetcher.data.confirmationUrl;
+          }, 2000); // Give user time to read the success message
+        }
+      } else {
+        setDiscountMessage(discountFetcher.data.message || 'An unexpected error occurred. Please try again.');
+      }
+    }
+  }, [discountFetcher.data]);
 
   const redirectToShopifyPricing = (planName?: string) => {
     const baseUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
@@ -227,6 +253,60 @@ export default function PricingPage() {
             </Banner>
           </Layout.Section>
         )}
+
+        <Layout.Section>
+          <Card>
+            <Box padding="600">
+              <Text variant="headingMd" as="h3">
+                Have a discount code?
+              </Text>
+              <FormLayout>
+                <InlineStack align="start" blockAlign="center" gap="400">
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label=""
+                      placeholder="Enter discount code"
+                      value={discountCode}
+                      onChange={setDiscountCode}
+                      disabled={discountFetcher.state === 'submitting'}
+                      autoComplete="off"
+                    />
+                  </div>
+                  <Button
+                    onClick={() => {
+                      const trimmedCode = discountCode.trim();
+                      if (!trimmedCode) {
+                        setDiscountMessage('Please enter a discount code');
+                        return;
+                      }
+
+                      const formData = new FormData();
+                      formData.append('code', trimmedCode);
+                      discountFetcher.submit(formData, {
+                        method: 'POST',
+                        action: '/api/apply-discount'
+                      });
+                    }}
+                    loading={discountFetcher.state === 'submitting'}
+                    disabled={!discountCode.trim() || discountFetcher.state === 'submitting'}
+                  >
+                    Apply Discount
+                  </Button>
+                </InlineStack>
+                {discountFetcher.state === 'submitting' && (
+                  <Text as="p" variant="bodyMd" tone="subdued">
+                    Applying discount...
+                  </Text>
+                )}
+                {discountMessage && discountFetcher.state !== 'submitting' && (
+                  <Text as="p" variant="bodyMd" tone={discountMessage.includes('applied') || discountMessage.includes('successfully') ? "success" : "critical"}>
+                    {discountMessage}
+                  </Text>
+                )}
+              </FormLayout>
+            </Box>
+          </Card>
+        </Layout.Section>
 
         <Layout.Section>
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '24px' }}>

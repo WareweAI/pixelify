@@ -1,14 +1,13 @@
-import type { ActionFunctionArgs } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { getShopifyInstance } from "../shopify.server";
+import prisma from "../db.server";
 
-/**
- * API Route for Facebook Catalog Operations
- * Handles all catalog-related actions: fetch user, businesses, pixels, create, sync, toggle, delete
- */
+// This is an API route - only POST requests are allowed
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  return Response.json({ error: "Method not allowed. Use POST." }, { status: 405 });
+};
+
 export const action = async ({ request }: ActionFunctionArgs) => {
-  // Import prisma inside the action to avoid server-only module issues
-  const prisma = (await import("../db.server")).default;
-  
   const shopify = getShopifyInstance();
   if (!shopify?.authenticate) {
     return Response.json({ error: "Shopify not configured" }, { status: 500 });
@@ -126,6 +125,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const data = await res.json();
       
       if (data.error) {
+        if (isTokenExpiredError(data.error)) {
+          return Response.json({
+            error: getTokenExpiredMessage(),
+            tokenExpired: true
+          }, { status: 400 });
+        }
         return Response.json({ error: data.error.message }, { status: 400 });
       }
       
@@ -142,7 +147,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const pixelIdsJson = formData.get("pixelIds") as string;
     const pixelIds = pixelIdsJson ? JSON.parse(pixelIdsJson) : [];
     const catalogName = formData.get("catalogName") as string;
+    const productSelection = (formData.get("productSelection") as string) || "all";
+    const collectionIdsJson = formData.get("collectionIds") as string;
+    const selectedCollectionIds = collectionIdsJson ? JSON.parse(collectionIdsJson) : [];
     const variantSubmission = (formData.get("variantSubmission") as string) || "separate";
+    const pixelId = pixelIds.length > 0 ? pixelIds[0] : null;
 
     if (!businessId || !catalogName) {
       return Response.json({ error: "Business and catalog name required" }, { status: 400 });
@@ -161,6 +170,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const createData = await createRes.json();
       
       if (createData.error) {
+        if (isTokenExpiredError(createData.error)) {
+          return Response.json({
+            error: getTokenExpiredMessage(),
+            tokenExpired: true
+          }, { status: 400 });
+        }
         return Response.json({ error: createData.error.message }, { status: 400 });
       }
       
@@ -183,10 +198,47 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const shopData = await shopRes.json();
       const currency = shopData.data?.shop?.currencyCode || "USD";
 
+      // Build product query based on selection
+      let productQuery = "status:active";
+      if (productSelection === "collections" && selectedCollectionIds.length > 0) {
+        // Fetch products from selected collections
+        const collectionProductIds: string[] = [];
+        
+        for (const collectionId of selectedCollectionIds) {
+          const collectionRes = await admin.graphql(
+            `query GetCollectionProducts($collectionId: ID!) {
+              collection(id: $collectionId) {
+                products(first: 250) {
+                  edges {
+                    node {
+                      id
+                    }
+                  }
+                }
+              }
+            }`,
+            { variables: { collectionId } }
+          );
+          
+          const collectionData = await collectionRes.json();
+          const products = collectionData.data?.collection?.products?.edges || [];
+          products.forEach((edge: any) => {
+            if (edge.node?.id && !collectionProductIds.includes(edge.node.id)) {
+              collectionProductIds.push(edge.node.id);
+            }
+          });
+        }
+        
+        if (collectionProductIds.length > 0) {
+          const productIdQueries = collectionProductIds.map((id: string) => `id:${id}`).join(" OR ");
+          productQuery = `(${productQuery}) AND (${productIdQueries})`;
+        }
+      }
+
       // Sync products
       const productsRes = await admin.graphql(
-        `query {
-          products(first: 250, query: "status:active") {
+        `query ($query: String!) {
+          products(first: 250, query: $query) {
             edges {
               node {
                 id
@@ -215,7 +267,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               }
             }
           }
-        }`
+        }`,
+        { variables: { query: productQuery } }
       );
       
       const productsData = await productsRes.json();
