@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   Modal,
   TextField,
@@ -37,6 +37,19 @@ export function PageSelector({
 }: PageSelectorProps) {
   const [selectedPages, setSelectedPages] = useState<string[]>(initialSelectedPages);
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Sync with initialSelectedPages when they change
+  useEffect(() => {
+    setSelectedPages(initialSelectedPages);
+  }, [initialSelectedPages]);
+
+  // Log when modal opens
+  useEffect(() => {
+    if (open) {
+      console.log('[PageSelector] Modal opened with', availablePages.length, 'available pages');
+      console.log('[PageSelector] Initial selected:', initialSelectedPages);
+    }
+  }, [open, availablePages.length, initialSelectedPages]);
 
   const handleTogglePage = useCallback((pageValue: string) => {
     setSelectedPages((prev) =>

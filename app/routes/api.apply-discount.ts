@@ -11,12 +11,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const formData = await request.formData();
   const code = formData.get("code") as string;
+  const planName = formData.get("planName") as string || "Basic";
 
   if (!code) {
     return { success: false, message: 'Discount code is required' };
   }
 
   try {
+    // Validate the discount code exists in Shopify
     const discountResponse = await admin.graphql(`
       query discountCode($code: String!) {
         codeDiscountNodeByCode(code: $code) {
@@ -34,6 +36,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                 value {
                   ... on DiscountPercentage {
                     percentage
+                  }
+                  ... on DiscountAmount {
+                    amount {
+                      amount
+                      currencyCode
+                    }
                   }
                 }
               }
@@ -63,70 +71,51 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return { success: false, message: 'This discount code is no longer active or has expired.' };
     }
 
-    // Extract percentage
-    const percentage = discount.customerGets?.value?.percentage;
-    if (!percentage || percentage <= 0 || percentage > 100) {
+    // Extract discount value
+    const customerGets = discount.customerGets?.value;
+    let discountPercentage = 0;
+    
+    if (customerGets?.percentage !== undefined) {
+      // Percentage is returned as decimal (0.1 = 10%, 0.2 = 20%)
+      discountPercentage = customerGets.percentage * 100;
+    } else if (customerGets?.amount) {
+      return { success: false, message: 'Fixed amount discounts are not supported for app subscriptions. Please use percentage-based discounts.' };
+    } else {
       return { success: false, message: 'Invalid discount configuration. Please contact support.' };
     }
 
-    // Get current active subscriptions
-    const subscriptionResponse = await admin.graphql(`
-      query {
-        appInstallation {
-          activeSubscriptions {
+    if (discountPercentage <= 0 || discountPercentage > 100) {
+      return { success: false, message: `Invalid discount percentage: ${discountPercentage}%. Must be between 1-100%.` };
+    }
+
+    console.log(`[Apply Discount] Code: ${code}, Percentage: ${discountPercentage}%`);
+
+    // Define plan prices
+    const planPrices: Record<string, number> = {
+      "Basic": 20.99,
+      "Advance": 55.99,
+    };
+
+    const basePrice = planPrices[planName] || 20.99;
+    const discountedPrice = basePrice * (1 - discountPercentage / 100);
+
+    console.log(`[Apply Discount] Plan: ${planName}, Base: $${basePrice}, Discounted: $${discountedPrice.toFixed(2)}`);
+
+    // Create app subscription with discount using GraphQL
+    const mutation = `
+      mutation AppSubscriptionCreate($name: String!, $returnUrl: URL!, $test: Boolean, $lineItems: [AppSubscriptionLineItemInput!]!) {
+        appSubscriptionCreate(
+          name: $name
+          returnUrl: $returnUrl
+          test: $test
+          lineItems: $lineItems
+        ) {
+          appSubscription {
             id
             name
             status
-            lineItems {
-              id
-              plan {
-                pricingDetails {
-                  ... on AppRecurringPricing {
-                    interval
-                    price {
-                      amount
-                      currencyCode
-                    }
-                  }
-                }
-              }
-            }
+            test
           }
-        }
-      }
-    `);
-
-    const subscriptionData = await subscriptionResponse.json();
-
-    // Check for GraphQL errors
-    if ((subscriptionData as any).errors) {
-      console.error('GraphQL errors fetching subscriptions:', (subscriptionData as any).errors);
-      return { success: false, message: 'Unable to access subscription information. Please try again later.' };
-    }
-
-    const activeSubscriptions = subscriptionData.data?.appInstallation?.activeSubscriptions || [];
-
-    if (activeSubscriptions.length === 0) {
-      return { success: false, message: 'No active subscription found. Please ensure you have an active plan before applying discounts.' };
-    }
-
-    if (activeSubscriptions.length > 1) {
-      return { success: false, message: 'Multiple active subscriptions found. Please contact support to apply discounts manually.' };
-    }
-
-    // Get the current subscription details
-    const currentSubscription = activeSubscriptions[0];
-    const currentLineItem = currentSubscription.lineItems[0];
-
-    // Extract current pricing details
-    const currentPricing = currentLineItem.plan.pricingDetails;
-    const currentPrice = currentPricing.price;
-    const currentInterval = currentPricing.interval;
-
-    // Create a new subscription with the same plan but with discount applied
-    const createResponse = await admin.graphql(`
-      mutation appSubscriptionCreate($name: String!, $lineItems: [AppSubscriptionLineItemInput!]!, $replacementBehavior: AppSubscriptionReplacementBehavior!) {
-        appSubscriptionCreate(name: $name, lineItems: $lineItems, replacementBehavior: $replacementBehavior, returnUrl: "${process.env.SHOPIFY_APP_URL}/app/pricing") {
           confirmationUrl
           userErrors {
             field
@@ -134,67 +123,79 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           }
         }
       }
-    `, {
-      variables: {
-        name: currentSubscription.name,
-        replacementBehavior: "APPLY_IMMEDIATELY",
-        lineItems: [{
+    `;
+
+    const variables = {
+      name: `${planName} Plan - ${discountPercentage}% off with ${code}`,
+      returnUrl: `${process.env.SHOPIFY_APP_URL}/app/billing-callback`,
+      test: process.env.NODE_ENV !== "production",
+      lineItems: [
+        {
           plan: {
             appRecurringPricingDetails: {
-              interval: currentInterval,
               price: {
-                amount: currentPrice.amount,
-                currencyCode: currentPrice.currencyCode
+                amount: basePrice,
+                currencyCode: "USD"
               },
+              interval: "EVERY_30_DAYS",
               discount: {
                 value: {
-                  percentage: percentage
+                  percentage: discountPercentage / 100 // Convert back to decimal (20% = 0.2)
                 },
-                durationLimitInIntervals: 12 // Apply for 12 billing cycles
+                durationLimitInIntervals: 12 // Apply discount for 12 months
               }
             }
           }
-        }]
-      }
-    });
+        }
+      ]
+    };
 
-    const createData = await createResponse.json();
+    console.log('[Apply Discount] Creating subscription with variables:', JSON.stringify(variables, null, 2));
 
-    // Check for GraphQL errors
-    if ((createData as any).errors) {
-      console.error('GraphQL errors creating subscription:', (createData as any).errors);
-      return { success: false, message: 'Failed to apply discount. Please try again later.' };
-    }
+    const response = await admin.graphql(mutation, { variables });
+    const data = await response.json();
 
-    if (createData.data?.appSubscriptionCreate?.userErrors?.length > 0) {
-      const errorMessage = createData.data.appSubscriptionCreate.userErrors[0].message;
-      console.error('Subscription creation user errors:', createData.data.appSubscriptionCreate.userErrors);
-      return {
+    console.log('[Apply Discount] Response:', JSON.stringify(data, null, 2));
+
+    if (data.data?.appSubscriptionCreate?.userErrors?.length > 0) {
+      const errors = data.data.appSubscriptionCreate.userErrors;
+      console.error('[Apply Discount] User errors:', errors);
+      return { 
         success: false,
-        message: `Unable to apply discount: ${errorMessage}`
+        message: `Unable to apply discount: ${errors[0].message}` 
       };
     }
 
-    if (createData.data?.appSubscriptionCreate?.confirmationUrl) {
-      // Return the confirmation URL so the user can approve the change
-      return {
-        success: true,
-        message: `${percentage}% discount applied successfully! Please confirm the subscription change to activate your discount.`,
-        confirmationUrl: createData.data.appSubscriptionCreate.confirmationUrl
+    if ((data as any).errors) {
+      console.error('[Apply Discount] GraphQL errors:', (data as any).errors);
+      return { 
+        success: false,
+        message: 'Failed to create subscription with discount. Please try again.' 
       };
     }
 
-    // If we get here, something unexpected happened
-    console.error('Unexpected response from subscription creation:', createData);
-    return { success: false, message: 'Unexpected error occurred. Please contact support.' };
+    const confirmationUrl = data.data?.appSubscriptionCreate?.confirmationUrl;
+    
+    if (confirmationUrl) {
+      return { 
+        success: true, 
+        confirmationUrl,
+        message: `✅ ${discountPercentage}% discount applied! Redirecting to confirm subscription...`,
+        percentage: discountPercentage,
+        code: code
+      };
+    }
 
     return {
-      success: true,
-      message: `${percentage}% discount applied to your subscription!`
+      success: false,
+      message: 'Failed to create subscription. Please try again or contact support.'
     };
 
   } catch (error: any) {
-    console.error('Error applying discount:', error);
-    return { success: false, message: error.message };
+    console.error('[Apply Discount] Error:', error);
+    return { 
+      success: false, 
+      message: error.message || 'An error occurred while applying the discount code.' 
+    };
   }
 };

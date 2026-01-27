@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useFetcher } from "react-router";
 import { getShopifyInstance } from "../shopify.server";
-import prisma from "../db.server";
 import {
   Page,
   Card,
@@ -37,6 +36,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopify = getShopifyInstance();
   if (!shopify?.authenticate) throw new Response("Shopify not configured", { status: 500 });
 
+  // Only handle Shopify authentication
   let session;
   try {
     const authResult = await shopify.authenticate.admin(request);
@@ -47,39 +47,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const shop = session.shop;
-  const user = await prisma.user.findUnique({ where: { storeUrl: shop } });
-  if (!user) throw new Response("User not found", { status: 404 });
 
-  // Get valid access token using the token refresh service
-  const { getValidTokenForUser } = await import("~/services/facebook-sdk-token.server");
-  const accessToken = await getValidTokenForUser(user.id);
-
-  const apps = await prisma.app.findMany({
-    where: { userId: user.id },
-    include: { settings: true },
-    orderBy: { createdAt: "desc" },
-  });
-
-  const pixels: PixelData[] = apps.map((app: any) => ({
-    id: app.id,
-    appId: app.appId,
-    name: app.name,
-    enabled: app.enabled,
-    metaPixelId: app.settings?.metaPixelId || null,
-    metaPixelEnabled: app.settings?.metaPixelEnabled || false,
-    testEventCode: app.settings?.metaTestEventCode || null,
-    trackingPages: app.settings?.trackingPages || "all",
-    serverSideEnabled: !!(app.settings?.metaPixelId && accessToken), // Use valid token instead of stored token
-  }));
-
-  return { pixels, shop };
+  // Return only shop info - all data will be fetched from API
+  return { shop };
 };
 
 export default function PixelsPage() {
-  const { pixels: initialPixels } = useLoaderData<typeof loader>();
+  const { shop } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
   
-  const [pixels, setPixels] = useState<PixelData[]>(initialPixels);
+  // Pixels data state (loaded from API)
+  const [pixels, setPixels] = useState<PixelData[]>([]);
+  const [isLoadingData, setIsLoadingData] = useState(true);
+  
   const [searchQuery, setSearchQuery] = useState("");
   const [showTestModal, setShowTestModal] = useState(false);
   const [selectedPixel, setSelectedPixel] = useState<PixelData | null>(null);
@@ -87,7 +67,29 @@ export default function PixelsPage() {
   const [isSendingTest, setIsSendingTest] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
-  const isLoading = fetcher.state !== "idle";
+  // Load pixels data from API on mount
+  useEffect(() => {
+    const loadPixelsData = async () => {
+      try {
+        setIsLoadingData(true);
+        const response = await fetch('/api/pixel');
+        const data = await response.json();
+        
+        if (data.error) {
+          console.error('[Pixels] Error loading data:', data.error);
+        } else if (data.pixels) {
+          setPixels(data.pixels);
+        }
+      } catch (error) {
+        console.error('[Pixels] Failed to load data:', error);
+      } finally {
+        setIsLoadingData(false);
+      }
+    };
+    
+    loadPixelsData();
+  }, []);
+
   const filteredPixels = pixels.filter(p => 
     p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     p.appId.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -186,20 +188,29 @@ export default function PixelsPage() {
 
         {/* Pixels Table */}
         <Layout.Section>
-          <Card padding="0">
-            <IndexTable
-              itemCount={filteredPixels.length}
-              headings={[
-                { title: "Status" },
-                { title: "Pixel ID" },
-                { title: "Title" },
-                { title: "Pages" },
-                { title: "Server-Side API ⓘ" },
-                { title: "Test Server Events" },
-                { title: "Action" },
-              ]}
-              selectable={false}
-            >
+          {isLoadingData ? (
+            <Card>
+              <Box padding="600">
+                <InlineStack align="center" gap="200">
+                  <Text as="p" tone="subdued">Loading pixels...</Text>
+                </InlineStack>
+              </Box>
+            </Card>
+          ) : (
+            <Card padding="0">
+              <IndexTable
+                itemCount={filteredPixels.length}
+                headings={[
+                  { title: "Status" },
+                  { title: "Pixel ID" },
+                  { title: "Title" },
+                  { title: "Pages" },
+                  { title: "Server-Side API ⓘ" },
+                  { title: "Test Server Events" },
+                  { title: "Action" },
+                ]}
+                selectable={false}
+              >
               {filteredPixels.map((pixel, index) => (
                 <IndexTable.Row id={pixel.id} key={pixel.id} position={index}>
                   {/* Status */}
@@ -284,7 +295,7 @@ export default function PixelsPage() {
               ))}
             </IndexTable>
 
-            {filteredPixels.length === 0 && (
+            {filteredPixels.length === 0 && !isLoadingData && (
               <Box padding="600">
                 <Text as="p" tone="subdued" alignment="center">
                   No pixels found. Add a pixel to get started.
@@ -317,6 +328,7 @@ export default function PixelsPage() {
               </Box>
             )}
           </Card>
+          )}
         </Layout.Section>
 
         {/* Footer */}

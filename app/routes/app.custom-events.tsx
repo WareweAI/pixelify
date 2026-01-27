@@ -18,138 +18,24 @@ import {
 import { useState, useCallback, useEffect } from "react";
 import { getShopifyInstance } from "~/shopify.server";
 import db from "../db.server";
+import { checkThemeExtensionStatus } from "~/services/theme-extension-check.server";
+import { cache } from "~/lib/cache.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const shopify = getShopifyInstance();
   if (!shopify?.authenticate) {
     throw new Response("Shopify configuration not found", { status: 500 });
   }
+  
   const { session, admin } = await shopify.authenticate.admin(request);
   const shop = session.shop;
 
-  const user = await db.user.findUnique({ where: { storeUrl: shop } });
-  if (!user) {
-    throw new Response("User not found for this shop", { status: 404 });
-  }
-
-  const app = await db.app.findFirst({
-    where: { userId: user.id },
-    include: { 
-      customEvents: {
-        select: {
-          id: true,
-          name: true,
-          displayName: true,
-          description: true,
-          metaEventName: true,
-          isActive: true,
-          createdAt: true,
-          pageType: true,
-          pageUrl: true,
-          eventType: true,
-          selector: true,
-          eventData: true,
-        },
-        orderBy: { createdAt: "desc" },
-      }
-    },
-    orderBy: { createdAt: "desc" },
-  });
-
-  if (!app) {
-    throw new Response("App not found for this shop", { status: 404 });
-  }
-
-  // Get current plan from Shopify GraphQL API (source of truth)
-  let currentPlan = app.plan || 'Free';
+  // Check theme extension status
+  const extensionStatus = await checkThemeExtensionStatus(admin);
   
-  try {
-    const response = await admin.graphql(`
-      query {
-        appInstallation {
-          activeSubscriptions {
-            id
-            name
-            status
-          }
-        }
-      }
-    `);
-
-    const data = await response.json() as any;
-    const activeSubscriptions = data?.data?.appInstallation?.activeSubscriptions || [];
-
-    if (activeSubscriptions.length > 0) {
-      const activeSubscription = activeSubscriptions.find((sub: any) =>
-        sub.status === 'ACTIVE' || sub.status === 'active'
-      );
-
-      if (activeSubscription) {
-        // Only recognize Free, Basic, and Advance plans
-        const shopifyPlanName = activeSubscription.name;
-        
-        // Normalize plan name - only accept exact matches for Free, Basic, or Advance
-        if (shopifyPlanName === 'Free' || shopifyPlanName === 'Basic' || shopifyPlanName === 'Advance') {
-          currentPlan = shopifyPlanName;
-        } else {
-          // Any other plan name defaults to Free
-          currentPlan = 'Free';
-        }
-        
-        // Update database if plan changed
-        if (currentPlan !== app.plan) {
-          await db.app.update({
-            where: { id: app.id },
-            data: { plan: currentPlan },
-          });
-          console.log(`✅ Updated plan in database: ${app.plan} → ${currentPlan} for shop ${shop}`);
-        }
-      } else {
-        // No active subscription = Free plan
-        currentPlan = 'Free';
-        if (app.plan !== 'Free') {
-          await db.app.update({
-            where: { id: app.id },
-            data: { plan: 'Free' },
-          });
-          console.log(`✅ Updated plan to Free (no active subscription) for shop ${shop}`);
-        }
-      }
-    } else {
-      // No subscriptions = Free plan
-      currentPlan = 'Free';
-      if (app.plan !== 'Free') {
-        await db.app.update({
-          where: { id: app.id },
-          data: { plan: 'Free' },
-        });
-        console.log(`✅ Updated plan to Free (no subscriptions) for shop ${shop}`);
-      }
-    }
-  } catch (error: any) {
-    console.error('⚠️ Failed to fetch plan from Shopify GraphQL, using database plan:', error);
-    // Fallback to database plan if GraphQL fails
-    currentPlan = app.plan || 'Free';
-  }
-
-  // Determine access based on plan - only Free, Basic, and Advance are valid
-  // Ensure plan is one of the three valid plans
-  if (currentPlan !== 'Free' && currentPlan !== 'Basic' && currentPlan !== 'Advance') {
-    currentPlan = 'Free';
-  }
-  
-  const isFreePlan = currentPlan === 'Free';
-  const hasAccess = currentPlan === 'Basic' || currentPlan === 'Advance';
-
-  console.log(`📊 Custom Events Access Check - Shop: ${shop}, Plan: ${currentPlan}, Has Access: ${hasAccess}`);
-
   return Response.json({
-    app,
-    customEvents: app.customEvents,
     shop,
-    plan: currentPlan,
-    isFreePlan,
-    hasAccess,
+    extensionStatus,
   });
 }
 
@@ -165,6 +51,12 @@ export async function action({ request }: ActionFunctionArgs) {
   const action = formData.get("action");
 
     console.log(`[Custom Events] Action: ${action}, Shop: ${shop}`);
+
+  // Helper function to invalidate custom events cache for this shop
+  const invalidateCustomEventsCache = () => {
+    const invalidated = cache.invalidatePattern(`custom-events:${shop}`);
+    console.log(`[Custom Events] Invalidated ${invalidated} cache entries for ${shop}`);
+  };
 
   try {
     const user = await db.user.findUnique({ where: { storeUrl: shop } });
@@ -208,7 +100,6 @@ export async function action({ request }: ActionFunctionArgs) {
           );
 
           if (activeSubscription) {
-            // Only recognize Free, Basic, and Advance plans
             const shopifyPlanName = activeSubscription.name;
             
             // Normalize plan name - only accept exact matches for Free, Basic, or Advance
@@ -308,6 +199,9 @@ export async function action({ request }: ActionFunctionArgs) {
         }
       });
 
+      // Invalidate cache after creating event
+      invalidateCustomEventsCache();
+
       return Response.json({ success: true, message: "Custom event created successfully!" });
     }
 
@@ -336,6 +230,9 @@ export async function action({ request }: ActionFunctionArgs) {
         data: { isActive: !isActive }
       });
 
+      // Invalidate cache after toggling event
+      invalidateCustomEventsCache();
+
       return Response.json({ success: true, message: "Event status updated!" });
     }
 
@@ -361,6 +258,9 @@ export async function action({ request }: ActionFunctionArgs) {
       await db.customEvent.delete({
         where: { id: eventId }
       });
+
+      // Invalidate cache after deleting event
+      invalidateCustomEventsCache();
 
       return Response.json({ success: true, message: "Event deleted!" });
     }
@@ -439,6 +339,9 @@ export async function action({ request }: ActionFunctionArgs) {
         }
       });
 
+      // Invalidate cache after updating event
+      invalidateCustomEventsCache();
+
       return Response.json({ success: true, message: "Custom event updated successfully!" });
     }
 
@@ -453,6 +356,9 @@ export async function action({ request }: ActionFunctionArgs) {
         data: { isActive: true }
       });
 
+      // Invalidate cache after bulk enable
+      invalidateCustomEventsCache();
+
       return Response.json({ success: true, message: `${eventIds.length} event(s) enabled successfully!` });
     }
 
@@ -466,6 +372,9 @@ export async function action({ request }: ActionFunctionArgs) {
         },
         data: { isActive: false }
       });
+
+      // Invalidate cache after bulk disable
+      invalidateCustomEventsCache();
 
       return Response.json({ success: true, message: `${eventIds.length} event(s) disabled successfully!` });
     }
@@ -495,6 +404,9 @@ export async function action({ request }: ActionFunctionArgs) {
           appId: app.id
         }
       });
+
+      // Invalidate cache after bulk delete
+      invalidateCustomEventsCache();
 
       return Response.json({ 
         success: true, 
@@ -541,6 +453,11 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 type LoaderData = {
+  shop: string;
+  extensionStatus: any;
+};
+
+type ApiData = {
   app: any;
   customEvents: any[];
   shop: string;
@@ -556,11 +473,17 @@ type ActionData = {
 } | undefined;
 
 export default function CustomEvents() {
-  const { app, customEvents, shop, plan, isFreePlan, hasAccess } = useLoaderData<LoaderData>();
+  const { shop, extensionStatus } = useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
   const navigation = useNavigation();
   const isLoading = navigation.state === "submitting";
 
+  // State for API data
+  const [apiData, setApiData] = useState<ApiData | null>(null);
+  const [dataLoading, setDataLoading] = useState(true);
+  const [dataError, setDataError] = useState<string | null>(null);
+
+  // All other hooks must be declared before any conditional returns
   const [modalActive, setModalActive] = useState(false);
   const [editingEvent, setEditingEvent] = useState<any>(null);
   const [selectedEvents, setSelectedEvents] = useState<Set<string>>(new Set());
@@ -584,27 +507,46 @@ export default function CustomEvents() {
   const [jsonError, setJsonError] = useState<string>("");
   const [testLoading, setTestLoading] = useState(false);
 
-  const redirectToShopifyPricing = () => {
-    const storeHandle = shop.replace('.myshopify.com', '');
-    const appHandle = "pixelify-tracker";
-    const baseUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
-
-    try {
-      if (window.top && window.top !== window) {
-        window.top.location.href = baseUrl;
-      } else {
-        window.location.href = baseUrl;
+  // Fetch data from API on mount
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setDataLoading(true);
+        const response = await fetch('/api/custom-events');
+        if (!response.ok) {
+          throw new Error('Failed to fetch custom events data');
+        }
+        const data = await response.json();
+        setApiData(data);
+        setDataError(null);
+      } catch (error: any) {
+        console.error('[Custom Events] Error fetching data:', error);
+        setDataError(error.message);
+      } finally {
+        setDataLoading(false);
       }
-    } catch (e) {
-      // Fallback if top access fails
-      const form = document.createElement('form');
-      form.method = 'GET';
-      form.action = baseUrl;
-      form.target = '_top';
-      document.body.appendChild(form);
-      form.submit();
+    };
+
+    fetchData();
+  }, []);
+
+  // Refetch data after successful action
+  useEffect(() => {
+    if (actionData?.success) {
+      const refetchData = async () => {
+        try {
+          const response = await fetch('/api/custom-events?refresh=true');
+          if (response.ok) {
+            const data = await response.json();
+            setApiData(data);
+          }
+        } catch (error) {
+          console.error('[Custom Events] Error refetching data:', error);
+        }
+      };
+      refetchData();
     }
-  };
+  }, [actionData]);
 
   // Close modal when event is successfully created/updated
   useEffect(() => {
@@ -630,6 +572,238 @@ export default function CustomEvents() {
       });
     }
   }, [actionData, modalActive]);
+
+  const validateJson = useCallback((jsonString: string): boolean => {
+    if (!jsonString || jsonString.trim() === "") {
+      setJsonError("");
+      return true;
+    }
+    try {
+      JSON.parse(jsonString);
+      setJsonError("");
+      return true;
+    } catch (e: any) {
+      setJsonError(e.message);
+      return false;
+    }
+  }, []);
+
+  const handleModalToggle = useCallback(() => {
+    setModalActive(!modalActive);
+    if (!modalActive) {
+      // Reset form when opening for create
+      setEditingEvent(null);
+      setFormData({
+        name: "",
+        displayName: "",
+        description: "",
+        pageType: "all",
+        pageUrl: "",
+        eventType: "click",
+        selector: "",
+        metaEventName: "",
+        eventData: JSON.stringify({
+          value: 29.99,
+          currency: "USD",
+          content_name: "Product Name",
+          content_type: "product"
+        }, null, 2)
+      });
+    }
+  }, [modalActive]);
+
+  const handleEditEvent = useCallback((event: any) => {
+    setEditingEvent(event);
+    setFormData({
+      name: event.name,
+      displayName: event.displayName,
+      description: event.description || "",
+      pageType: event.pageType || "all",
+      pageUrl: event.pageUrl || "",
+      eventType: event.eventType || "click",
+      selector: event.selector || "",
+      metaEventName: event.metaEventName || "",
+      eventData: event.eventData || "{}"
+    });
+    setModalActive(true);
+  }, []);
+
+  const handleSelectEvent = useCallback((eventId: string, checked: boolean) => {
+    setSelectedEvents(prev => {
+      const newSet = new Set(prev);
+      if (checked) {
+        newSet.add(eventId);
+      } else {
+        newSet.delete(eventId);
+      }
+      return newSet;
+    });
+  }, []);
+
+  const handleSelectAll = useCallback((checked: boolean) => {
+    if (checked && apiData?.customEvents) {
+      setSelectedEvents(new Set(apiData.customEvents.map(event => event.id)));
+    } else {
+      setSelectedEvents(new Set());
+    }
+  }, [apiData?.customEvents]);
+
+  const handleBulkAction = useCallback((action: string) => {
+    if (selectedEvents.size === 0) {
+      alert("Please select at least one event");
+      return;
+    }
+
+    const confirmMessage = action === 'bulk_delete'
+      ? `Are you sure you want to delete ${selectedEvents.size} event(s)?`
+      : action === 'bulk_enable'
+      ? `Are you sure you want to enable ${selectedEvents.size} event(s)?`
+      : `Are you sure you want to disable ${selectedEvents.size} event(s)?`;
+
+    if (!confirm(confirmMessage)) return;
+
+    // Create a hidden form and submit it using React Router's form submission
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.style.display = 'none';
+    
+    // Add action input
+    const actionInput = document.createElement('input');
+    actionInput.type = 'hidden';
+    actionInput.name = 'action';
+    actionInput.value = action;
+    form.appendChild(actionInput);
+    
+    // Add appId input
+    const appIdInput = document.createElement('input');
+    appIdInput.type = 'hidden';
+    appIdInput.name = 'appId';
+    appIdInput.value = apiData?.app?.appId || '';
+    form.appendChild(appIdInput);
+    
+    // Add eventIds input
+    const eventIdsInput = document.createElement('input');
+    eventIdsInput.type = 'hidden';
+    eventIdsInput.name = 'eventIds';
+    eventIdsInput.value = JSON.stringify(Array.from(selectedEvents));
+    form.appendChild(eventIdsInput);
+    
+    // Add form to document and submit
+    document.body.appendChild(form);
+    form.submit();
+    
+    // Clean up
+    document.body.removeChild(form);
+    
+    // Clear selected events
+    setSelectedEvents(new Set());
+  }, [selectedEvents, apiData?.app?.appId]);
+
+  const handleUseTemplate = useCallback((template: any) => {
+    setFormData({
+      name: template.name,
+      displayName: template.displayName,
+      description: template.description,
+      pageType: template.pageType,
+      pageUrl: template.pageUrl || "",
+      eventType: template.eventType,
+      selector: template.selector,
+      metaEventName: template.metaEventName,
+      eventData: template.eventData
+    });
+    validateJson(template.eventData);
+  }, [validateJson]);
+
+  const handleTestEvent = useCallback(async () => {
+    if (!formData.name || !formData.displayName || !formData.metaEventName) {
+      alert("⚠️ Please fill in: Event Name, Display Name, and Meta Event Type");
+      return;
+    }
+
+    if (jsonError) {
+      alert("⚠️ Please fix the JSON validation error before testing");
+      return;
+    }
+
+    setTestLoading(true);
+
+    try {
+      // Parse event data if provided
+      let eventData = {};
+      if (formData.eventData && formData.eventData.trim() !== "" && formData.eventData !== "{}") {
+        eventData = JSON.parse(formData.eventData);
+      }
+
+      const testData = {
+        appId: apiData?.app?.appId || '',
+        eventName: formData.name,
+        url: window.location.href,
+        referrer: document.referrer,
+        pageTitle: document.title,
+        sessionId: `test_${Date.now()}`,
+        visitorId: `test_visitor_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        screenWidth: window.screen.width,
+        screenHeight: window.screen.height,
+        language: navigator.language,
+        ...eventData,
+        customData: {
+          ...eventData,
+          test_event: true,
+          test_timestamp: new Date().toISOString()
+        }
+      };
+
+      const response = await fetch('/api/track', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(testData),
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        alert(`✅ SUCCESS!\n\nTest event "${formData.name}" was sent to Facebook.\n\n📍 Check your Facebook Events Manager:\n- Look for event: "${formData.metaEventName}"\n- It will have a "TEST" prefix\n- Should appear within 15-30 minutes\n\n🔍 Test events help you verify everything works before going live!`);
+      } else {
+        alert(`❌ TEST FAILED\n\nError: ${result.error || 'Unknown error'}\n\n💡 Common issues:\n- Check your Facebook Pixel connection\n- Verify Meta event mapping\n- Ensure JSON data is valid`);
+      }
+    } catch (error: any) {
+      alert(`❌ TEST ERROR\n\n${error.message}\n\n💡 Try again or check your internet connection.`);
+    } finally {
+      setTestLoading(false);
+    }
+  }, [formData, jsonError, apiData?.app?.appId]);
+
+  const handleInputChange = useCallback((field: string) => (value: string) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
+    if (field === 'eventData') {
+      validateJson(value);
+    }
+  }, [validateJson]);
+
+  const redirectToShopifyPricing = () => {
+    const storeHandle = shop.replace('.myshopify.com', '');
+    const appHandle = "pixelify-tracker";
+    const baseUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
+
+    try {
+      if (window.top && window.top !== window) {
+        window.top.location.href = baseUrl;
+      } else {
+        window.location.href = baseUrl;
+      }
+    } catch (e) {
+      // Fallback if top access fails
+      const form = document.createElement('form');
+      form.method = 'GET';
+      form.action = baseUrl;
+      form.target = '_top';
+      document.body.appendChild(form);
+      form.submit();
+    }
+  };
 
   const EVENT_TEMPLATES = [
     {
@@ -734,215 +908,44 @@ export default function CustomEvents() {
     }
   ];
 
-  const validateJson = useCallback((jsonString: string): boolean => {
-    if (!jsonString || jsonString.trim() === "") {
-      setJsonError("");
-      return true;
-    }
-    try {
-      JSON.parse(jsonString);
-      setJsonError("");
-      return true;
-    } catch (e: any) {
-      setJsonError(e.message);
-      return false;
-    }
-  }, []);
+  // Show loading state
+  if (dataLoading) {
+    return (
+      <Page title="Custom Events">
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <div style={{ padding: '60px', textAlign: 'center' }}>
+                <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
+                <Text variant="headingMd" as="h3">Loading custom events...</Text>
+              </div>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
 
-  const handleModalToggle = useCallback(() => {
-    setModalActive(!modalActive);
-    if (!modalActive) {
-      // Reset form when opening for create
-      setEditingEvent(null);
-      setFormData({
-        name: "",
-        displayName: "",
-        description: "",
-        pageType: "all",
-        pageUrl: "",
-        eventType: "click",
-        selector: "",
-        metaEventName: "",
-        eventData: JSON.stringify({
-          value: 29.99,
-          currency: "USD",
-          content_name: "Product Name",
-          content_type: "product"
-        }, null, 2)
-      });
-    }
-  }, [modalActive]);
+  // Show error state
+  if (dataError || !apiData) {
+    return (
+      <Page title="Custom Events">
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <div style={{ padding: '60px', textAlign: 'center' }}>
+                <div style={{ fontSize: '48px', marginBottom: '16px' }}>❌</div>
+                <Text variant="headingMd" as="h3">Error loading custom events</Text>
+                <p style={{ marginTop: '8px', color: '#64748b' }}>{dataError || 'Unknown error'}</p>
+              </div>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
 
-  const handleEditEvent = useCallback((event: any) => {
-    setEditingEvent(event);
-    setFormData({
-      name: event.name,
-      displayName: event.displayName,
-      description: event.description || "",
-      pageType: event.pageType || "all",
-      pageUrl: event.pageUrl || "",
-      eventType: event.eventType || "click",
-      selector: event.selector || "",
-      metaEventName: event.metaEventName || "",
-      eventData: event.eventData || "{}"
-    });
-    setModalActive(true);
-  }, []);
-
-  const handleSelectEvent = useCallback((eventId: string, checked: boolean) => {
-    setSelectedEvents(prev => {
-      const newSet = new Set(prev);
-      if (checked) {
-        newSet.add(eventId);
-      } else {
-        newSet.delete(eventId);
-      }
-      return newSet;
-    });
-  }, []);
-
-  const handleSelectAll = useCallback((checked: boolean) => {
-    if (checked) {
-      setSelectedEvents(new Set(customEvents.map(event => event.id)));
-    } else {
-      setSelectedEvents(new Set());
-    }
-  }, [customEvents]);
-
-  const handleBulkAction = useCallback((action: string) => {
-    if (selectedEvents.size === 0) {
-      alert("Please select at least one event");
-      return;
-    }
-
-    const confirmMessage = action === 'bulk_delete'
-      ? `Are you sure you want to delete ${selectedEvents.size} event(s)?`
-      : action === 'bulk_enable'
-      ? `Are you sure you want to enable ${selectedEvents.size} event(s)?`
-      : `Are you sure you want to disable ${selectedEvents.size} event(s)?`;
-
-    if (!confirm(confirmMessage)) return;
-
-    // Create a hidden form and submit it using React Router's form submission
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.style.display = 'none';
-    
-    // Add action input
-    const actionInput = document.createElement('input');
-    actionInput.type = 'hidden';
-    actionInput.name = 'action';
-    actionInput.value = action;
-    form.appendChild(actionInput);
-    
-    // Add appId input
-    const appIdInput = document.createElement('input');
-    appIdInput.type = 'hidden';
-    appIdInput.name = 'appId';
-    appIdInput.value = app.appId;
-    form.appendChild(appIdInput);
-    
-    // Add eventIds input
-    const eventIdsInput = document.createElement('input');
-    eventIdsInput.type = 'hidden';
-    eventIdsInput.name = 'eventIds';
-    eventIdsInput.value = JSON.stringify(Array.from(selectedEvents));
-    form.appendChild(eventIdsInput);
-    
-    // Add form to document and submit
-    document.body.appendChild(form);
-    form.submit();
-    
-    // Clean up
-    document.body.removeChild(form);
-    
-    // Clear selected events
-    setSelectedEvents(new Set());
-  }, [selectedEvents, app.appId]);
-
-  const handleUseTemplate = useCallback((template: any) => {
-    setFormData({
-      name: template.name,
-      displayName: template.displayName,
-      description: template.description,
-      pageType: template.pageType,
-      pageUrl: template.pageUrl || "",
-      eventType: template.eventType,
-      selector: template.selector,
-      metaEventName: template.metaEventName,
-      eventData: template.eventData
-    });
-    validateJson(template.eventData);
-  }, [validateJson]);
-
-  const handleTestEvent = useCallback(async () => {
-    if (!formData.name || !formData.displayName || !formData.metaEventName) {
-      alert("⚠️ Please fill in: Event Name, Display Name, and Meta Event Type");
-      return;
-    }
-
-    if (jsonError) {
-      alert("⚠️ Please fix the JSON validation error before testing");
-      return;
-    }
-
-    setTestLoading(true);
-
-    try {
-      // Parse event data if provided
-      let eventData = {};
-      if (formData.eventData && formData.eventData.trim() !== "" && formData.eventData !== "{}") {
-        eventData = JSON.parse(formData.eventData);
-      }
-
-      const testData = {
-        appId: app.appId,
-        eventName: formData.name,
-        url: window.location.href,
-        referrer: document.referrer,
-        pageTitle: document.title,
-        sessionId: `test_${Date.now()}`,
-        visitorId: `test_visitor_${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        screenWidth: window.screen.width,
-        screenHeight: window.screen.height,
-        language: navigator.language,
-        ...eventData,
-        customData: {
-          ...eventData,
-          test_event: true,
-          test_timestamp: new Date().toISOString()
-        }
-      };
-
-      const response = await fetch('/api/track', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(testData),
-      });
-
-      const result = await response.json();
-
-      if (result.success) {
-        alert(`✅ SUCCESS!\n\nTest event "${formData.name}" was sent to Facebook.\n\n📍 Check your Facebook Events Manager:\n- Look for event: "${formData.metaEventName}"\n- It will have a "TEST" prefix\n- Should appear within 15-30 minutes\n\n🔍 Test events help you verify everything works before going live!`);
-      } else {
-        alert(`❌ TEST FAILED\n\nError: ${result.error || 'Unknown error'}\n\n💡 Common issues:\n- Check your Facebook Pixel connection\n- Verify Meta event mapping\n- Ensure JSON data is valid`);
-      }
-    } catch (error: any) {
-      alert(`❌ TEST ERROR\n\n${error.message}\n\n💡 Try again or check your internet connection.`);
-    } finally {
-      setTestLoading(false);
-    }
-  }, [formData, jsonError, app.appId]);
-
-  const handleInputChange = useCallback((field: string) => (value: string) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
-    if (field === 'eventData') {
-      validateJson(value);
-    }
-  }, [validateJson]);
+  const { app, customEvents, plan, isFreePlan, hasAccess } = apiData;
 
   // Demo data for free plan users
   const demoCustomEvents = [

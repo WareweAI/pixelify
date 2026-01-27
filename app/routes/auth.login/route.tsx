@@ -123,23 +123,147 @@ export default function Auth() {
 
   return (
     <AppProvider embedded={false}>
-      <s-page>
-        <Form method="post" target="_top">
-          <s-section heading="Log in">
-            <s-text-field
-              id="shop"
-              name="shop"
-              label="Shop domain"
-              details="example.myshopify.com"
-              value={shop}
-              onChange={(e) => setShop(e.currentTarget.value)}
-              autocomplete="on"
-              error={errors?.shop}
-            ></s-text-field>
-            <s-button type="submit">Log in</s-button>
-          </s-section>
-        </Form>
-      </s-page>
+      <div style={{
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        minHeight: "100vh",
+        backgroundColor: "#f6f6f7",
+        padding: "20px"
+      }}>
+        <div style={{
+          backgroundColor: "white",
+          padding: "40px",
+          borderRadius: "8px",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+          maxWidth: "400px",
+          width: "100%"
+        }}>
+          <h1 style={{
+            fontSize: "24px",
+            fontWeight: "600",
+            marginBottom: "8px",
+            color: "#202223"
+          }}>
+            Log in to Pixelify
+          </h1>
+          <p style={{
+            color: "#6d7175",
+            marginBottom: "24px",
+            fontSize: "14px"
+          }}>
+            Enter your shop domain to continue
+          </p>
+          
+          <Form method="post">
+            <div style={{ marginBottom: "16px" }}>
+              <label 
+                htmlFor="shop" 
+                style={{
+                  display: "block",
+                  marginBottom: "8px",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  color: "#202223"
+                }}
+              >
+                Shop domain
+              </label>
+              <input
+                type="text"
+                id="shop"
+                name="shop"
+                value={shop}
+                onChange={(e) => setShop(e.target.value)}
+                placeholder="example.myshopify.com"
+                autoComplete="on"
+                required
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  fontSize: "14px",
+                  border: errors?.shop ? "2px solid #d72c0d" : "1px solid #c9cccf",
+                  borderRadius: "6px",
+                  outline: "none",
+                  boxSizing: "border-box"
+                }}
+                onFocus={(e) => {
+                  if (!errors?.shop) {
+                    e.target.style.border = "2px solid #005bd3";
+                  }
+                }}
+                onBlur={(e) => {
+                  if (!errors?.shop) {
+                    e.target.style.border = "1px solid #c9cccf";
+                  }
+                }}
+              />
+              {errors?.shop && (
+                <p style={{
+                  color: "#d72c0d",
+                  fontSize: "13px",
+                  marginTop: "6px"
+                }}>
+                  {errors.shop}
+                </p>
+              )}
+              <p style={{
+                color: "#6d7175",
+                fontSize: "13px",
+                marginTop: "6px"
+              }}>
+                Enter your Shopify store domain (e.g., mystore.myshopify.com)
+              </p>
+            </div>
+            
+            <button
+              type="submit"
+              style={{
+                width: "100%",
+                padding: "12px",
+                backgroundColor: "#008060",
+                color: "white",
+                border: "none",
+                borderRadius: "6px",
+                fontSize: "14px",
+                fontWeight: "600",
+                cursor: "pointer",
+                transition: "background-color 0.2s"
+              }}
+              onMouseOver={(e) => {
+                e.currentTarget.style.backgroundColor = "#006e52";
+              }}
+              onMouseOut={(e) => {
+                e.currentTarget.style.backgroundColor = "#008060";
+              }}
+            >
+              Log in
+            </button>
+          </Form>
+          
+          <div style={{
+            marginTop: "24px",
+            paddingTop: "24px",
+            borderTop: "1px solid #e1e3e5",
+            textAlign: "center"
+          }}>
+            <p style={{
+              fontSize: "13px",
+              color: "#6d7175"
+            }}>
+              Need help? <a 
+                href="/docs" 
+                style={{
+                  color: "#005bd3",
+                  textDecoration: "none"
+                }}
+              >
+                View documentation
+              </a>
+            </p>
+          </div>
+        </div>
+      </div>
     </AppProvider>
   );
 }

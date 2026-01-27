@@ -20,25 +20,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const shop = session.shop;
   const url = new URL(request.url);
-  const appId = url.searchParams.get('appId');
   const bypassCache = url.searchParams.get('refresh') === 'true';
 
-  if (!appId) {
-    return Response.json({ error: "appId is required" }, { status: 400 });
-  }
-
-  // Generate cache key for this app's settings
-  const cacheKey = generateCacheKey('app-settings', shop, appId);
+  // Generate cache key for this shop
+  const cacheKey = generateCacheKey('settings-data', shop);
 
   // If bypassing cache, invalidate it first
   if (bypassCache) {
     cache.delete(cacheKey);
-    console.log(`[App Settings API] Cache bypassed for ${shop}:${appId}`);
+    console.log(`[Settings Data API] Cache bypassed for ${shop}`);
   }
 
   // Use cache with 5 minute TTL (300 seconds)
   const cachedData = await withCache(cacheKey, 300, async () => {
-    console.log(`[App Settings API] Fetching fresh data for ${shop}:${appId}`);
+    console.log(`[Settings Data API] Fetching fresh data for ${shop}`);
 
     const user = await prisma.user.findUnique({
       where: { storeUrl: shop },
@@ -46,37 +41,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     if (!user) {
       return {
-        settings: null,
-        error: "User not found",
+        apps: [],
         cached: false,
         cacheTimestamp: new Date().toISOString(),
       };
     }
 
-    const app = await prisma.app.findFirst({
-      where: {
-        appId,
-        userId: user.id,
-      },
+    const apps = await prisma.app.findMany({
+      where: { userId: user.id },
       select: {
         id: true,
         appId: true,
         name: true,
-        settings: true,
       },
     });
 
-    if (!app) {
-      return {
-        settings: null,
-        error: "App not found",
-        cached: false,
-        cacheTimestamp: new Date().toISOString(),
-      };
-    }
-
     return {
-      settings: app.settings,
+      apps,
       cached: false,
       cacheTimestamp: new Date().toISOString(),
     };

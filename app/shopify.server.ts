@@ -6,11 +6,52 @@ import {
   BillingInterval,
 } from "@shopify/shopify-app-react-router/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
-import prisma from "./db.server";
+import prisma, { ensureDatabaseConnection } from "./db.server";
 
 // Billing configuration for development
 export const BASIC_PLAN = 'Basic Plan';
 export const ADVANCED_PLAN = 'Advanced Plan';
+
+// Custom Prisma Session Storage with better error handling
+class ResilientPrismaSessionStorage extends PrismaSessionStorage {
+  constructor(prisma: any, options?: any) {
+    super(prisma, {
+      ...options,
+      // Reduce connection retries to fail faster and not exhaust pool
+      connectionRetries: 2,
+    });
+  }
+
+  // Override methods to add retry logic
+  async storeSession(session: any): Promise<boolean> {
+    try {
+      return await super.storeSession(session);
+    } catch (error) {
+      console.error("[Session Storage] Error storing session:", error instanceof Error ? error.message : error);
+      // Don't retry on store - just fail fast
+      return false;
+    }
+  }
+
+  async loadSession(id: string): Promise<any> {
+    try {
+      return await super.loadSession(id);
+    } catch (error) {
+      console.error("[Session Storage] Error loading session:", error instanceof Error ? error.message : error);
+      // Return undefined instead of throwing to allow auth to continue
+      return undefined;
+    }
+  }
+
+  async deleteSession(id: string): Promise<boolean> {
+    try {
+      return await super.deleteSession(id);
+    } catch (error) {
+      console.error("[Session Storage] Error deleting session:", error instanceof Error ? error.message : error);
+      return false; // Return false instead of throwing
+    }
+  }
+}
 
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY!,
@@ -19,7 +60,7 @@ const shopify = shopifyApp({
   scopes: process.env.SCOPES?.split(","),
   appUrl: process.env.SHOPIFY_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : ""),
   authPathPrefix: "/auth",
-  sessionStorage: new PrismaSessionStorage(prisma),
+  sessionStorage: new ResilientPrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,
   ...(process.env.SHOP_CUSTOM_DOMAIN
     ? { customShopDomains: [process.env.SHOP_CUSTOM_DOMAIN] }

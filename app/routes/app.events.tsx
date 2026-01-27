@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 import { getShopifyInstance } from "../shopify.server";
-import prisma from "../db.server";
+import { checkThemeExtensionStatus } from "~/services/theme-extension-check.server";
 import {
   Page,
   Layout,
@@ -23,23 +23,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   if (!shopify?.authenticate) {
     throw new Response("Shopify configuration not found", { status: 500 });
   }
-  const { session } = await shopify.authenticate.admin(request);
+  
+  const { session, admin } = await shopify.authenticate.admin(request);
   const shop = session.shop;
 
-  const user = await prisma.user.findUnique({
-    where: { storeUrl: shop },
+  // Check theme extension status
+  const extensionStatus = await checkThemeExtensionStatus(admin);
+  
+  return Response.json({
+    shop,
+    extensionStatus,
   });
-
-  if (!user) {
-    return { apps: [] };
-  }
-
-  const apps = await prisma.app.findMany({
-    where: { userId: user.id },
-    select: { id: true, appId: true, name: true },
-  });
-
-  return { apps };
 };
 
 interface EventData {
@@ -54,9 +48,21 @@ interface EventData {
   createdAt: string;
 }
 
+interface App {
+  id: string;
+  appId: string;
+  name: string;
+}
+
 export default function EventsPage() {
-  const { apps } = useLoaderData<typeof loader>();
-  const [selectedApp, setSelectedApp] = useState(apps[0]?.appId || "");
+  const { shop, extensionStatus } = useLoaderData<typeof loader>();
+  
+  // State for apps data
+  const [apps, setApps] = useState<App[]>([]);
+  const [appsLoading, setAppsLoading] = useState(true);
+  const [appsError, setAppsError] = useState<string | null>(null);
+  
+  const [selectedApp, setSelectedApp] = useState("");
   const [events, setEvents] = useState<EventData[]>([]);
   const [loading, setLoading] = useState(false);
   const [eventFilter, setEventFilter] = useState("");
@@ -66,7 +72,33 @@ export default function EventsPage() {
   const [loadingTypes, setLoadingTypes] = useState(false);
   const limit = 50;
 
-  const appOptions = apps.map((app: { appId: string; name: string }) => ({
+  // Fetch apps from API on mount
+  useEffect(() => {
+    const fetchApps = async () => {
+      try {
+        setAppsLoading(true);
+        const response = await fetch('/api/events-data');
+        if (!response.ok) {
+          throw new Error('Failed to fetch apps data');
+        }
+        const data = await response.json();
+        setApps(data.apps || []);
+        if (data.apps && data.apps.length > 0) {
+          setSelectedApp(data.apps[0].appId);
+        }
+        setAppsError(null);
+      } catch (error: any) {
+        console.error('[Events] Error fetching apps:', error);
+        setAppsError(error.message);
+      } finally {
+        setAppsLoading(false);
+      }
+    };
+
+    fetchApps();
+  }, []);
+
+  const appOptions = apps.map((app: App) => ({
     label: app.name,
     value: app.appId,
   }));
@@ -143,6 +175,45 @@ export default function EventsPage() {
     event.customData ? JSON.stringify(event.customData) : "-",
     new Date(event.createdAt).toLocaleString(),
   ]);
+
+  // Show loading state while fetching apps
+  if (appsLoading) {
+    return (
+      <Page title="Event Logs">
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <div style={{ padding: '60px', textAlign: 'center' }}>
+                <Spinner size="large" />
+                <div style={{ marginTop: '16px' }}>
+                  <Text as="p">Loading pixels...</Text>
+                </div>
+              </div>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
+
+  // Show error state
+  if (appsError) {
+    return (
+      <Page title="Event Logs">
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <div style={{ padding: '60px', textAlign: 'center' }}>
+                <div style={{ fontSize: '48px', marginBottom: '16px' }}>❌</div>
+                <Text variant="headingMd" as="h3">Error loading pixels</Text>
+                <p style={{ marginTop: '8px', color: '#64748b' }}>{appsError}</p>
+              </div>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
 
   if (apps.length === 0) {
     return (

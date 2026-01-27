@@ -1,8 +1,9 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { getShopifyInstance } from "../shopify.server";
-import prisma from "../db.server";
+import prisma, { withDatabaseRetry } from "../db.server";
 import { generateRandomPassword } from "~/lib/crypto.server";
 import { createAppWithSettings, renameApp, deleteAppWithData } from "~/services/app.service.server";
+import { cache, generateCacheKey, withCache } from "~/lib/cache.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopify = getShopifyInstance();
@@ -25,168 +26,201 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
   const purchaseOffset = parseInt(url.searchParams.get('purchaseOffset') || '0');
   const purchaseLimit = 10;
+  
+  // Check if cache should be bypassed
+  const bypassCache = url.searchParams.get('refresh') === 'true';
 
-  try {
-    let user = await prisma.user.findUnique({ where: { storeUrl: shop } });
+  // Generate cache key for this shop and pagination
+  const cacheKey = generateCacheKey('dashboard', shop, purchaseOffset, purchaseLimit);
 
-    if (!user) {
-      user = await prisma.user.create({
-        data: { storeUrl: shop, password: generateRandomPassword() },
-      });
-    }
-
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    // Initialize store pages with system defaults
-    let storePages = [
-      { label: "All Pages", value: "all", type: "system" },
-      { label: "Home Page", value: "/", type: "system" },
-      { label: "Cart Page", value: "/cart", type: "system" },
-      { label: "Checkout Page", value: "/checkout", type: "system" },
-      { label: "Search Results", value: "/search", type: "system" },
-      { label: "Account Page", value: "/account", type: "system" },
-    ];
-
-    // Fetch products and collections from Shopify GraphQL
-    try {
-      const [productsRes, collectionsRes] = await Promise.all([
-        admin.graphql(`
-          query {
-            products(first: 250, query: "status:active") {
-              edges {
-                node {
-                  id
-                  title
-                  handle
-                }
-              }
-            }
-          }
-        `),
-        admin.graphql(`
-          query {
-            collections(first: 50, sortKey: TITLE) {
-              edges {
-                node {
-                  id
-                  title
-                  handle
-                }
-              }
-            }
-          }
-        `)
-      ]);
-
-      const productsData = await productsRes.json();
-      const collectionsData = await collectionsRes.json();
-
-      const products = productsData.data?.products?.edges || [];
-      const collections = collectionsData.data?.collections?.edges || [];
-
-      console.log(`[Dashboard API] Fetched ${products.length} products and ${collections.length} collections`);
-
-      // Add collection pages
-      const collectionPages = collections.map((edge: any) => ({
-        label: `Collection: ${edge.node.title}`,
-        value: `/collections/${edge.node.handle}`,
-        type: "collection",
-        collectionId: edge.node.id,
-      }));
-
-      // Add product pages
-      const productPages = products.map((edge: any) => ({
-        label: `Product: ${edge.node.title}`,
-        value: `/products/${edge.node.handle}`,
-        type: "product",
-        productId: edge.node.id,
-      }));
-
-      storePages = [...storePages, ...collectionPages, ...productPages];
-      console.log(`[Dashboard API] Total pages: ${storePages.length}`);
-    } catch (error) {
-      console.error("[Dashboard API] Error fetching products/collections:", error);
-    }
-
-    // Run database queries in parallel
-    const [apps, totalPurchaseEvents, recentPurchaseEvents, todayEvents] = await Promise.all([
-      prisma.$queryRaw`
-        SELECT
-          a."id", a."appId", a."appToken", a."name", a."plan", a."welcomeEmailSent",
-          a."enabled", a."shopEmail", a."createdAt", a."userId", a."websiteDomain",
-          s."metaPixelId", s."metaPixelEnabled", s."timezone",
-          COALESCE((SELECT COUNT(*)::int FROM "Event" e WHERE e."appId" = a."id"), 0) as "eventCount",
-          COALESCE((SELECT COUNT(*)::int FROM "AnalyticsSession" ase WHERE ase."appId" = a."id"), 0) as "sessionCount"
-        FROM "App" a
-        LEFT JOIN "AppSettings" s ON s."appId" = a."id"
-        WHERE a."userId" = ${user.id}
-        ORDER BY a."createdAt" DESC
-      `,
-      prisma.event.count({
-        where: { app: { userId: user.id }, eventName: "Purchase", createdAt: { gte: sevenDaysAgo } },
-      }),
-      prisma.event.findMany({
-        where: { app: { userId: user.id }, eventName: "Purchase", createdAt: { gte: sevenDaysAgo } },
-        orderBy: { createdAt: "desc" },
-        take: purchaseLimit,
-        skip: purchaseOffset,
-        include: { app: { select: { name: true, appId: true } } },
-      }),
-      prisma.event.count({
-        where: { app: { userId: user.id }, createdAt: { gte: today } },
-      }),
-    ]);
-
-    const transformedApps = (apps as any[]).map((app: any) => ({
-      ...app,
-      _count: { events: app.eventCount || 0, analyticsSessions: app.sessionCount || 0 },
-      settings: { metaPixelId: app.metaPixelId, metaPixelEnabled: app.metaPixelEnabled || false, timezone: app.timezone },
-    }));
-
-    const totalPixels = transformedApps.length;
-    const totalEvents = transformedApps.reduce((sum: number, app: any) => sum + app._count.events, 0);
-    const totalSessions = transformedApps.reduce((sum: number, app: any) => sum + app._count.analyticsSessions, 0);
-
-    return {
-      apps: transformedApps,
-      hasPixels: transformedApps.length > 0,
-      stats: { totalPixels, totalEvents, totalSessions, todayEvents },
-      recentPurchaseEvents: recentPurchaseEvents.map((e: any) => ({
-        id: e.id,
-        orderId: e.customData?.order_id || e.productId || '-',
-        value: e.value || (typeof e.customData?.value === 'number' ? e.customData.value : parseFloat(e.customData?.value) || null),
-        currency: e.currency || e.customData?.currency || 'USD',
-        pixelId: e.app.appId,
-        source: e.utmSource || '-',
-        purchaseTime: e.createdAt,
-      })),
-      totalPurchaseEvents,
-      purchaseOffset,
-      purchaseLimit,
-      storePages,
-    };
-  } catch (error: any) {
-    console.error("[Dashboard Loader] Error:", error);
-
-    if (error.message?.includes('connection pool') || error.code === 'P2024') {
-      return {
-        apps: [],
-        hasPixels: false,
-        stats: { totalPixels: 0, totalEvents: 0, totalSessions: 0, todayEvents: 0 },
-        recentPurchaseEvents: [],
-        totalPurchaseEvents: 0,
-        purchaseOffset: 0,
-        purchaseLimit: 10,
-        storePages: [],
-        connectionError: true,
-      };
-    }
-
-    throw new Response("Database temporarily unavailable", { status: 503 });
+  // If bypassing cache, invalidate it first
+  if (bypassCache) {
+    cache.delete(cacheKey);
+    console.log(`[Dashboard API] Cache bypassed for ${shop}`);
   }
+
+  // Use cache with 5 minute TTL (300 seconds)
+  return withCache(cacheKey, 300, async () => {
+    console.log(`[Dashboard API] Fetching fresh data for ${shop}`);
+    
+    try {
+      let user = await prisma.user.findUnique({ where: { storeUrl: shop } });
+
+      if (!user) {
+        user = await prisma.user.create({
+          data: { storeUrl: shop, password: generateRandomPassword() },
+        });
+      }
+
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      // Initialize store pages with system defaults
+      let storePages = [
+        { label: "All Pages", value: "all", type: "system" },
+        { label: "Home Page", value: "/", type: "system" },
+        { label: "Cart Page", value: "/cart", type: "system" },
+        { label: "Checkout Page", value: "/checkout", type: "system" },
+        { label: "Search Results", value: "/search", type: "system" },
+        { label: "Account Page", value: "/account", type: "system" },
+      ];
+
+      // Fetch products and collections from Shopify GraphQL
+      try {
+        const [productsRes, collectionsRes] = await Promise.all([
+          admin.graphql(`
+            query {
+              products(first: 250, query: "status:active") {
+                edges {
+                  node {
+                    id
+                    title
+                    handle
+                  }
+                }
+              }
+            }
+          `),
+          admin.graphql(`
+            query {
+              collections(first: 50, sortKey: TITLE) {
+                edges {
+                  node {
+                    id
+                    title
+                    handle
+                  }
+                }
+              }
+            }
+          `)
+        ]);
+
+        const productsData = await productsRes.json();
+        const collectionsData = await collectionsRes.json();
+
+        const products = productsData.data?.products?.edges || [];
+        const collections = collectionsData.data?.collections?.edges || [];
+
+        console.log(`[Dashboard API] Fetched ${products.length} products and ${collections.length} collections`);
+
+        // Add collection pages
+        const collectionPages = collections.map((edge: any) => ({
+          label: `Collection: ${edge.node.title}`,
+          value: `/collections/${edge.node.handle}`,
+          type: "collection",
+          collectionId: edge.node.id,
+        }));
+
+        // Add product pages
+        const productPages = products.map((edge: any) => ({
+          label: `Product: ${edge.node.title}`,
+          value: `/products/${edge.node.handle}`,
+          type: "product",
+          productId: edge.node.id,
+        }));
+
+        storePages = [...storePages, ...collectionPages, ...productPages];
+        console.log(`[Dashboard API] Total pages: ${storePages.length}`);
+      } catch (error) {
+        console.error("[Dashboard API] Error fetching products/collections:", error);
+      }
+
+      // Run database queries in parallel with retry logic
+      const [apps, totalPurchaseEvents, recentPurchaseEvents, todayEvents] = await withDatabaseRetry(async () => {
+        return Promise.all([
+          prisma.$queryRaw`
+            SELECT
+              a."id", a."appId", a."appToken", a."name", a."plan", a."welcomeEmailSent",
+              a."enabled", a."shopEmail", a."createdAt", a."userId", a."websiteDomain",
+              s."metaPixelId", s."metaPixelEnabled", s."timezone", s."metaAccessToken",
+              COALESCE((SELECT COUNT(*)::int FROM "Event" e WHERE e."appId" = a."id"), 0) as "eventCount",
+              COALESCE((SELECT COUNT(*)::int FROM "AnalyticsSession" ase WHERE ase."appId" = a."id"), 0) as "sessionCount"
+            FROM "App" a
+            LEFT JOIN "AppSettings" s ON s."appId" = a."id"
+            WHERE a."userId" = ${user.id}
+            ORDER BY a."createdAt" DESC
+          `,
+          prisma.event.count({
+            where: { app: { userId: user.id }, eventName: "Purchase", createdAt: { gte: sevenDaysAgo } },
+          }),
+          prisma.event.findMany({
+            where: { app: { userId: user.id }, eventName: "Purchase", createdAt: { gte: sevenDaysAgo } },
+            orderBy: { createdAt: "desc" },
+            take: purchaseLimit,
+            skip: purchaseOffset,
+            include: { app: { select: { name: true, appId: true } } },
+          }),
+          prisma.event.count({
+            where: { app: { userId: user.id }, createdAt: { gte: today } },
+          }),
+        ]);
+      });
+
+      const transformedApps = (apps as any[]).map((app: any) => ({
+        ...app,
+        _count: { events: app.eventCount || 0, analyticsSessions: app.sessionCount || 0 },
+        settings: { 
+          metaPixelId: app.metaPixelId, 
+          metaPixelEnabled: app.metaPixelEnabled || false, 
+          timezone: app.timezone,
+          metaAccessToken: app.metaAccessToken // Include for token check
+        },
+      }));
+
+      const totalPixels = transformedApps.length;
+      const totalEvents = transformedApps.reduce((sum: number, app: any) => sum + app._count.events, 0);
+      const totalSessions = transformedApps.reduce((sum: number, app: any) => sum + app._count.analyticsSessions, 0);
+      
+      // Check if user has any Facebook tokens
+      const hasValidFacebookToken = transformedApps.some((app: any) => 
+        app.settings?.metaAccessToken && app.settings.metaAccessToken.length > 0
+      );
+
+      return {
+        apps: transformedApps,
+        hasPixels: transformedApps.length > 0,
+        hasValidFacebookToken,
+        stats: { totalPixels, totalEvents, totalSessions, todayEvents },
+        recentPurchaseEvents: recentPurchaseEvents.map((e: any) => ({
+          id: e.id,
+          orderId: e.customData?.order_id || e.productId || '-',
+          value: e.value || (typeof e.customData?.value === 'number' ? e.customData.value : parseFloat(e.customData?.value) || null),
+          currency: e.currency || e.customData?.currency || 'USD',
+          pixelId: e.app.appId,
+          source: e.utmSource || '-',
+          purchaseTime: e.createdAt,
+        })),
+        totalPurchaseEvents,
+        purchaseOffset,
+        purchaseLimit,
+        storePages,
+        cached: false, // Indicates this is fresh data
+        cacheTimestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      console.error("[Dashboard API] Error:", error);
+
+      if (error.message?.includes('connection pool') || error.code === 'P2024') {
+        return {
+          apps: [],
+          hasPixels: false,
+          hasValidFacebookToken: false,
+          stats: { totalPixels: 0, totalEvents: 0, totalSessions: 0, todayEvents: 0 },
+          recentPurchaseEvents: [],
+          totalPurchaseEvents: 0,
+          purchaseOffset: 0,
+          purchaseLimit: 10,
+          storePages: [],
+          connectionError: true,
+        };
+      }
+
+      throw new Response("Database temporarily unavailable", { status: 503 });
+    }
+  });
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -205,6 +239,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (!user) {
     return { error: "User not found" };
   }
+
+  // Helper function to invalidate dashboard cache for this shop
+  const invalidateDashboardCache = () => {
+    const invalidated = cache.invalidatePattern(`dashboard:${shop}:`);
+    console.log(`[Dashboard API] Invalidated ${invalidated} cache entries for ${shop}`);
+  };
 
   // Assign website domain to pixel
   if (intent === "assign-website") {
@@ -226,6 +266,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       where: { id: appId },
       data: { websiteDomain: cleanDomain }
     });
+
+    // Invalidate cache after modification
+    invalidateDashboardCache();
 
     return { success: true, message: `Website domain assigned successfully` };
   }
@@ -283,6 +326,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
+    // Invalidate cache after creating pixel
+    invalidateDashboardCache();
+
     return { success: true, message: "Pixel created successfully", step: 2 };
   }
 
@@ -315,6 +361,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     await renameApp(appId, newName);
+    
+    // Invalidate cache after rename
+    invalidateDashboardCache();
+    
     return { success: true, intent: "rename" };
   }
 
@@ -322,6 +372,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "delete") {
     const appId = formData.get("appId") as string;
     await deleteAppWithData(appId);
+    
+    // Invalidate cache after delete
+    invalidateDashboardCache();
+    
     return { success: true, intent: "delete" };
   }
 
@@ -339,6 +393,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       data: { timezone }
     });
 
+    // Invalidate cache after timezone update
+    invalidateDashboardCache();
+
     return { success: true, message: "Timezone saved successfully", step: 3 };
   }
 
@@ -355,6 +412,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       where: { id: appId, userId: user.id },
       data: { enabled }
     });
+
+    // Invalidate cache after toggle
+    invalidateDashboardCache();
 
     return { success: true, message: `Pixel ${enabled ? 'enabled' : 'disabled'}` };
   }
@@ -384,6 +444,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         });
       }
     }
+
+    // Invalidate cache after token update
+    invalidateDashboardCache();
 
     return { success: true, message: "Token saved", intent: "save-facebook-token" };
   }

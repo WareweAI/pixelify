@@ -15,75 +15,63 @@ import {
   ButtonGroup,
   Spinner,
   TextField,
-  FormLayout
+  FormLayout,
+  Select,
+  BlockStack
 } from "@shopify/polaris";
 import { CheckIcon, StarIcon } from "@shopify/polaris-icons";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session, admin } = await authenticate.admin(request);
-
+  const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  try {
-    const response = await admin.graphql(`
-      query {
-        appInstallation {
-          activeSubscriptions {
-            id
-            name
-            status
-          }
-        }
-      }
-    `);
-
-    const data = await response.json() as any;
-    const activeSubscriptions = data?.data?.appInstallation?.activeSubscriptions || [];
-
-    let currentPlanName = 'free';
-    let activeSubscription = null;
-
-    if (activeSubscriptions.length > 0) {
-      activeSubscription = activeSubscriptions.find((sub: any) =>
-        sub.status === 'ACTIVE' || sub.status === 'active'
-      );
-
-      if (activeSubscription) {
-        const planMap: Record<string, string> = {
-          'Free': 'free',
-          'Basic': 'basic',
-          'Advance': 'advance'
-        };
-        currentPlanName = planMap[activeSubscription.name] || 'free';
-      }
-    }
-
-    return {
-      userPlan: { planName: currentPlanName, shopifyPlanName: activeSubscription?.name || 'Free' },
-      shop: shop,
-      appHandle: "pixelify-tracker",
-      hasActivePayment: currentPlanName !== 'free',
-      error: null
-    };
-  } catch (error: any) {
-    console.error('Error in pricing loader:', error);
-    return {
-      userPlan: { planName: 'free' },
-      shop: shop,
-      appHandle: "pixelify-tracker",
-      hasActivePayment: false,
-      error: error.message
-    };
-  }
+  return Response.json({
+    shop,
+    appHandle: "pixelify-tracker",
+  });
 };
 
 export default function PricingPage() {
-  const { userPlan, shop, appHandle, hasActivePayment, error } = useLoaderData<typeof loader>();
+  const { shop, appHandle } = useLoaderData<typeof loader>();
+  
+  // State for pricing data
+  const [pricingData, setPricingData] = useState<any>(null);
+  const [pricingLoading, setPricingLoading] = useState(true);
+  const [pricingError, setPricingError] = useState<string | null>(null);
+  
   const [billingInterval, setBillingInterval] = useState<'monthly' | 'yearly'>('monthly');
+  const [selectedPlan, setSelectedPlan] = useState('Basic');
   const [discountCode, setDiscountCode] = useState('');
   const [discountMessage, setDiscountMessage] = useState('');
   const discountFetcher = useFetcher();
 
+  // Fetch pricing data from API on mount
+  useEffect(() => {
+    const fetchPricingData = async () => {
+      try {
+        setPricingLoading(true);
+        const response = await fetch('/api/pricing-data');
+        if (!response.ok) {
+          throw new Error('Failed to fetch pricing data');
+        }
+        const data = await response.json();
+        setPricingData(data);
+        setPricingError(data.error || null);
+      } catch (error: any) {
+        console.error('[Pricing] Error fetching data:', error);
+        setPricingError(error.message);
+      } finally {
+        setPricingLoading(false);
+      }
+    };
+
+    fetchPricingData();
+  }, []);
+
+  const userPlan = pricingData?.userPlan || { planName: 'free', shopifyPlanName: 'Free' };
+  const hasActivePayment = pricingData?.hasActivePayment || false;
+  const error = pricingError;
+  
   const hasActivePaidSubscription = userPlan?.planName !== 'free' && hasActivePayment;
 
   const storeHandle = process.env.STORE_HANDLE || shop.replace('.myshopify.com', '');
@@ -92,14 +80,16 @@ export default function PricingPage() {
   useEffect(() => {
     if (discountFetcher.data) {
       if (discountFetcher.data.success) {
-        setDiscountMessage(discountFetcher.data.message);
+        const percentage = discountFetcher.data.percentage || 0;
+        setDiscountMessage(discountFetcher.data.message || `${percentage}% discount applied successfully!`);
         setDiscountCode(''); // Clear the input
 
-        // If there's a confirmation URL, redirect to it after a short delay
+        // If there's a confirmation URL, redirect to it
         if (discountFetcher.data.confirmationUrl) {
+          console.log('[Pricing] Redirecting to confirmation URL:', discountFetcher.data.confirmationUrl);
           setTimeout(() => {
-            window.location.href = discountFetcher.data.confirmationUrl;
-          }, 2000); // Give user time to read the success message
+            window.top.location.href = discountFetcher.data.confirmationUrl;
+          }, 1500);
         }
       } else {
         setDiscountMessage(discountFetcher.data.message || 'An unexpected error occurred. Please try again.');
@@ -164,6 +154,29 @@ export default function PricingPage() {
   };
 
   const currentPlanName = getCurrentPlanName();
+
+  // Show loading state
+  if (pricingLoading) {
+    return (
+      <Page
+        title="Pricing Plans"
+        subtitle="Choose the perfect plan for your store's needs"
+      >
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <div style={{ padding: '60px', textAlign: 'center' }}>
+                <Spinner size="large" />
+                <div style={{ marginTop: '16px' }}>
+                  <Text as="p">Loading pricing information...</Text>
+                </div>
+              </div>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
 
   const plans = [
     {
@@ -257,53 +270,65 @@ export default function PricingPage() {
         <Layout.Section>
           <Card>
             <Box padding="600">
-              <Text variant="headingMd" as="h3">
-                Have a discount code?
-              </Text>
-              <FormLayout>
-                <InlineStack align="start" blockAlign="center" gap="400">
-                  <div style={{ flex: 1 }}>
-                    <TextField
-                      label=""
-                      placeholder="Enter discount code"
-                      value={discountCode}
-                      onChange={setDiscountCode}
-                      disabled={discountFetcher.state === 'submitting'}
-                      autoComplete="off"
-                    />
-                  </div>
-                  <Button
-                    onClick={() => {
-                      const trimmedCode = discountCode.trim();
-                      if (!trimmedCode) {
-                        setDiscountMessage('Please enter a discount code');
-                        return;
-                      }
+              <BlockStack gap="400">
+                <Text variant="headingMd" as="h3">
+                  Have a discount code?
+                </Text>
+                <FormLayout>
+                  <Select
+                    label="Select Plan"
+                    options={[
+                      { label: "Basic Plan ($20.99/month)", value: "Basic" },
+                      { label: "Advance Plan ($55.99/month)", value: "Advance" },
+                    ]}
+                    value={selectedPlan}
+                    onChange={setSelectedPlan}
+                  />
+                  <InlineStack align="start" blockAlign="center" gap="400">
+                    <div style={{ flex: 1 }}>
+                      <TextField
+                        label=""
+                        placeholder="Enter discount code"
+                        value={discountCode}
+                        onChange={setDiscountCode}
+                        disabled={discountFetcher.state === 'submitting'}
+                        autoComplete="off"
+                      />
+                    </div>
+                    <Button
+                      onClick={() => {
+                        const trimmedCode = discountCode.trim();
+                        if (!trimmedCode) {
+                          setDiscountMessage('Please enter a discount code');
+                          return;
+                        }
 
-                      const formData = new FormData();
-                      formData.append('code', trimmedCode);
-                      discountFetcher.submit(formData, {
-                        method: 'POST',
-                        action: '/api/apply-discount'
-                      });
-                    }}
-                    loading={discountFetcher.state === 'submitting'}
-                    disabled={!discountCode.trim() || discountFetcher.state === 'submitting'}
-                  >
-                    Apply Discount
-                  </Button>
-                </InlineStack>
-                {discountFetcher.state === 'submitting' && (
-                  <Text as="p" variant="bodyMd" tone="subdued">
-                    Applying discount...
-                  </Text>
-                )}
-                {discountMessage && discountFetcher.state !== 'submitting' && (
-                  <Text as="p" variant="bodyMd" tone={discountMessage.includes('applied') || discountMessage.includes('successfully') ? "success" : "critical"}>
-                    {discountMessage}
-                  </Text>
-                )}
-              </FormLayout>
+                        const formData = new FormData();
+                        formData.append('code', trimmedCode);
+                        formData.append('planName', selectedPlan);
+                        discountFetcher.submit(formData, {
+                          method: 'POST',
+                          action: '/api/apply-discount'
+                        });
+                      }}
+                      loading={discountFetcher.state === 'submitting'}
+                      disabled={!discountCode.trim() || discountFetcher.state === 'submitting'}
+                    >
+                      Apply Discount
+                    </Button>
+                  </InlineStack>
+                  {discountFetcher.state === 'submitting' && (
+                    <Text as="p" variant="bodyMd" tone="subdued">
+                      Applying discount...
+                    </Text>
+                  )}
+                  {discountMessage && discountFetcher.state !== 'submitting' && (
+                    <Text as="p" variant="bodyMd" tone={discountMessage.includes('applied') || discountMessage.includes('successfully') ? "success" : "critical"}>
+                      {discountMessage}
+                    </Text>
+                  )}
+                </FormLayout>
+              </BlockStack>
             </Box>
           </Card>
         </Layout.Section>

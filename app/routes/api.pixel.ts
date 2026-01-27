@@ -1,5 +1,75 @@
-import type { ActionFunctionArgs } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { getShopifyInstance } from "../shopify.server";
+import { cache, generateCacheKey, withCache } from "~/lib/cache.server";
+
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const prisma = (await import("../db.server")).default;
+  
+  const shopify = getShopifyInstance();
+  if (!shopify?.authenticate) {
+    return Response.json({ error: "Shopify not configured" }, { status: 500 });
+  }
+
+  let session;
+  try {
+    const authResult = await shopify.authenticate.admin(request);
+    session = authResult.session;
+  } catch (error) {
+    if (error instanceof Response) throw error;
+    return Response.json({ error: "Authentication failed" }, { status: 401 });
+  }
+
+  const shop = session.shop;
+  const url = new URL(request.url);
+  const bypassCache = url.searchParams.get('refresh') === 'true';
+
+  // Generate cache key
+  const cacheKey = generateCacheKey('pixels', shop);
+
+  // If bypassing cache, invalidate it first
+  if (bypassCache) {
+    cache.delete(cacheKey);
+    console.log(`[Pixels API] Cache bypassed for ${shop}`);
+  }
+
+  // Use cache with 5 minute TTL (300 seconds)
+  const cachedData = await withCache(cacheKey, 300, async () => {
+    console.log(`[Pixels API] Fetching fresh data for ${shop}`);
+
+    const user = await prisma.user.findUnique({ where: { storeUrl: shop } });
+    if (!user) throw new Error("User not found");
+
+    // Get valid access token using the token refresh service
+    const { getValidTokenForUser } = await import("~/services/facebook-sdk-token.server");
+    const accessToken = await getValidTokenForUser(user.id);
+
+    const apps = await prisma.app.findMany({
+      where: { userId: user.id },
+      include: { settings: true },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const pixels = apps.map((app: any) => ({
+      id: app.id,
+      appId: app.appId,
+      name: app.name,
+      enabled: app.enabled,
+      metaPixelId: app.settings?.metaPixelId || null,
+      metaPixelEnabled: app.settings?.metaPixelEnabled || false,
+      testEventCode: app.settings?.metaTestEventCode || null,
+      trackingPages: app.settings?.trackingPages || "all",
+      serverSideEnabled: !!(app.settings?.metaPixelId && accessToken),
+    }));
+
+    return {
+      pixels,
+      cached: false,
+      cacheTimestamp: new Date().toISOString(),
+    };
+  });
+
+  return Response.json(cachedData);
+};
 
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -25,6 +95,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const user = await prisma.user.findUnique({ where: { storeUrl: shop } });
   if (!user) return Response.json({ error: "User not found" }, { status: 404 });
+
+  // Helper function to invalidate pixels cache for this shop
+  const invalidatePixelsCache = () => {
+    const invalidated = cache.invalidatePattern(`pixels:${shop}`);
+    console.log(`[Pixels API] Invalidated ${invalidated} cache entries for ${shop}`);
+  };
 
   // Toggle Server-Side API
   if (intent === "toggle-server-side") {
@@ -52,6 +128,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           data: { metaPixelEnabled: enabled },
         });
       }
+
+      // Invalidate cache after modification
+      invalidatePixelsCache();
 
       return Response.json({
         success: true,

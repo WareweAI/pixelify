@@ -9,8 +9,29 @@ import { loadEnv } from "./lib/env-loader.server";
 loadEnv();
 
 import { addDocumentResponseHeaders } from "./shopify.server";
+import { ensureDatabaseConnection } from "./db.server";
 
 export const streamTimeout = 5000;
+
+// Initialize database connection on startup
+let dbInitialized = false;
+const initializeDatabase = async () => {
+  if (!dbInitialized) {
+    console.log("[Server] Initializing database connection...");
+    const connected = await ensureDatabaseConnection(3);
+    if (connected) {
+      console.log("[Server] Database connection established");
+      dbInitialized = true;
+    } else {
+      console.warn("[Server] Database connection failed - app will retry on requests");
+    }
+  }
+};
+
+// Start database initialization (non-blocking)
+initializeDatabase().catch(err => {
+  console.error("[Server] Database initialization error:", err);
+});
 
 export default async function handleRequest(
   request: Request,

@@ -3,6 +3,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useFetcher } from "react-router";
 import { getShopifyInstance } from "../shopify.server";
 import prisma from "../db.server";
+import { cache } from "~/lib/cache.server";
 import {
   Page,
   Layout,
@@ -20,32 +21,22 @@ import {
   EmptyState,
   Box,
   Divider,
+  Spinner,
 } from "@shopify/polaris";
 import { ClientOnly } from "../components/ClientOnly";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopify = getShopifyInstance();
+  if (!shopify?.authenticate) {
+    throw new Response("Shopify configuration not found", { status: 500 });
+  }
+  
   const { session } = await shopify.authenticate.admin(request);
   const shop = session.shop;
 
-  const user = await prisma.user.findUnique({
-    where: { storeUrl: shop },
+  return Response.json({
+    shop,
   });
-
-  if (!user) {
-    return { apps: [] };
-  }
-
-  const apps = await prisma.app.findMany({
-    where: { userId: user.id },
-    select: {
-      id: true,
-      appId: true,
-      name: true,
-    },
-  });
-
-  return { apps };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -86,6 +77,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
+    // Invalidate cache
+    const app = await prisma.app.findFirst({ where: { id: appId }, select: { appId: true } });
+    if (app) {
+      cache.invalidatePattern(`app-settings:${shop}:${app.appId}`);
+    }
+
     return { success: true, message: "Tracking settings updated" };
   }
 
@@ -99,6 +96,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       where: { appId },
       data: { recordIp, recordLocation, recordSession },
     });
+
+    // Invalidate cache
+    const app = await prisma.app.findFirst({ where: { id: appId }, select: { appId: true } });
+    if (app) {
+      cache.invalidatePattern(`app-settings:${shop}:${app.appId}`);
+    }
 
     return { success: true, message: "Privacy settings updated" };
   }
@@ -120,6 +123,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
+    // Invalidate cache
+    const app = await prisma.app.findFirst({ where: { id: appId }, select: { appId: true } });
+    if (app) {
+      cache.invalidatePattern(`app-settings:${shop}:${app.appId}`);
+    }
+
     return { success: true, message: "Meta integration updated" };
   }
 
@@ -133,6 +142,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         timezone: timezone || "GMT+0",
       },
     });
+
+    // Invalidate cache
+    const app = await prisma.app.findFirst({ where: { id: appId }, select: { appId: true } });
+    if (app) {
+      cache.invalidatePattern(`app-settings:${shop}:${app.appId}`);
+    }
 
     return { success: true, message: "Timezone updated successfully" };
   }
@@ -151,6 +166,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         metaPixelEnabled: false,
       },
     });
+
+    // Invalidate cache
+    const app = await prisma.app.findFirst({ where: { id: appId }, select: { appId: true } });
+    if (app) {
+      cache.invalidatePattern(`app-settings:${shop}:${app.appId}`);
+    }
 
     return { success: true, message: "Meta integration disconnected" };
   }
@@ -245,15 +266,47 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function SettingsPage() {
-  const { apps } = useLoaderData<typeof loader>();
+  const { shop } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
-  const [selectedAppId, setSelectedAppId] = useState(apps[0]?.id || "");
+  
+  // State for apps data
+  const [apps, setApps] = useState<any[]>([]);
+  const [appsLoading, setAppsLoading] = useState(true);
+  const [appsError, setAppsError] = useState<string | null>(null);
+  
+  const [selectedAppId, setSelectedAppId] = useState("");
   const [settings, setSettings] = useState<any>(null);
   const [loadingSettings, setLoadingSettings] = useState(false);
 
   const [showDisconnectModal, setShowDisconnectModal] = useState(false);
 
   const selectedApp = apps.find((a: any) => a.id === selectedAppId);
+
+  // Fetch apps from API on mount
+  useEffect(() => {
+    const fetchApps = async () => {
+      try {
+        setAppsLoading(true);
+        const response = await fetch('/api/settings-data');
+        if (!response.ok) {
+          throw new Error('Failed to fetch apps data');
+        }
+        const data = await response.json();
+        setApps(data.apps || []);
+        if (data.apps && data.apps.length > 0) {
+          setSelectedAppId(data.apps[0].id);
+        }
+        setAppsError(null);
+      } catch (error: any) {
+        console.error('[Settings] Error fetching apps:', error);
+        setAppsError(error.message);
+      } finally {
+        setAppsLoading(false);
+      }
+    };
+
+    fetchApps();
+  }, []);
 
   const fetchSettings = useCallback(async () => {
     if (!selectedAppId) return;
@@ -262,9 +315,6 @@ export default function SettingsPage() {
     try {
       const app = apps.find((a: any) => a.id === selectedAppId);
       if (app) {
-        // Since we removed settings from loader, we need to fetch them
-        // For now, we'll use a simple approach - get from database via API
-        // Actually, let's create a simple API endpoint for settings
         const response = await fetch(`/api/app-settings?appId=${app.appId}`);
         if (response.ok) {
           const data = await response.json();
@@ -497,6 +547,47 @@ export default function SettingsPage() {
     label: app.name,
     value: app.id,
   }));
+
+  if (appsLoading) {
+    return (
+      <ClientOnly fallback={<Page title="Settings"><Layout><Layout.Section><Card><Text as="p">Loading...</Text></Card></Layout.Section></Layout></Page>}>
+        <Page title="Settings">
+          <Layout>
+            <Layout.Section>
+              <Card>
+                <div style={{ padding: '60px', textAlign: 'center' }}>
+                  <Spinner size="large" />
+                  <div style={{ marginTop: '16px' }}>
+                    <Text as="p">Loading settings...</Text>
+                  </div>
+                </div>
+              </Card>
+            </Layout.Section>
+          </Layout>
+        </Page>
+      </ClientOnly>
+    );
+  }
+
+  if (appsError) {
+    return (
+      <ClientOnly fallback={<Page title="Settings"><Layout><Layout.Section><Card><Text as="p">Loading...</Text></Card></Layout.Section></Layout></Page>}>
+        <Page title="Settings">
+          <Layout>
+            <Layout.Section>
+              <Card>
+                <div style={{ padding: '60px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '48px', marginBottom: '16px' }}>❌</div>
+                  <Text variant="headingMd" as="h3">Error loading settings</Text>
+                  <p style={{ marginTop: '8px', color: '#64748b' }}>{appsError}</p>
+                </div>
+              </Card>
+            </Layout.Section>
+          </Layout>
+        </Page>
+      </ClientOnly>
+    );
+  }
 
   if (apps.length === 0) {
     return (

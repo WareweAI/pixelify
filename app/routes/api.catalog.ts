@@ -274,11 +274,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const productsData = await productsRes.json();
       const products = productsData.data?.products?.edges || [];
       const fbProducts: any[] = [];
+      const uniqueProductIds = new Set<string>(); // Track unique products
 
       products.forEach((edge: any) => {
         const p = edge.node;
         const productId = p.id.split("/").pop();
         const variants = p.variants.edges;
+        
+        // Track unique product
+        uniqueProductIds.add(productId);
         
         if (variantSubmission === "first" && variants.length > 0) {
           fbProducts.push(makeFbProduct(p, variants[0].node, productId, shop, currency));
@@ -328,9 +332,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
       console.log(`[Create] Total products synced: ${synced}`);
 
-      // Save catalog to database - ensure productCount is integer
-      const finalSyncedCount = Math.max(0, Math.floor(Number(synced) || 0));
-      console.log(`[Create] DEBUG: Saving catalog with productCount = ${finalSyncedCount} (type: ${typeof finalSyncedCount})`);
+      // Save catalog to database - use unique product count, not variant count
+      const finalSyncedCount = Math.max(0, Math.floor(Number(uniqueProductIds.size) || 0));
+      console.log(`[Create] DEBUG: Saving catalog with productCount = ${finalSyncedCount} (unique products, not variants) (type: ${typeof finalSyncedCount})`);
       
       const catalog = await prisma.facebookCatalog.create({
         data: {
@@ -456,6 +460,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
 
       const fbProducts: any[] = [];
+      const uniqueProductIds = new Set<string>(); // Track unique products
 
       products.forEach((edge: any) => {
         const p = edge.node;
@@ -463,6 +468,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         const variants = p.variants.edges;
         
         console.log(`[Sync] Processing product: ${p.title} (${productId}) with ${variants.length} variants`);
+        
+        // Track unique product
+        uniqueProductIds.add(productId);
         
         // Validate product has required fields
         if (!p.title) {
@@ -673,9 +681,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       console.log(`[Sync] ✅ Sync complete! Total synced: ${synced} products`);
       
-      // Force integer type casting
-      const syncedCount = Math.max(0, Math.floor(Number(synced) || 0));
-      console.log(`[Sync] DEBUG: final syncedCount = ${syncedCount} (type: ${typeof syncedCount})`);
+      // Use unique product count, not variant count
+      const syncedCount = Math.max(0, Math.floor(Number(uniqueProductIds.size) || 0));
+      console.log(`[Sync] DEBUG: final syncedCount = ${syncedCount} (unique products, not variants) (type: ${typeof syncedCount})`);
 
       const updatedCatalog = await prisma.facebookCatalog.update({
         where: { id },
@@ -689,7 +697,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       return Response.json({ 
         success: true, 
-        message: `Synced ${synced} products!`,
+        message: `Synced ${uniqueProductIds.size} products!`,
         catalog: {
           id: updatedCatalog.id,
           catalogId: updatedCatalog.catalogId,

@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useFetcher, useNavigate } from "react-router";
 import { getShopifyInstance } from "../shopify.server";
-import prisma from "../db.server";
+import { checkThemeExtensionStatus } from "~/services/theme-extension-check.server";
 import {
   Page, Card, Button, TextField, Layout, Text, BlockStack, InlineStack,
   Banner, Select, Badge, Box, Spinner, Link, IndexTable,
@@ -31,7 +31,9 @@ interface Pixel { id: string; name: string; }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopify = getShopifyInstance();
-  if (!shopify?.authenticate) throw new Response("Shopify not configured", { status: 500 });
+  if (!shopify?.authenticate) {
+    throw new Response("Shopify configuration not found", { status: 500 });
+  }
 
   let session, admin;
   try {
@@ -53,138 +55,57 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const shop = session.shop;
 
-  // Get user first
-  const user = await prisma.user.findUnique({ where: { storeUrl: shop } });
-  if (!user) throw new Response("User not found", { status: 404 });
-
-  // Get apps with settings to find access token
-  const apps = await prisma.app.findMany({ 
-    where: { userId: user.id }, 
-    include: { settings: true } 
+  // Check theme extension status
+  const extensionStatus = await checkThemeExtensionStatus(admin);
+  
+  return Response.json({
+    shop,
+    extensionStatus,
   });
-  
-  console.log(`[Catalog Loader] Found ${apps.length} apps for user ${user.id}`);
-  
-  // Debug: Log all apps and their tokens
-  apps.forEach((app: any, index: number) => {
-    const hasToken = !!app.settings?.metaAccessToken;
-    const tokenPreview = app.settings?.metaAccessToken ? app.settings.metaAccessToken.substring(0, 20) + '...' : 'none';
-    console.log(`[Catalog Loader] App ${index + 1}: ${app.name}, hasSettings: ${!!app.settings}, hasToken: ${hasToken}, tokenPreview: ${tokenPreview}`);
-  });
-  
-  const appWithToken = apps.find((app: any) => app.settings?.metaAccessToken);
-  const accessToken = appWithToken?.settings?.metaAccessToken || null;
-  
-  console.log(`[Catalog Loader] User: ${user.id}, Apps: ${apps.length}, Has token: ${!!accessToken}`);
-
-  const [productCountRes, facebookUser, dbCatalogs] = await Promise.all([
-    admin.graphql(`query { products(first: 250, query: "status:active") { edges { node { id } } } }`)
-      .then(r => r.json())
-      .then(data => data.data?.products?.edges?.length || 0)
-      .catch(() => 0),
-    
-    accessToken
-      ? fetch(`https://graph.facebook.com/v18.0/me?fields=id,name,picture.type(large)&access_token=${accessToken}`)
-          .then(res => res.json())
-          .then(data => {
-            if (data.error) {
-              console.error(`[Catalog Loader] Facebook API error:`, data.error);
-              return null;
-            }
-            console.log(`[Catalog Loader] Facebook user: ${data.name}`);
-            return {
-              id: data.id,
-              name: data.name,
-              picture: data.picture?.data?.url || null,
-            };
-          })
-          .catch((err) => {
-            console.error(`[Catalog Loader] Facebook fetch error:`, err);
-            return null;
-          })
-      : Promise.resolve(null),
-    
-    // Get catalogs from DATABASE (only catalogs created through Pixelify)
-    prisma.facebookCatalog.findMany({
-      where: { userId: user.id },
-      orderBy: { createdAt: "desc" },
-    }).catch(() => []),
-  ]);
-
-  const productCount = productCountRes;
-
-  // Fetch actual product counts from Facebook for all catalogs to auto-fix incorrect counts
-  const catalogsWithCorrectCounts = await Promise.all(
-    dbCatalogs.map(async (cat: any) => {
-      try {
-        if (accessToken && cat.catalogId) {
-          console.log(`[Catalog Loader] Fetching actual count from Facebook for catalog ${cat.name}...`);
-          const countRes = await fetch(
-            `https://graph.facebook.com/v18.0/${cat.catalogId}/products?fields=id&limit=1&summary=true&access_token=${accessToken}`
-          );
-          const countData = await countRes.json();
-          
-          if (countData.summary?.total_count !== undefined) {
-            const actualCount = Math.max(0, Math.floor(countData.summary.total_count || 0));
-            console.log(`[Catalog Loader] Catalog ${cat.name}: DB has ${cat.productCount}, Facebook has ${actualCount}`);
-            
-            // If counts don't match, update database
-            if (actualCount !== cat.productCount) {
-              console.log(`[Catalog Loader] ⚠️ Mismatch detected! Updating database from ${cat.productCount} to ${actualCount}...`);
-              const updated = await prisma.facebookCatalog.update({
-                where: { id: cat.id },
-                data: { productCount: actualCount, lastSync: new Date() },
-              });
-              console.log(`[Catalog Loader] ✅ Updated catalog ${cat.name} productCount to ${updated.productCount}`);
-              return updated;
-            }
-          }
-        }
-      } catch (err) {
-        console.error(`[Catalog Loader] Error fetching count for ${cat.name}:`, err);
-      }
-      return cat;
-    })
-  );
-
-  const catalogs: Catalog[] = catalogsWithCorrectCounts.map((cat: any) => ({
-    id: cat.id,
-    catalogId: cat.catalogId,
-    name: cat.name,
-    pixelId: cat.pixelId,
-    pixelEnabled: cat.pixelEnabled,
-    autoSync: cat.autoSync,
-    productCount: cat.productCount,
-    lastSync: cat.lastSync?.toISOString() || null,
-    nextSync: cat.nextSync?.toISOString() || null,
-    syncStatus: cat.syncStatus,
-  }));
-
-  const syncedProductCount = catalogs.reduce((sum, c) => sum + c.productCount, 0);
-  const hasToken = !!accessToken;
-  const isConnected = hasToken && !!facebookUser;
-
-  console.log(`[Catalog Loader] ✅ Final counts - productCount: ${productCount}, syncedProductCount: ${syncedProductCount}`);
-
-  return { 
-    shop, 
-    hasToken, 
-    productCount, 
-    syncedProductCount, 
-    catalogs, 
-    userId: user.id,
-    facebookUser,
-    isConnected,
-  };
 };
 
 
 // Removed old action and makeFbProduct - now using /api/catalog for all operations
 
 export default function CatalogPage() {
-  const { shop, hasToken, productCount, syncedProductCount, catalogs: initialCatalogs, facebookUser: initialFacebookUser, isConnected } = useLoaderData<typeof loader>();
+  const { shop, extensionStatus } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
   const navigate = useNavigate();
+
+  // State for API data
+  const [apiData, setApiData] = useState<any>(null);
+  const [dataLoading, setDataLoading] = useState(true);
+  const [dataError, setDataError] = useState<string | null>(null);
+
+  // Fetch data from API on mount
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setDataLoading(true);
+        const response = await fetch('/api/catalog-data');
+        if (!response.ok) {
+          throw new Error('Failed to fetch catalog data');
+        }
+        const data = await response.json();
+        setApiData(data);
+        setDataError(null);
+      } catch (error: any) {
+        console.error('[Catalog] Error fetching data:', error);
+        setDataError(error.message);
+      } finally {
+        setDataLoading(false);
+      }
+    };
+
+    fetchData();
+  }, []);
+
+  const hasToken = apiData?.hasToken || false;
+  const productCount = apiData?.productCount || 0;
+  const syncedProductCount = apiData?.syncedProductCount || 0;
+  const initialCatalogs = apiData?.catalogs || [];
+  const initialFacebookUser = apiData?.facebookUser || null;
+  const isConnected = apiData?.isConnected || false;
 
   const [catalogs, setCatalogs] = useState<Catalog[]>(initialCatalogs); // Now mutable for optimistic updates
   const [facebookUser] = useState<{ id: string; name: string; picture?: string } | null>(initialFacebookUser); // Read-only
@@ -205,6 +126,13 @@ export default function CatalogPage() {
   const [activePopover, setActivePopover] = useState<string | null>(null);
   const [filterBusiness, setFilterBusiness] = useState<string>("all");
   const [isLoadingFilterBusinesses, setIsLoadingFilterBusinesses] = useState(false);
+
+  // Update catalogs when apiData changes
+  useEffect(() => {
+    if (apiData?.catalogs) {
+      setCatalogs(apiData.catalogs);
+    }
+  }, [apiData]);
 
   const isLoading = fetcher.state !== "idle";
   const filteredCatalogs = catalogs.filter(c => {
@@ -353,6 +281,45 @@ export default function CatalogPage() {
   };
 
   const formatDate = (d: string | null) => d ? new Date(d).toLocaleString("en-US", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).replace(",", "") : "-";
+
+  // Show loading state while fetching data
+  if (dataLoading) {
+    return (
+      <Page title="Catalog manager" fullWidth>
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <div style={{ padding: '60px', textAlign: 'center' }}>
+                <Spinner size="large" />
+                <div style={{ marginTop: '16px' }}>
+                  <Text as="p">Loading catalog data...</Text>
+                </div>
+              </div>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
+
+  // Show error state
+  if (dataError || !apiData) {
+    return (
+      <Page title="Catalog manager" fullWidth>
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <div style={{ padding: '60px', textAlign: 'center' }}>
+                <div style={{ fontSize: '48px', marginBottom: '16px' }}>❌</div>
+                <Text variant="headingMd" as="h3">Error loading catalog data</Text>
+                <p style={{ marginTop: '8px', color: '#64748b' }}>{dataError || 'Unknown error'}</p>
+              </div>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
 
   if (!hasToken) {
     return (

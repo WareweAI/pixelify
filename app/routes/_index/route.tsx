@@ -125,8 +125,15 @@ export default function App() {
                 id="shopDomain"
                 placeholder="your-store.myshopify.com"
                 required
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    document.getElementById('installButton')?.click();
+                  }
+                }}
               />
               <button 
+                id="installButton"
                 className={styles.ctaButton} 
                 onClick={() => {
                   const shopDomainElement = document.getElementById('shopDomain') as HTMLInputElement;
@@ -151,9 +158,8 @@ export default function App() {
                       return;
                     }
                     
-                    // Redirect to their specific store's app installation page
-                    const installUrl = `https://${shopDomain}.myshopify.com/admin/oauth/authorize?client_id=22e1740803c975ae11fd5bc9b23c7dd4&scope=read_analytics,read_customers,read_orders,read_products,read_checkouts,read_themes,write_script_tags&redirect_uri=https://pixelify-red.vercel.app/auth&state=${Date.now()}`;
-                    window.open(installUrl, '_blank');
+                    // Redirect to auth/login with shop parameter
+                    window.location.href = `/auth/login?shop=${shopDomain}.myshopify.com`;
                   } else {
                     alert('Please enter your Shopify store domain');
                   }

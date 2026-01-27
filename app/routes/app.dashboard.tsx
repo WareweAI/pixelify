@@ -3,7 +3,6 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useFetcher, useSearchParams } from "react-router";
 import { getShopifyInstance } from "../shopify.server";
 import prisma from "../db.server";
-import { generateRandomPassword } from "~/lib/crypto.server";
 import { createAppWithSettings, renameApp, deleteAppWithData } from "~/services/app.service.server";
 
 import {
@@ -27,6 +26,8 @@ import {
 import { CheckIcon, ConnectIcon, ExportIcon } from "@shopify/polaris-icons";
 import { ClientOnly } from "~/components/ClientOnly";
 import { PageSelector } from "~/components/PageSelector";
+import { ThemeExtensionGuard } from "~/components/ThemeExtensionGuard";
+import { ThemeExtensionReminder } from "~/components/ThemeExtensionReminder";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopify = getShopifyInstance();
@@ -36,198 +37,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     throw new Response("Shopify configuration not found", { status: 500 });
   }
 
-  let session, admin;
+  // Only handle Shopify authentication
+  let session;
   try {
     const authResult = await shopify.authenticate.admin(request);
     session = authResult.session;
-    admin = authResult.admin;
   } catch (error) {
     if (error instanceof Response && error.status === 302) throw error;
     console.error("Authentication error:", error);
-    throw new Response("Unable to authenticate. Database connection may be unavailable.", { status: 503 });
+    throw new Response("Unable to authenticate", { status: 503 });
   }
-  const shop = session.shop;
   
-  const url = new URL(request.url);
-  const purchaseOffset = parseInt(url.searchParams.get('purchaseOffset') || '0');
-  const purchaseLimit = 10;
+  const shop = session.shop;
 
-  try {
-    let user = await prisma.user.findUnique({ where: { storeUrl: shop } });
-
-    if (!user) {
-      user = await prisma.user.create({
-        data: { storeUrl: shop, password: generateRandomPassword() },
-      });
-    }
-
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    // Fetch dynamic product and collection pages from Shopify
-    let storePages = [
-      { label: "All Pages", value: "all", type: "system" },
-      { label: "Home Page", value: "/", type: "system" },
-      { label: "Cart Page", value: "/cart", type: "system" },
-      { label: "Checkout Page", value: "/checkout", type: "system" },
-      { label: "Search Results", value: "/search", type: "system" },
-      { label: "Account Page", value: "/account", type: "system" },
-    ];
-
-    try {
-      // Fetch products and collections from Shopify in parallel
-      const [productsRes, collectionsRes] = await Promise.all([
-        admin.graphql(`
-          query {
-            products(first: 250, query: "status:active") {
-              edges {
-                node {
-                  id
-                  title
-                  handle
-                }
-              }
-            }
-          }
-        `),
-        admin.graphql(`
-          query {
-            collections(first: 50, sortKey: TITLE) {
-              edges {
-                node {
-                  id
-                  title
-                  handle
-                }
-              }
-            }
-          }
-        `)
-      ]);
-      
-      const productsData = await productsRes.json();
-      const collectionsData = await collectionsRes.json();
-      
-      const products = productsData.data?.products?.edges || [];
-      const collections = collectionsData.data?.collections?.edges || [];
-      
-      console.log(`[Dashboard] Fetched ${products.length} products and ${collections.length} collections from Shopify`);
-      
-      // Add collection pages
-      const collectionPages = collections.map((edge: any) => ({
-        label: `Collection: ${edge.node.title}`,
-        value: `/collections/${edge.node.handle}`,
-        type: "collection",
-        collectionId: edge.node.id,
-      }));
-      
-      // Add individual product pages
-      const productPages = products.map((edge: any) => ({
-        label: `Product: ${edge.node.title}`,
-        value: `/products/${edge.node.handle}`,
-        type: "product",
-        productId: edge.node.id,
-      }));
-      
-      storePages = [...storePages, ...collectionPages, ...productPages];
-      console.log(`[Dashboard] Total store pages: ${storePages.length} (${collectionPages.length} collections + ${productPages.length} products + 6 system)`);
-    } catch (error) {
-      console.error("[Dashboard] Error fetching products/collections:", error);
-      // Continue with system pages only if fetch fails
-    }
-
-    const [apps, totalPurchaseEvents, recentPurchaseEvents, todayEvents] = await Promise.all([
-      // Apps with counts - single optimized query
-      prisma.$queryRaw`
-        SELECT 
-          a."id", a."appId", a."appToken", a."name", a."plan", a."welcomeEmailSent",
-          a."enabled", a."shopEmail", a."createdAt", a."userId", a."websiteDomain",
-          s."metaPixelId", s."metaPixelEnabled", s."timezone",
-          COALESCE((SELECT COUNT(*)::int FROM "Event" e WHERE e."appId" = a."id"), 0) as "eventCount",
-          COALESCE((SELECT COUNT(*)::int FROM "AnalyticsSession" ase WHERE ase."appId" = a."id"), 0) as "sessionCount"
-        FROM "App" a
-        LEFT JOIN "AppSettings" s ON s."appId" = a."id"
-        WHERE a."userId" = ${user.id}
-        ORDER BY a."createdAt" DESC
-      `,
-      // Purchase count
-      prisma.event.count({
-        where: { app: { userId: user.id }, eventName: "Purchase", createdAt: { gte: sevenDaysAgo } },
-      }),
-      // Recent purchases
-      prisma.event.findMany({
-        where: { app: { userId: user.id }, eventName: "Purchase", createdAt: { gte: sevenDaysAgo } },
-        orderBy: { createdAt: "desc" },
-        take: purchaseLimit,
-        skip: purchaseOffset,
-        include: { app: { select: { name: true, appId: true } } },
-      }),
-      // Today's events
-      prisma.event.count({
-        where: { app: { userId: user.id }, createdAt: { gte: today } },
-      }),
-    ]);
-
-    const transformedApps = (apps as any[]).map((app: any) => ({
-      ...app,
-      _count: { events: app.eventCount || 0, analyticsSessions: app.sessionCount || 0 },
-      settings: { metaPixelId: app.metaPixelId, metaPixelEnabled: app.metaPixelEnabled || false, timezone: app.timezone },
-    }));
-
-    const totalPixels = transformedApps.length;
-    const totalEvents = transformedApps.reduce((sum: number, app: any) => sum + app._count.events, 0);
-    const totalSessions = transformedApps.reduce((sum: number, app: any) => sum + app._count.analyticsSessions, 0);
-
-    return {
-      apps: transformedApps,
-      hasPixels: transformedApps.length > 0,
-      stats: { totalPixels, totalEvents, totalSessions, todayEvents },
-      recentPurchaseEvents: recentPurchaseEvents.map((e: any) => ({
-        id: e.id,
-        orderId: e.customData?.order_id || e.productId || '-',
-        value: e.value || (typeof e.customData?.value === 'number' ? e.customData.value : parseFloat(e.customData?.value) || null),
-        currency: e.currency || e.customData?.currency || 'USD',
-        pixelId: e.app.appId,
-        source: e.utmSource || '-',
-        purchaseTime: e.createdAt,
-      })),
-      totalPurchaseEvents,
-      purchaseOffset,
-      purchaseLimit,
-      storePages,
-    };
-  } catch (error: any) {
-    console.error("[Dashboard Loader] Database error:", error);
-    
-    // Handle connection pool timeouts gracefully
-    if (error.message?.includes('connection pool') || 
-        error.message?.includes('Timed out') ||
-        error.code === 'P2024') {
-      console.error("[Dashboard Loader] Connection pool timeout - returning minimal data");
-      
-      // Return minimal data to keep the app functional
-      return {
-        apps: [],
-        hasPixels: false,
-        stats: {
-          totalPixels: 0,
-          totalEvents: 0,
-          totalSessions: 0,
-          todayEvents: 0,
-        },
-        recentPurchaseEvents: [],
-        totalPurchaseEvents: 0,
-        purchaseOffset: 0,
-        purchaseLimit: 10,
-        connectionError: true,
-      };
-    }
-    
-    // For other database errors, throw a proper error response
-    throw new Response("Database temporarily unavailable. Please try again later.", { status: 503 });
-  }
+  // Return only shop info - all data will be fetched from API
+  return {
+    shop,
+  };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -731,10 +557,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function DashboardPage() {
-  const { apps, hasPixels, stats, recentPurchaseEvents, totalPurchaseEvents, purchaseOffset, purchaseLimit, connectionError, storePages } = useLoaderData<typeof loader>();
+  const { shop } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
   const [searchParams] = useSearchParams();
   const [mounted, setMounted] = useState(false);
+  
+  // Dashboard data state (loaded from API)
+  const [dashboardData, setDashboardData] = useState<any>(null);
+  const [isLoadingData, setIsLoadingData] = useState(true);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
+  
+  // Modal and UI state
   const [currentStep, setCurrentStep] = useState(1);
   const [inputMethod, setInputMethod] = useState("auto");
   const [showFacebookModal, setShowFacebookModal] = useState(false);
@@ -761,6 +594,50 @@ export default function DashboardPage() {
   // Timezone state
   const [selectedTimezone, setSelectedTimezone] = useState("GMT+0");
   const [createdAppId, setCreatedAppId] = useState<string | null>(null);
+  
+  // Load dashboard data from API on mount
+  useEffect(() => {
+    const loadDashboardData = async () => {
+      try {
+        setIsLoadingData(true);
+        setDashboardError(null);
+        const response = await fetch('/api/dashboard');
+        
+        if (!response.ok) {
+          throw new Error(`Failed to load dashboard: ${response.status} ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.error) {
+          console.error('[Dashboard] Error loading data:', data.error);
+          setDashboardError(data.error);
+        } else {
+          setDashboardData(data);
+          setDashboardError(null);
+        }
+      } catch (error: any) {
+        console.error('[Dashboard] Failed to load data:', error);
+        setDashboardError(error.message || 'Failed to load dashboard data');
+      } finally {
+        setIsLoadingData(false);
+      }
+    };
+    
+    loadDashboardData();
+  }, []);
+  
+  // Extract data from dashboardData with fallbacks
+  const apps = dashboardData?.apps || [];
+  const hasPixels = apps.length > 0;
+  const hasValidFacebookToken = dashboardData?.hasValidFacebookToken || false;
+  const stats = dashboardData?.stats || { totalPixels: 0, totalEvents: 0, totalSessions: 0, todayEvents: 0 };
+  const recentPurchaseEvents = dashboardData?.recentPurchaseEvents || [];
+  const totalPurchaseEvents = dashboardData?.totalPurchaseEvents || 0;
+  const purchaseOffset = dashboardData?.purchaseOffset || 0;
+  const purchaseLimit = dashboardData?.purchaseLimit || 10;
+  const storePages = dashboardData?.storePages || [];
+  const connectionError = dashboardData?.connectionError || false;
   
   const timezoneOptions = [
     { label: "(GMT+0:00) UTC - Coordinated Universal Time", value: "GMT+0" },
@@ -1091,6 +968,7 @@ export default function DashboardPage() {
     
     console.log('[Dashboard] Saved token exists:', !!savedToken);
     console.log('[Dashboard] Saved user exists:', !!savedUser);
+    console.log('[Dashboard] Server has valid token:', hasValidFacebookToken);
     
     if (savedToken) {
       console.log('[Dashboard] ✅ Found saved Facebook token, restoring connection...');
@@ -1122,10 +1000,15 @@ export default function DashboardPage() {
           { method: "POST" }
         );
       }
+    } else if (hasValidFacebookToken) {
+      // Server indicates we have a valid token but localStorage is empty
+      // This can happen after browser refresh or different device
+      console.log('[Dashboard] ⚠️ Server has valid token but localStorage is empty - showing connected state');
+      setIsConnectedToFacebook(true);
     } else {
       console.log('[Dashboard] No saved Facebook token found');
     }
-  }, [mounted, fetcher]);
+  }, [mounted, fetcher, hasValidFacebookToken]);
 
   // Handle Facebook OAuth callback
   useEffect(() => {
@@ -1600,10 +1483,46 @@ export default function DashboardPage() {
     }
   }, [snippetText]);
 
+  // Show empty loading UI while data is being fetched
+  if (isLoadingData) {
+    return (
+      <Page title="Dashboard" fullWidth>
+        <Layout>
+          <Layout.Section fullWidth>
+            <Card>
+              <div style={{ padding: '60px', textAlign: 'center' }}>
+                <div style={{ marginBottom: '16px' }}>
+                  <div style={{
+                    width: '48px',
+                    height: '48px',
+                    margin: '0 auto',
+                    border: '4px solid #e1e3e5',
+                    borderTopColor: '#008060',
+                    borderRadius: '50%',
+                    animation: 'spin 1s linear infinite'
+                  }} />
+                  <style>{`
+                    @keyframes spin {
+                      to { transform: rotate(360deg); }
+                    }
+                  `}</style>
+                </div>
+                <Text as="p" variant="bodyLg" tone="subdued">
+                  Loading dashboard...
+                </Text>
+              </div>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
+
   // If user already has pixels, show dashboard with pixel management
   if (hasPixels) {
     return (
-      <Page 
+      <ThemeExtensionGuard shop={shop} enableStrictMode={true}>
+        <Page 
         title="Pixel Dashboard"
         subtitle="Facebook Pixel & Conversion Tracking for Shopify"
         primaryAction={{
@@ -1611,15 +1530,21 @@ export default function DashboardPage() {
           onAction: () => setShowEnhancedCreateModal(true),
         }}
         secondaryActions={[
-          {
+          // Only show Connect Facebook button if not already connected (check both client and server state)
+          ...(mounted && !isConnectedToFacebook && !hasValidFacebookToken ? [{
             content: "Connect Facebook",
             icon: ConnectIcon,
             onAction: handleConnectToFacebook,
-          }
+          }] : [])
         ]}
         fullWidth
       >
         <Layout>
+          {/* Theme Extension Reminder */}
+          <Layout.Section fullWidth>
+            <ThemeExtensionReminder shop={shop} />
+          </Layout.Section>
+
           {/* Success/Error Banner */}
           {successMessage && (
             <Layout.Section fullWidth>
@@ -2462,7 +2387,13 @@ export default function DashboardPage() {
                           </Text>
                         </div>
 
-                        <Button onClick={() => setShowPageSelector(true)} variant="secondary">
+                        <Button 
+                          onClick={() => {
+                            console.log('[Dashboard] Opening page selector, available pages:', pageTypeOptions.length);
+                            setShowPageSelector(true);
+                          }} 
+                          variant="secondary"
+                        >
                           {enhancedCreateForm.selectedPageTypes.length > 0 
                             ? `Selected ${enhancedCreateForm.selectedPageTypes.length} pages` 
                             : "Select Pages"}
@@ -2713,15 +2644,17 @@ export default function DashboardPage() {
           </Modal>
         )}
       </Page>
+      </ThemeExtensionGuard>
     );
   }
 
   return (
-    <div style={{ 
-      backgroundColor: "#f6f6f7", 
-      minHeight: "100vh", 
-      padding: "40px 20px" 
-    }}>
+    <ThemeExtensionGuard shop={shop} enableStrictMode={true}>
+      <div style={{ 
+        backgroundColor: "#f6f6f7", 
+        minHeight: "100vh", 
+        padding: "40px 20px" 
+      }}>
       <div style={{ 
         maxWidth: "1200px", 
         margin: "0 auto" 
@@ -3550,8 +3483,12 @@ export default function DashboardPage() {
       {/* Page Selector Modal */}
       <PageSelector
         open={showPageSelector}
-        onClose={() => setShowPageSelector(false)}
+        onClose={() => {
+          console.log('[PageSelector] Closing modal');
+          setShowPageSelector(false);
+        }}
         onSelectPages={(pages) => {
+          console.log('[PageSelector] Selected pages:', pages);
           setEnhancedCreateForm(prev => ({
             ...prev,
             selectedPageTypes: pages
@@ -3561,5 +3498,6 @@ export default function DashboardPage() {
         availablePages={pageTypeOptions.filter((p: any) => p.value !== "all")}
       />
     </div>
+    </ThemeExtensionGuard>
   );
 }

@@ -2,7 +2,8 @@
   import type { LoaderFunctionArgs } from "react-router";
   import { useLoaderData } from "react-router";
   import { getShopifyInstance } from "../shopify.server";
-  import prisma from "../db.server";
+  import { checkThemeExtensionStatus } from "~/services/theme-extension-check.server";
+  import { ThemeExtensionGuard } from "~/components/ThemeExtensionGuard";
   import {
     Page,
     Layout,
@@ -36,32 +37,20 @@
 
   export const loader = async ({ request }: LoaderFunctionArgs) => {
     const shopify = getShopifyInstance();
-    const { session } = await shopify.authenticate.admin(request);
+    if (!shopify?.authenticate) {
+      throw new Response("Shopify configuration not found", { status: 500 });
+    }
+    
+    const { session, admin } = await shopify.authenticate.admin(request);
     const shop = session.shop;
 
-    const user = await prisma.user.findUnique({
-      where: { storeUrl: shop },
+    // Check theme extension status
+    const extensionStatus = await checkThemeExtensionStatus(admin);
+    
+    return Response.json({
+      shop,
+      extensionStatus,
     });
-
-    if (!user) {
-      return { apps: [] };
-    }
-
-    const apps = await prisma.app.findMany({
-      where: { userId: user.id },
-      select: {
-        id: true,
-        appId: true,
-        name: true,
-        settings: {
-          select: {
-            metaPixelId: true,
-          },
-        },
-      },
-    });
-
-    return { apps };
   };
 
   interface AnalyticsData {
@@ -97,8 +86,14 @@
   }
 
   export default function AnalyticsPage() {
-    const { apps } = useLoaderData<typeof loader>();
-    const [selectedApp, setSelectedApp] = useState(apps[0]?.appId || "");
+    const { shop, extensionStatus } = useLoaderData<typeof loader>();
+    
+    // State for apps data
+    const [apps, setApps] = useState<any[]>([]);
+    const [appsLoading, setAppsLoading] = useState(true);
+    const [appsError, setAppsError] = useState<string | null>(null);
+    
+    const [selectedApp, setSelectedApp] = useState("");
     const [dateRange, setDateRange] = useState("7d");
     const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
     const [loading, setLoading] = useState(false);
@@ -108,6 +103,32 @@
     const [conversionError, setConversionError] = useState("");
     // Debounce state
     const [debounceTimer, setDebounceTimer] = useState<NodeJS.Timeout | null>(null);
+
+    // Fetch apps from API on mount
+    useEffect(() => {
+      const fetchApps = async () => {
+        try {
+          setAppsLoading(true);
+          const response = await fetch('/api/analytics-data');
+          if (!response.ok) {
+            throw new Error('Failed to fetch apps data');
+          }
+          const data = await response.json();
+          setApps(data.apps || []);
+          if (data.apps && data.apps.length > 0) {
+            setSelectedApp(data.apps[0].appId);
+          }
+          setAppsError(null);
+        } catch (error: any) {
+          console.error('[Analytics] Error fetching apps:', error);
+          setAppsError(error.message);
+        } finally {
+          setAppsLoading(false);
+        }
+      };
+
+      fetchApps();
+    }, []);
 
     // Cache for analytics data
     const getCacheKey = (appId: string, range: string) => `analytics_${appId}_${range}`;
@@ -255,9 +276,53 @@
       }
     };
 
+    // Show loading state while fetching apps
+    if (appsLoading) {
+      return (
+        <ThemeExtensionGuard shop={shop} enableStrictMode={true}>
+          <Page title="Analytics" fullWidth>
+            <Layout>
+              <Layout.Section fullWidth>
+                <Card>
+                  <div style={{ padding: '60px', textAlign: 'center' }}>
+                    <Spinner size="large" />
+                    <div style={{ marginTop: '16px' }}>
+                      <Text as="p">Loading analytics data...</Text>
+                    </div>
+                  </div>
+                </Card>
+              </Layout.Section>
+            </Layout>
+          </Page>
+        </ThemeExtensionGuard>
+      );
+    }
+
+    // Show error state
+    if (appsError) {
+      return (
+        <ThemeExtensionGuard shop={shop} enableStrictMode={true}>
+          <Page title="Analytics" fullWidth>
+            <Layout>
+              <Layout.Section fullWidth>
+                <Card>
+                  <div style={{ padding: '60px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '48px', marginBottom: '16px' }}>❌</div>
+                    <Text variant="headingMd" as="h3">Error loading analytics data</Text>
+                    <p style={{ marginTop: '8px', color: '#64748b' }}>{appsError}</p>
+                  </div>
+                </Card>
+              </Layout.Section>
+            </Layout>
+          </Page>
+        </ThemeExtensionGuard>
+      );
+    }
+
     if (apps.length === 0) {
       return (
-        <Page title="Analytics" fullWidth>
+        <ThemeExtensionGuard shop={shop} enableStrictMode={true}>
+          <Page title="Analytics" fullWidth>
           <Layout>
             <Layout.Section fullWidth>
               <Card>
@@ -272,11 +337,13 @@
             </Layout.Section>
           </Layout>
         </Page>
+        </ThemeExtensionGuard>
       );
     }
 
     return (
-      <Page
+      <ThemeExtensionGuard shop={shop} enableStrictMode={true}>
+        <Page
         title="Analytics Dashboard"
         subtitle="Track your website performance and user behavior"
         fullWidth
@@ -309,7 +376,7 @@
                     <Button
                       icon={ExportIcon}
                       onClick={() => {
-                        if (!analytics) return;
+                        if (!analytics || !analytics.overview) return;
 
                         // Create CSV content
                         const csvSections = [];
@@ -325,74 +392,88 @@
                         csvSections.push('');
 
                         // Daily stats section
-                        csvSections.push('DAILY TRENDS');
-                        csvSections.push('Date,Pageviews,Unique Users,Sessions');
-                        analytics.dailyStats.forEach(day => {
-                          csvSections.push(`${day.date},${day.pageviews},${day.uniqueUsers},${day.sessions}`);
-                        });
-                        csvSections.push('');
+                        if (analytics.dailyStats && analytics.dailyStats.length > 0) {
+                          csvSections.push('DAILY TRENDS');
+                          csvSections.push('Date,Pageviews,Unique Users,Sessions');
+                          analytics.dailyStats.forEach(day => {
+                            csvSections.push(`${day.date},${day.pageviews},${day.uniqueUsers},${day.sessions}`);
+                          });
+                          csvSections.push('');
+                        }
 
                         // Device types section
-                        csvSections.push('DEVICE TYPES');
-                        csvSections.push('Device Type,Count');
-                        analytics.deviceTypes.forEach(device => {
-                          csvSections.push(`${device.type},${device.count}`);
-                        });
-                        csvSections.push('');
+                        if (analytics.deviceTypes && analytics.deviceTypes.length > 0) {
+                          csvSections.push('DEVICE TYPES');
+                          csvSections.push('Device Type,Count');
+                          analytics.deviceTypes.forEach(device => {
+                            csvSections.push(`${device.type},${device.count}`);
+                          });
+                          csvSections.push('');
+                        }
 
                         // Top pages section
-                        csvSections.push('TOP PAGES');
-                        csvSections.push('Page,Views');
-                        analytics.topPages.forEach(page => {
-                          let pathname = page.url || "-";
-                          try {
-                            pathname = page.url ? new URL(page.url).pathname : "-";
-                          } catch {
-                            pathname = page.url || "-";
-                          }
-                          csvSections.push(`"${pathname}",${page.count}`);
-                        });
-                        csvSections.push('');
+                        if (analytics.topPages && analytics.topPages.length > 0) {
+                          csvSections.push('TOP PAGES');
+                          csvSections.push('Page,Views');
+                          analytics.topPages.forEach(page => {
+                            let pathname = page.url || "-";
+                            try {
+                              pathname = page.url ? new URL(page.url).pathname : "-";
+                            } catch {
+                              pathname = page.url || "-";
+                            }
+                            csvSections.push(`"${pathname}",${page.count}`);
+                          });
+                          csvSections.push('');
+                        }
 
                         // Traffic sources section
-                        csvSections.push('TRAFFIC SOURCES');
-                        csvSections.push('Source,Visitors');
-                        analytics.topReferrers.forEach(ref => {
-                          let domain = ref.referrer || "Direct";
-                          try {
-                            if (ref.referrer) {
-                              domain = new URL(ref.referrer).hostname;
+                        if (analytics.topReferrers && analytics.topReferrers.length > 0) {
+                          csvSections.push('TRAFFIC SOURCES');
+                          csvSections.push('Source,Visitors');
+                          analytics.topReferrers.forEach(ref => {
+                            let domain = ref.referrer || "Direct";
+                            try {
+                              if (ref.referrer) {
+                                domain = new URL(ref.referrer).hostname;
+                              }
+                            } catch {
+                              domain = ref.referrer || "Direct";
                             }
-                          } catch {
-                            domain = ref.referrer || "Direct";
-                          }
-                          csvSections.push(`"${domain}",${ref.count}`);
-                        });
-                        csvSections.push('');
+                            csvSections.push(`"${domain}",${ref.count}`);
+                          });
+                          csvSections.push('');
+                        }
 
                         // Top countries section
-                        csvSections.push('TOP COUNTRIES');
-                        csvSections.push('Country,Visitors');
-                        analytics.topCountries.forEach(country => {
-                          csvSections.push(`"${country.country}",${country.count}`);
-                        });
-                        csvSections.push('');
+                        if (analytics.topCountries && analytics.topCountries.length > 0) {
+                          csvSections.push('TOP COUNTRIES');
+                          csvSections.push('Country,Visitors');
+                          analytics.topCountries.forEach(country => {
+                            csvSections.push(`"${country.country}",${country.count}`);
+                          });
+                          csvSections.push('');
+                        }
 
                         // Top browsers section
-                        csvSections.push('TOP BROWSERS');
-                        csvSections.push('Browser,Visitors');
-                        analytics.topBrowsers.forEach(browser => {
-                          csvSections.push(`"${browser.browser}",${browser.count}`);
-                        });
-                        csvSections.push('');
+                        if (analytics.topBrowsers && analytics.topBrowsers.length > 0) {
+                          csvSections.push('TOP BROWSERS');
+                          csvSections.push('Browser,Visitors');
+                          analytics.topBrowsers.forEach(browser => {
+                            csvSections.push(`"${browser.browser}",${browser.count}`);
+                          });
+                          csvSections.push('');
+                        }
 
                         // Top events section
-                        csvSections.push('TOP EVENTS');
-                        csvSections.push('Event,Count');
-                        analytics.topEvents.forEach(event => {
-                          csvSections.push(`"${event.event}",${event.count}`);
-                        });
-                        csvSections.push('');
+                        if (analytics.topEvents && analytics.topEvents.length > 0) {
+                          csvSections.push('TOP EVENTS');
+                          csvSections.push('Event,Count');
+                          analytics.topEvents.forEach(event => {
+                            csvSections.push(`"${event.event}",${event.count}`);
+                          });
+                          csvSections.push('');
+                        }
 
 
                         // Join all sections
@@ -409,7 +490,7 @@
                         link.click();
                         document.body.removeChild(link);
                       }}
-                      disabled={!analytics}
+                      disabled={!analytics || !analytics.overview}
                     >
                       Export CSV
                     </Button>
@@ -441,7 +522,7 @@
                 </BlockStack>
               </Card>
             </Layout.Section>
-          ) : analytics ? (
+          ) : analytics && analytics.overview ? (
             <>
               {/* Key Metrics Cards */}
               <Layout.Section fullWidth>
@@ -452,7 +533,7 @@
                         <Icon source={ViewIcon} tone="base" />
                         <BlockStack gap="100">
                           <Text variant="headingXl" as="h3">
-                            {formatNumber(analytics.overview.pageviews)}
+                            {formatNumber(analytics.overview.pageviews || 0)}
                           </Text>
                           <Text variant="bodySm" as="p" tone="subdued">
                             Pageviews
@@ -468,7 +549,7 @@
                         <Icon source={PersonIcon} tone="base" />
                         <BlockStack gap="100">
                           <Text variant="headingXl" as="h3">
-                            {formatNumber(analytics.overview.uniqueVisitors)}
+                            {formatNumber(analytics.overview.uniqueVisitors || 0)}
                           </Text>
                           <Text variant="bodySm" as="p" tone="subdued">
                             Unique Visitors
@@ -484,7 +565,7 @@
                         <Icon source={ClockIcon} tone="base" />
                         <BlockStack gap="100">
                           <Text variant="headingXl" as="h3">
-                            {formatNumber(analytics.overview.sessions)}
+                            {formatNumber(analytics.overview.sessions || 0)}
                           </Text>
                           <Text variant="bodySm" as="p" tone="subdued">
                             Sessions
@@ -500,7 +581,7 @@
                         <Icon source={CheckIcon} tone="base" />
                         <BlockStack gap="100">
                           <Text variant="headingXl" as="h3">
-                            {formatNumber(analytics.overview.totalEvents)}
+                            {formatNumber(analytics.overview.totalEvents || 0)}
                           </Text>
                           <Text variant="bodySm" as="p" tone="subdued">
                             Total Events
@@ -584,7 +665,7 @@
                       <BlockStack gap="400">
                         <Text variant="headingMd" as="h3">Daily Trends</Text>
 
-                        {analytics.dailyStats.length > 0 && (
+                        {analytics.dailyStats && analytics.dailyStats.length > 0 && (
                           <Box padding="400" background="bg-surface-secondary" borderRadius="200">
                             <InlineStack gap="100" align="end" blockAlign="end">
                               {analytics.dailyStats.map((day, idx) => {
@@ -628,7 +709,7 @@
                       <BlockStack gap="400">
                         <Text variant="headingMd" as="h3">Device Types</Text>
                         <BlockStack gap="300">
-                          {analytics.deviceTypes.map((device, idx) => {
+                          {analytics.deviceTypes && analytics.deviceTypes.map((device, idx) => {
                             const total = analytics.deviceTypes.reduce((sum, d) => sum + d.count, 0);
                             const percentage = total > 0 ? (device.count / total) * 100 : 0;
                             return (
@@ -666,7 +747,7 @@
                       <BlockStack gap="400">
                         <Text variant="headingMd" as="h3">Top Pages</Text>
 
-                        {analytics.topPages.length > 0 ? (
+                        {analytics.topPages && analytics.topPages.length > 0 ? (
                           <DataTable
                             columnContentTypes={['text', 'numeric']}
                             headings={['Page', 'Views']}
@@ -695,7 +776,7 @@
                       <BlockStack gap="400">
                         <Text variant="headingMd" as="h3">Traffic Sources</Text>
 
-                        {analytics.topReferrers.length > 0 ? (
+                        {analytics.topReferrers && analytics.topReferrers.length > 0 ? (
                           <DataTable
                             columnContentTypes={['text', 'numeric']}
                             headings={['Source', 'Visitors']}
@@ -738,5 +819,6 @@
           )}
         </Layout>
       </Page>
+      </ThemeExtensionGuard>
     );
   }

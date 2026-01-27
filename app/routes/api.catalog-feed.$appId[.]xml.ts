@@ -124,7 +124,7 @@ async function fetchShopifyProducts(shop: string, accessToken: string) {
     `;
 
     try {
-      const response = await fetch(
+      const response: Response = await fetch(
         `https://${shop}/admin/api/2024-01/graphql.json`,
         {
           method: "POST",
@@ -136,7 +136,7 @@ async function fetchShopifyProducts(shop: string, accessToken: string) {
         }
       );
 
-      const data = await response.json();
+      const data: any = await response.json();
       
       if (data.errors) {
         console.error("GraphQL errors:", data.errors);
