@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 import { getShopifyInstance } from "../shopify.server";
-import { checkThemeExtensionStatus } from "~/services/theme-extension-check.server";
 import {
   Page,
   Layout,
@@ -26,13 +25,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   
   const { session, admin } = await shopify.authenticate.admin(request);
   const shop = session.shop;
-
-  // Check theme extension status
-  const extensionStatus = await checkThemeExtensionStatus(admin);
   
   return Response.json({
     shop,
-    extensionStatus,
   });
 };
 

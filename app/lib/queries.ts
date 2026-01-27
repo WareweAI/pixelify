@@ -105,3 +105,35 @@ export const SEARCH_PRODUCTS_QUERY = `
     }
   }
 `;
+
+export const STORE_PAGES_QUERY = `
+  query GetStoreContent {
+    shop {
+      name
+    }
+    collections(first: 250) {
+      edges {
+        node {
+          id
+          title
+          handle
+        }
+      }
+      pageInfo {
+        hasNextPage
+      }
+    }
+    products(first: 250, query: "status:active") {
+      edges {
+        node {
+          id
+          title
+          handle
+        }
+      }
+      pageInfo {
+        hasNextPage
+      }
+    }
+  }
+`;

@@ -87,6 +87,7 @@ export function PageSelector({
       primaryAction={{
         content: "Add",
         onAction: handleSave,
+        disabled: selectedPages.length === 0,
       }}
       secondaryActions={[
         {
@@ -108,6 +109,19 @@ export function PageSelector({
             clearButton
             onClearButtonClick={() => setSearchQuery("")}
           />
+
+          {availablePages.length === 0 && (
+            <Box padding="600">
+              <BlockStack gap="300" align="center">
+                <Text as="p" variant="bodyLg" tone="subdued" alignment="center">
+                  No pages available
+                </Text>
+                <Text as="p" variant="bodySm" tone="subdued" alignment="center">
+                  System pages will be used for tracking
+                </Text>
+              </BlockStack>
+            </Box>
+          )}
 
           {/* System Pages */}
           {systemPages.length > 0 && (
@@ -184,7 +198,7 @@ export function PageSelector({
                     </IndexTable.Cell>
                     <IndexTable.Cell>
                       <Text as="p" fontWeight="semibold">
-                        {page.label.replace('Collection: ', '')}
+                        {page.label}
                       </Text>
                     </IndexTable.Cell>
                     <IndexTable.Cell>
@@ -230,7 +244,7 @@ export function PageSelector({
                     </IndexTable.Cell>
                     <IndexTable.Cell>
                       <Text as="p" fontWeight="semibold">
-                        {page.label.replace('Product: ', '')}
+                        {page.label}
                       </Text>
                     </IndexTable.Cell>
                     <IndexTable.Cell>
@@ -244,10 +258,10 @@ export function PageSelector({
             </BlockStack>
           )}
 
-          {filteredPages.length === 0 && (
+          {filteredPages.length === 0 && availablePages.length > 0 && (
             <Box padding="600">
               <Text as="p" tone="subdued" alignment="center">
-                No pages found
+                No pages match your search
               </Text>
             </Box>
           )}
@@ -258,11 +272,6 @@ export function PageSelector({
                 <Text as="span" variant="bodySm">
                   {selectedPages.length} selected
                 </Text>
-                <Pagination
-                  hasPrevious={false}
-                  hasNext={false}
-                  label="1/1"
-                />
               </InlineStack>
             </Box>
           )}

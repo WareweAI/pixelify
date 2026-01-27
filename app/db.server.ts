@@ -5,7 +5,7 @@ declare global {
   var prismaConnectionAttempts: number | undefined;
 }
 
-// Create Prisma client with optimized connection pooling and retry logic
+// Enhanced connection pool configuration for serverless environments
 function createPrismaClient() {
   let databaseUrl;
   
@@ -27,22 +27,31 @@ function createPrismaClient() {
     throw new Error("DATABASE_URL environment variable is required");
   }
   
-  // Let Supabase manage connection pooling automatically
-  // Don't add connection limits - let the pooler handle it
-  const enhancedUrl = databaseUrl;
-  
+  // Clean the database URL to remove any connection pool parameters
+  // Add PgBouncer configuration for transaction mode compatibility
+  let cleanUrl = databaseUrl
+    .replace(/connection_limit=[^&]*&?/g, '')
+    .replace(/pool_timeout=[^&]*&?/g, '')
+    .replace(/&$/, ''); // Remove trailing &
+
+  // Ensure PgBouncer is configured for transaction mode
+  if (isVercel || process.env.NODE_ENV === "production") {
+    // Add PgBouncer transaction mode configuration for production
+    if (!cleanUrl.includes('pgbouncer=')) {
+      cleanUrl += cleanUrl.includes('?') ? '&pgbouncer=true' : '?pgbouncer=true';
+    }
+    // Add pool mode if not present
+    if (!cleanUrl.includes('pool_mode=')) {
+      cleanUrl += '&pool_mode=transaction';
+    }
+    console.log("[DB] Using PgBouncer transaction mode for production");
+  }
+
   return new PrismaClient({
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
     datasources: {
       db: {
-        url: enhancedUrl,
-      },
-    },
-    // Add connection management
-    __internal: {
-      engine: {
-        connectTimeout: 10000, // 10 seconds
-        requestTimeout: 20000, // 20 seconds
+        url: cleanUrl,
       },
     },
   });
@@ -140,7 +149,7 @@ if (process.env.NODE_ENV === "production") {
     } catch (error: any) {
       if (error.message?.includes('connection pool') || error.message?.includes('Timed out')) {
         console.error("[DB] ⚠️ Connection pool issue detected:", error.message);
-        console.error("[DB] Consider increasing connection_limit or pool_timeout");
+        console.error("[DB] Connection limits are managed by Prisma - consider checking database load");
       }
     }
   }, 60000); // Check every minute
@@ -203,7 +212,7 @@ export async function withDatabaseRetry<T>(
   maxRetries = 3,
   retryDelay = 500
 ): Promise<T> {
-  let lastError: Error;
+  let lastError: Error = new Error('Unknown error');
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -224,6 +233,7 @@ export async function withDatabaseRetry<T>(
         error.message?.includes('Max client connections reached') ||
         error.message?.includes('Timed out') ||
         error.message?.includes('timeout') ||
+        error.message?.includes('prepared statement') ||  // PgBouncer prepared statement error
         error.code === 'P2024' ||
         error.code === 'P1001' ||
         error.code === 'P1017';

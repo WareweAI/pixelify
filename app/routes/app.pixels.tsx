@@ -190,11 +190,34 @@ export default function PixelsPage() {
         <Layout.Section>
           {isLoadingData ? (
             <Card>
-              <Box padding="600">
-                <InlineStack align="center" gap="200">
-                  <Text as="p" tone="subdued">Loading pixels...</Text>
-                </InlineStack>
-              </Box>
+              <div 
+                style={{
+                  padding: "32px",
+                  minHeight: "300px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center"
+                }}
+              >
+                <BlockStack gap="400" align="center">
+                  <div style={{
+                    width: '48px',
+                    height: '48px',
+                    border: '4px solid #e1e3e5',
+                    borderTopColor: '#008060',
+                    borderRadius: '50%',
+                    animation: 'spin 1s linear infinite'
+                  }} />
+                  <style>{`
+                    @keyframes spin {
+                      to { transform: rotate(360deg); }
+                    }
+                  `}</style>
+                  <Text as="p" variant="bodyLg" tone="subdued">
+                    Loading pixels...
+                  </Text>
+                </BlockStack>
+              </div>
             </Card>
           ) : (
             <Card padding="0">

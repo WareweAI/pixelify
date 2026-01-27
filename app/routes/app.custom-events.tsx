@@ -18,7 +18,6 @@ import {
 import { useState, useCallback, useEffect } from "react";
 import { getShopifyInstance } from "~/shopify.server";
 import db from "../db.server";
-import { checkThemeExtensionStatus } from "~/services/theme-extension-check.server";
 import { cache } from "~/lib/cache.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -29,13 +28,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
   
   const { session, admin } = await shopify.authenticate.admin(request);
   const shop = session.shop;
-
-  // Check theme extension status
-  const extensionStatus = await checkThemeExtensionStatus(admin);
   
   return Response.json({
     shop,
-    extensionStatus,
   });
 }
 
@@ -915,9 +910,33 @@ export default function CustomEvents() {
         <Layout>
           <Layout.Section>
             <Card>
-              <div style={{ padding: '60px', textAlign: 'center' }}>
-                <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
-                <Text variant="headingMd" as="h3">Loading custom events...</Text>
+              <div 
+                style={{
+                  padding: "32px",
+                  minHeight: "300px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center"
+                }}
+              >
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "16px" }}>
+                  <div style={{
+                    width: '48px',
+                    height: '48px',
+                    border: '4px solid #e1e3e5',
+                    borderTopColor: '#008060',
+                    borderRadius: '50%',
+                    animation: 'spin 1s linear infinite'
+                  }} />
+                  <style>{`
+                    @keyframes spin {
+                      to { transform: rotate(360deg); }
+                    }
+                  `}</style>
+                  <Text variant="bodyLg" tone="subdued" as="p">
+                    Loading custom events...
+                  </Text>
+                </div>
               </div>
             </Card>
           </Layout.Section>
@@ -926,36 +945,14 @@ export default function CustomEvents() {
     );
   }
 
-  // Show error state
-  if (dataError || !apiData) {
-    return (
-      <Page title="Custom Events">
-        <Layout>
-          <Layout.Section>
-            <Card>
-              <div style={{ padding: '60px', textAlign: 'center' }}>
-                <div style={{ fontSize: '48px', marginBottom: '16px' }}>❌</div>
-                <Text variant="headingMd" as="h3">Error loading custom events</Text>
-                <p style={{ marginTop: '8px', color: '#64748b' }}>{dataError || 'Unknown error'}</p>
-              </div>
-            </Card>
-          </Layout.Section>
-        </Layout>
-      </Page>
-    );
-  }
-
-  const { app, customEvents, plan, isFreePlan, hasAccess } = apiData;
-
-  // Demo data for free plan users
   const demoCustomEvents = [
     {
       id: "demo-1",
-      displayName: "Add to Wishlist",
-      name: "wishlist_add",
-      description: "Tracks when users add items to their wishlist",
+      displayName: "Add to Cart",
+      name: "add_to_cart",
+      description: "Tracks when users add products to their shopping cart",
       eventType: "click",
-      selector: ".wishlist-btn, .add-to-wishlist",
+      selector: ".add-to-cart, .product-form__cart-submit, [name=\"add\"], .btn-add-to-cart",
       pageType: "product",
       metaEventName: "AddToCart",
       isActive: true,
@@ -988,7 +985,7 @@ export default function CustomEvents() {
   ];
 
   // Show demo view for Free plan users
-  if (isFreePlan || !hasAccess) {
+  if (apiData?.isFreePlan || !apiData?.hasAccess) {
     return (
       <Page
         title="Custom Events - Premium Feature"
@@ -1245,14 +1242,14 @@ export default function CustomEvents() {
   }
 
   // Only show full UI for Basic/Advance plan users
-  if (!hasAccess) {
+  if (!apiData?.hasAccess) {
     return null;
   }
 
   return (
     <Page
       title="Custom Events"
-      subtitle={`Track user interactions and send them to Facebook (adblocker-proof!) - ${plan} Plan`}
+      subtitle={`Track user interactions and send them to Facebook (adblocker-proof!) - ${apiData?.plan} Plan`}
       primaryAction={{
         content: "✨ Create Event",
         onAction: handleModalToggle
@@ -1360,7 +1357,7 @@ export default function CustomEvents() {
               textAlign: 'center'
             }}>
               <div style={{ fontSize: '32px', fontWeight: '700', color: '#1e40af', marginBottom: '4px' }}>
-                {customEvents.length}
+                {apiData?.customEvents?.length || 0}
               </div>
               <div style={{ fontSize: '14px', color: '#64748b', fontWeight: '500' }}>Total Events</div>
             </div>
@@ -1373,7 +1370,7 @@ export default function CustomEvents() {
               textAlign: 'center'
             }}>
               <div style={{ fontSize: '32px', fontWeight: '700', color: '#059669', marginBottom: '4px' }}>
-                {customEvents.filter(e => e.isActive).length}
+                {apiData?.customEvents?.filter(e => e.isActive).length || 0}
               </div>
               <div style={{ fontSize: '14px', color: '#065f46', fontWeight: '500' }}>Active Events</div>
             </div>
@@ -1386,8 +1383,8 @@ export default function CustomEvents() {
               textAlign: 'center'
             }}>
               <div style={{ fontSize: '32px', fontWeight: '700', color: '#d97706', marginBottom: '4px' }}>
-                {customEvents.filter(e => e.eventType !== 'custom').length}
-              </div>
+                {apiData?.customEvents?.filter(e => e.eventType !== 'custom').length || 0}
+              </div>  
               <div style={{ fontSize: '14px', color: '#92400e', fontWeight: '500' }}>Auto Events</div>
             </div>
             
@@ -1399,7 +1396,7 @@ export default function CustomEvents() {
               textAlign: 'center'
             }}>
               <div style={{ fontSize: '32px', fontWeight: '700', color: '#4f46e5', marginBottom: '4px' }}>
-                {customEvents.filter(e => e.eventType === 'custom').length}
+                {apiData?.customEvents?.filter(e => e.eventType === 'custom').length || 0}
               </div>
               <div style={{ fontSize: '14px', color: '#3730a3', fontWeight: '500' }}>Manual Events</div>
             </div>
@@ -1603,10 +1600,10 @@ export default function CustomEvents() {
                       Manage and monitor all your custom tracking events
                     </p>
                   </div>
-                  {customEvents.length > 0 && (
+                  {(apiData?.customEvents?.length || 0) > 0 && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                       <div style={{ fontSize: '14px', color: '#64748b' }}>
-                        {selectedEvents.size} of {customEvents.length} selected
+                        {selectedEvents.size} of {apiData?.customEvents?.length || 0} selected
                       </div>
                       <Button variant="primary" onClick={handleModalToggle} size="slim">
                         ➕ Add Event
@@ -1617,7 +1614,7 @@ export default function CustomEvents() {
               </div>
 
               {/* Bulk Actions Bar */}
-              {customEvents.length > 0 && (
+              {(apiData?.customEvents?.length || 0) > 0 && (
                 <div style={{ 
                   padding: '16px 24px', 
                   borderBottom: '1px solid #e2e8f0', 
@@ -1628,7 +1625,7 @@ export default function CustomEvents() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                       <Checkbox
                         label=""
-                        checked={selectedEvents.size === customEvents.length && customEvents.length > 0}
+                        checked={selectedEvents.size === (apiData?.customEvents?.length || 0) && (apiData?.customEvents?.length || 0) > 0}
                         onChange={handleSelectAll}
                       />
                       <Text variant="bodyMd" as="span" tone={selectedEvents.size > 0 ? "base" : "subdued"}>
@@ -1669,7 +1666,7 @@ export default function CustomEvents() {
               )}
 
               {/* Empty State */}
-              {customEvents.length === 0 ? (
+              {(apiData?.customEvents?.length || 0) === 0 ? (
                 <div style={{
                   padding: '80px 40px',
                   textAlign: 'center',
@@ -1786,7 +1783,7 @@ export default function CustomEvents() {
                         <th style={{ padding: '16px 24px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                           <Checkbox
                             label="Select all events"
-                            checked={selectedEvents.size === customEvents.length && customEvents.length > 0}
+                            checked={selectedEvents.size === (apiData?.customEvents?.length || 0) && (apiData?.customEvents?.length || 0) > 0}
                             onChange={handleSelectAll}
                           />
                         </th>
@@ -1801,7 +1798,7 @@ export default function CustomEvents() {
                       </tr>
                     </thead>
                     <tbody>
-                      {customEvents.map((event: any, index: number) => (
+                      {(apiData?.customEvents || []).map((event: any, index: number) => (
                         <tr key={event.id} style={{ 
                           borderBottom: '1px solid #f1f5f9',
                           backgroundColor: selectedEvents.has(event.id) ? '#f0f9ff' : 'white',
@@ -2140,7 +2137,7 @@ export default function CustomEvents() {
             <FormLayout>
               <input type="hidden" name="action" value={editingEvent ? "update" : "create"} />
               {editingEvent && <input type="hidden" name="eventId" value={editingEvent.id} />}
-              <input type="hidden" name="appId" value={app.appId} />
+              <input type="hidden" name="appId" value={apiData?.app?.appId || ''} />
               
               {/* Basic Information Section */}
               <div style={{ 

@@ -43,6 +43,43 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return withCache(cacheKey, 300, async () => {
     console.log(`[Dashboard API] Fetching fresh data for ${shop}`);
     
+    // ALWAYS fetch theme extension status from Shopify (independent of database)
+    let themeExtensionEnabled = false;
+    try {
+      console.log('[Dashboard API] Fetching theme status from Shopify...');
+      
+      const appInstallationRes = await admin.graphql(`
+        query {
+          currentAppInstallation {
+            id
+            activeSubscriptions {
+              id
+              status
+            }
+          }
+        }
+      `);
+
+      const appInstallationData = await appInstallationRes.json() as { data?: any; errors?: any[] };
+
+      // Check for GraphQL errors
+      if (appInstallationData.errors) {
+        console.error('[Dashboard API] App installation GraphQL errors:', appInstallationData.errors);
+      }
+
+      const appInstallation = appInstallationData.data?.currentAppInstallation;
+
+      // For now, we'll check if the app is installed
+      // Note: Shopify doesn't provide a direct way to check if app embed is enabled via GraphQL
+      // This is a limitation of the Shopify API - we can only check if the app is installed
+      themeExtensionEnabled = !!appInstallation;
+
+      console.log(`[Dashboard API] Theme Extension Status: ${themeExtensionEnabled ? 'Enabled' : 'Not Enabled'} (App Installed: ${!!appInstallation})`);
+    } catch (error: any) {
+      console.error("[Dashboard API] ❌ Error fetching theme status:", error.message || error);
+    }
+    
+    // Now try database queries - if they fail, still return storePages
     try {
       let user = await prisma.user.findUnique({ where: { storeUrl: shop } });
 
@@ -57,77 +94,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
-      // Initialize store pages with system defaults
-      let storePages = [
-        { label: "All Pages", value: "all", type: "system" },
-        { label: "Home Page", value: "/", type: "system" },
-        { label: "Cart Page", value: "/cart", type: "system" },
-        { label: "Checkout Page", value: "/checkout", type: "system" },
-        { label: "Search Results", value: "/search", type: "system" },
-        { label: "Account Page", value: "/account", type: "system" },
-      ];
-
-      // Fetch products and collections from Shopify GraphQL
-      try {
-        const [productsRes, collectionsRes] = await Promise.all([
-          admin.graphql(`
-            query {
-              products(first: 250, query: "status:active") {
-                edges {
-                  node {
-                    id
-                    title
-                    handle
-                  }
-                }
-              }
-            }
-          `),
-          admin.graphql(`
-            query {
-              collections(first: 50, sortKey: TITLE) {
-                edges {
-                  node {
-                    id
-                    title
-                    handle
-                  }
-                }
-              }
-            }
-          `)
-        ]);
-
-        const productsData = await productsRes.json();
-        const collectionsData = await collectionsRes.json();
-
-        const products = productsData.data?.products?.edges || [];
-        const collections = collectionsData.data?.collections?.edges || [];
-
-        console.log(`[Dashboard API] Fetched ${products.length} products and ${collections.length} collections`);
-
-        // Add collection pages
-        const collectionPages = collections.map((edge: any) => ({
-          label: `Collection: ${edge.node.title}`,
-          value: `/collections/${edge.node.handle}`,
-          type: "collection",
-          collectionId: edge.node.id,
-        }));
-
-        // Add product pages
-        const productPages = products.map((edge: any) => ({
-          label: `Product: ${edge.node.title}`,
-          value: `/products/${edge.node.handle}`,
-          type: "product",
-          productId: edge.node.id,
-        }));
-
-        storePages = [...storePages, ...collectionPages, ...productPages];
-        console.log(`[Dashboard API] Total pages: ${storePages.length}`);
-      } catch (error) {
-        console.error("[Dashboard API] Error fetching products/collections:", error);
-      }
-
       // Run database queries in parallel with retry logic
       const [apps, totalPurchaseEvents, recentPurchaseEvents, todayEvents] = await withDatabaseRetry(async () => {
         return Promise.all([
@@ -135,7 +101,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
             SELECT
               a."id", a."appId", a."appToken", a."name", a."plan", a."welcomeEmailSent",
               a."enabled", a."shopEmail", a."createdAt", a."userId", a."websiteDomain",
-              s."metaPixelId", s."metaPixelEnabled", s."timezone", s."metaAccessToken",
+              s."metaPixelId", s."metaPixelEnabled", s."timezone", s."metaAccessToken", s."metaTokenExpiresAt",
               COALESCE((SELECT COUNT(*)::int FROM "Event" e WHERE e."appId" = a."id"), 0) as "eventCount",
               COALESCE((SELECT COUNT(*)::int FROM "AnalyticsSession" ase WHERE ase."appId" = a."id"), 0) as "sessionCount"
             FROM "App" a
@@ -166,7 +132,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           metaPixelId: app.metaPixelId, 
           metaPixelEnabled: app.metaPixelEnabled || false, 
           timezone: app.timezone,
-          metaAccessToken: app.metaAccessToken // Include for token check
+          metaAccessToken: app.metaAccessToken, // Include for token check
+          metaTokenExpiresAt: app.metaTokenExpiresAt // Include token expiry
         },
       }));
 
@@ -183,6 +150,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         apps: transformedApps,
         hasPixels: transformedApps.length > 0,
         hasValidFacebookToken,
+        themeExtensionEnabled,
         stats: { totalPixels, totalEvents, totalSessions, todayEvents },
         recentPurchaseEvents: recentPurchaseEvents.map((e: any) => ({
           id: e.id,
@@ -196,7 +164,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         totalPurchaseEvents,
         purchaseOffset,
         purchaseLimit,
-        storePages,
         cached: false, // Indicates this is fresh data
         cacheTimestamp: new Date().toISOString(),
       };
@@ -208,12 +175,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           apps: [],
           hasPixels: false,
           hasValidFacebookToken: false,
+          themeExtensionEnabled: false,
           stats: { totalPixels: 0, totalEvents: 0, totalSessions: 0, todayEvents: 0 },
           recentPurchaseEvents: [],
           totalPurchaseEvents: 0,
           purchaseOffset: 0,
           purchaseLimit: 10,
-          storePages: [],
           connectionError: true,
         };
       }
@@ -427,28 +394,139 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return { error: "Access token is required" };
     }
 
-    const apps = await prisma.app.findMany({
-      where: { userId: user.id },
-      include: { settings: true },
-    });
+    // Exchange short-lived token for long-lived token (60 days)
+    console.log('[Dashboard API] Exchanging short-lived token for long-lived token...');
+    const appId = process.env.FACEBOOK_APP_ID;
+    const appSecret = process.env.FACEBOOK_APP_SECRET;
 
-    for (const app of apps) {
-      if (app.settings) {
-        await prisma.appSettings.update({
-          where: { id: app.settings.id },
-          data: { metaAccessToken: accessToken, metaTokenExpiresAt: null },
-        });
-      } else {
-        await prisma.appSettings.create({
-          data: { appId: app.id, metaAccessToken: accessToken },
-        });
+    try {
+      const exchangeResponse = await fetch(
+        `https://graph.facebook.com/v18.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${accessToken}`
+      );
+
+      const exchangeData = await exchangeResponse.json();
+
+      if (exchangeData.error) {
+        console.error('[Dashboard API] Token exchange failed:', exchangeData.error);
+        return { error: `Failed to exchange token: ${exchangeData.error.message}` };
       }
+
+      const longLivedToken = exchangeData.access_token || accessToken;
+
+      // Get token expiry info
+      const debugResponse = await fetch(
+        `https://graph.facebook.com/v18.0/debug_token?input_token=${longLivedToken}&access_token=${longLivedToken}`
+      );
+
+      const debugData = await debugResponse.json();
+      const expiresAt = debugData.data?.expires_at 
+        ? new Date(debugData.data.expires_at * 1000)
+        : new Date(Date.now() + 60 * 24 * 60 * 60 * 1000); // Default to 60 days
+
+      console.log(`[Dashboard API] Token exchanged successfully, expires: ${expiresAt.toISOString()}`);
+
+      // Save long-lived token to all apps
+      let apps = await prisma.app.findMany({
+        where: { userId: user.id },
+        include: { settings: true },
+      });
+
+      // If no apps exist, create a default app to store the token
+      if (apps.length === 0) {
+        console.log('[Dashboard API] No apps found, creating default app for token storage');
+        const defaultApp = await prisma.app.create({
+          data: {
+            userId: user.id,
+            name: "Facebook Integration",
+            appId: `fb_integration_${Date.now()}`,
+            appToken: `token_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+          },
+        });
+        
+        await prisma.appSettings.create({
+          data: { 
+            appId: defaultApp.id, 
+            metaAccessToken: longLivedToken,
+            metaTokenExpiresAt: expiresAt,
+          },
+        });
+        
+        console.log('[Dashboard API] Created default app for Facebook token storage');
+        apps = [{ ...defaultApp, settings: { 
+          id: '', 
+          appId: defaultApp.id, 
+          timezone: "GMT+0",
+          autoTrackPageviews: true,
+          autoTrackClicks: true,
+          autoTrackScroll: true,
+          recordIp: true,
+          recordLocation: true,
+          recordSession: true,
+          customEventsEnabled: true,
+          autoTrackViewContent: true,
+          autoTrackAddToCart: true,
+          autoTrackInitiateCheckout: true,
+          autoTrackPurchase: true,
+          metaPixelId: null,
+          metaAccessToken: longLivedToken,
+          metaTokenExpiresAt: expiresAt,
+          metaPixelEnabled: false,
+          metaTestEventCode: null,
+          metaVerified: false,
+          trackingPages: "all",
+          selectedCollections: null,
+          selectedProductTypes: null,
+          selectedProductTags: null,
+          selectedProducts: null,
+          facebookCatalogId: null,
+          facebookCatalogEnabled: false,
+          facebookCatalogSyncStatus: null,
+          facebookCatalogLastSync: null,
+        } }];
+      }
+
+      for (const app of apps) {
+        // Skip the default app we just created with settings
+        if (app.name === "Facebook Integration" && app.settings?.id === '') {
+          continue;
+        }
+        
+        if (app.settings) {
+          await prisma.appSettings.update({
+            where: { id: app.settings.id },
+            data: { 
+              metaAccessToken: longLivedToken,
+              metaTokenExpiresAt: expiresAt,
+            },
+          });
+        } else {
+          await prisma.appSettings.create({
+            data: { 
+              appId: app.id, 
+              metaAccessToken: longLivedToken,
+              metaTokenExpiresAt: expiresAt,
+            },
+          });
+        }
+      }
+
+      // Invalidate ALL caches after token update
+      invalidateDashboardCache();
+      cache.invalidatePattern(`catalog:${shop}:`);
+      cache.invalidatePattern(`settings:${shop}:`);
+      cache.invalidatePattern(`app-settings:${shop}:`);
+      console.log('[Dashboard API] Cleared all caches for fresh token data');
+
+      return { 
+        success: true, 
+        message: "Token saved and exchanged for long-lived token", 
+        expiresAt: expiresAt.toISOString(),
+        intent: "save-facebook-token" 
+      };
+    } catch (error) {
+      console.error('[Dashboard API] Error exchanging token:', error);
+      return { error: "Failed to exchange token for long-lived token" };
     }
-
-    // Invalidate cache after token update
-    invalidateDashboardCache();
-
-    return { success: true, message: "Token saved", intent: "save-facebook-token" };
   }
 
   // Fetch Facebook pixels
@@ -502,6 +580,77 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     return { success: true, facebookPixels: pixels };
+  }
+
+  // Refresh Facebook access tokens
+  if (intent === "refresh-facebook-token") {
+    try {
+      const { refreshAllUserTokens } = await import("~/services/facebook-token-refresh.server");
+      const refreshedCount = await refreshAllUserTokens(user.id);
+      
+      if (refreshedCount > 0) {
+        // Invalidate cache after token refresh
+        invalidateDashboardCache();
+        
+        return { 
+          success: true, 
+          message: `Successfully refreshed ${refreshedCount} token(s)`,
+          intent: "refresh-facebook-token" 
+        };
+      } else {
+        return { 
+          error: "No tokens were refreshed. You may need to reconnect Facebook.",
+          intent: "refresh-facebook-token"
+        };
+      }
+    } catch (error) {
+      console.error("Error refreshing Facebook tokens:", error);
+      return { error: "Failed to refresh tokens. Please reconnect Facebook." };
+    }
+  }
+
+  // Disconnect Facebook (remove tokens from database)
+  if (intent === "disconnect-facebook") {
+    try {
+      console.log('[Dashboard API] Disconnecting Facebook for user:', user.id);
+      
+      // Remove Facebook tokens from all user's apps
+      const apps = await prisma.app.findMany({
+        where: { userId: user.id },
+        include: { settings: true },
+      });
+
+      for (const app of apps) {
+        if (app.settings) {
+          await prisma.appSettings.update({
+            where: { id: app.settings.id },
+            data: { 
+              metaAccessToken: null,
+              metaTokenExpiresAt: null,
+              metaPixelId: null,
+              metaPixelEnabled: false,
+            },
+          });
+          console.log(`[Dashboard API] Removed Facebook token from app: ${app.name}`);
+        }
+      }
+
+      // Invalidate ALL caches related to this shop
+      invalidateDashboardCache();
+      cache.invalidatePattern(`catalog:${shop}:`);
+      cache.invalidatePattern(`settings:${shop}:`);
+      cache.invalidatePattern(`app-settings:${shop}:`);
+      console.log('[Dashboard API] Cleared all Facebook-related caches');
+
+      return { 
+        success: true, 
+        message: "Facebook disconnected successfully. All tokens and caches cleared.",
+        intent: "disconnect-facebook" 
+      };
+    } catch (error) {
+      console.error("Error disconnecting Facebook:", error);
+      return { error: "Failed to disconnect Facebook. Please try again." };
+    }
   }
 
   return { error: "Invalid action" };

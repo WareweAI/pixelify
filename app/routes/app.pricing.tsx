@@ -1,5 +1,5 @@
 import type { LoaderFunctionArgs } from "react-router";
-import { useLoaderData, useFetcher } from "react-router";
+import { useLoaderData } from "react-router";
 import { useState, useEffect } from "react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
@@ -14,9 +14,6 @@ import {
   InlineStack,
   ButtonGroup,
   Spinner,
-  TextField,
-  FormLayout,
-  Select,
   BlockStack
 } from "@shopify/polaris";
 import { CheckIcon, StarIcon } from "@shopify/polaris-icons";
@@ -40,10 +37,6 @@ export default function PricingPage() {
   const [pricingError, setPricingError] = useState<string | null>(null);
   
   const [billingInterval, setBillingInterval] = useState<'monthly' | 'yearly'>('monthly');
-  const [selectedPlan, setSelectedPlan] = useState('Basic');
-  const [discountCode, setDiscountCode] = useState('');
-  const [discountMessage, setDiscountMessage] = useState('');
-  const discountFetcher = useFetcher();
 
   // Fetch pricing data from API on mount
   useEffect(() => {
@@ -75,27 +68,6 @@ export default function PricingPage() {
   const hasActivePaidSubscription = userPlan?.planName !== 'free' && hasActivePayment;
 
   const storeHandle = process.env.STORE_HANDLE || shop.replace('.myshopify.com', '');
-
-  // Handle discount application response
-  useEffect(() => {
-    if (discountFetcher.data) {
-      if (discountFetcher.data.success) {
-        const percentage = discountFetcher.data.percentage || 0;
-        setDiscountMessage(discountFetcher.data.message || `${percentage}% discount applied successfully!`);
-        setDiscountCode(''); // Clear the input
-
-        // If there's a confirmation URL, redirect to it
-        if (discountFetcher.data.confirmationUrl) {
-          console.log('[Pricing] Redirecting to confirmation URL:', discountFetcher.data.confirmationUrl);
-          setTimeout(() => {
-            window.top.location.href = discountFetcher.data.confirmationUrl;
-          }, 1500);
-        }
-      } else {
-        setDiscountMessage(discountFetcher.data.message || 'An unexpected error occurred. Please try again.');
-      }
-    }
-  }, [discountFetcher.data]);
 
   const redirectToShopifyPricing = (planName?: string) => {
     const baseUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
@@ -266,72 +238,6 @@ export default function PricingPage() {
             </Banner>
           </Layout.Section>
         )}
-
-        <Layout.Section>
-          <Card>
-            <Box padding="600">
-              <BlockStack gap="400">
-                <Text variant="headingMd" as="h3">
-                  Have a discount code?
-                </Text>
-                <FormLayout>
-                  <Select
-                    label="Select Plan"
-                    options={[
-                      { label: "Basic Plan ($20.99/month)", value: "Basic" },
-                      { label: "Advance Plan ($55.99/month)", value: "Advance" },
-                    ]}
-                    value={selectedPlan}
-                    onChange={setSelectedPlan}
-                  />
-                  <InlineStack align="start" blockAlign="center" gap="400">
-                    <div style={{ flex: 1 }}>
-                      <TextField
-                        label=""
-                        placeholder="Enter discount code"
-                        value={discountCode}
-                        onChange={setDiscountCode}
-                        disabled={discountFetcher.state === 'submitting'}
-                        autoComplete="off"
-                      />
-                    </div>
-                    <Button
-                      onClick={() => {
-                        const trimmedCode = discountCode.trim();
-                        if (!trimmedCode) {
-                          setDiscountMessage('Please enter a discount code');
-                          return;
-                        }
-
-                        const formData = new FormData();
-                        formData.append('code', trimmedCode);
-                        formData.append('planName', selectedPlan);
-                        discountFetcher.submit(formData, {
-                          method: 'POST',
-                          action: '/api/apply-discount'
-                        });
-                      }}
-                      loading={discountFetcher.state === 'submitting'}
-                      disabled={!discountCode.trim() || discountFetcher.state === 'submitting'}
-                    >
-                      Apply Discount
-                    </Button>
-                  </InlineStack>
-                  {discountFetcher.state === 'submitting' && (
-                    <Text as="p" variant="bodyMd" tone="subdued">
-                      Applying discount...
-                    </Text>
-                  )}
-                  {discountMessage && discountFetcher.state !== 'submitting' && (
-                    <Text as="p" variant="bodyMd" tone={discountMessage.includes('applied') || discountMessage.includes('successfully') ? "success" : "critical"}>
-                      {discountMessage}
-                    </Text>
-                  )}
-                </FormLayout>
-              </BlockStack>
-            </Box>
-          </Card>
-        </Layout.Section>
 
         <Layout.Section>
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '24px' }}>

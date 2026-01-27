@@ -2,8 +2,6 @@
   import type { LoaderFunctionArgs } from "react-router";
   import { useLoaderData } from "react-router";
   import { getShopifyInstance } from "../shopify.server";
-  import { checkThemeExtensionStatus } from "~/services/theme-extension-check.server";
-  import { ThemeExtensionGuard } from "~/components/ThemeExtensionGuard";
   import {
     Page,
     Layout,
@@ -43,13 +41,9 @@
     
     const { session, admin } = await shopify.authenticate.admin(request);
     const shop = session.shop;
-
-    // Check theme extension status
-    const extensionStatus = await checkThemeExtensionStatus(admin);
     
     return Response.json({
       shop,
-      extensionStatus,
     });
   };
 
@@ -279,7 +273,6 @@
     // Show loading state while fetching apps
     if (appsLoading) {
       return (
-        <ThemeExtensionGuard shop={shop} enableStrictMode={true}>
           <Page title="Analytics" fullWidth>
             <Layout>
               <Layout.Section fullWidth>
@@ -294,14 +287,12 @@
               </Layout.Section>
             </Layout>
           </Page>
-        </ThemeExtensionGuard>
       );
     }
 
     // Show error state
     if (appsError) {
       return (
-        <ThemeExtensionGuard shop={shop} enableStrictMode={true}>
           <Page title="Analytics" fullWidth>
             <Layout>
               <Layout.Section fullWidth>
@@ -315,13 +306,11 @@
               </Layout.Section>
             </Layout>
           </Page>
-        </ThemeExtensionGuard>
       );
     }
 
     if (apps.length === 0) {
       return (
-        <ThemeExtensionGuard shop={shop} enableStrictMode={true}>
           <Page title="Analytics" fullWidth>
           <Layout>
             <Layout.Section fullWidth>
@@ -337,12 +326,10 @@
             </Layout.Section>
           </Layout>
         </Page>
-        </ThemeExtensionGuard>
       );
     }
 
     return (
-      <ThemeExtensionGuard shop={shop} enableStrictMode={true}>
         <Page
         title="Analytics Dashboard"
         subtitle="Track your website performance and user behavior"
@@ -819,6 +806,5 @@
           )}
         </Layout>
       </Page>
-      </ThemeExtensionGuard>
     );
   }

@@ -92,6 +92,64 @@ export async function refreshAllUserTokens(userId: string): Promise<number> {
 }
 
 /**
+ * Refresh all expiring tokens across all users
+ * Should be called periodically (e.g., daily via cron job)
+ * @returns Number of tokens successfully refreshed
+ */
+export async function refreshAllExpiringTokens(): Promise<{ refreshed: number; failed: number; total: number }> {
+  try {
+    console.log('[Token Refresh] Starting batch token refresh for all users...');
+    
+    // Find all apps with tokens that will expire within 7 days
+    const sevenDaysFromNow = new Date();
+    sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
+
+    const appsWithExpiringTokens = await prisma.appSettings.findMany({
+      where: {
+        metaAccessToken: { not: null },
+        OR: [
+          { metaTokenExpiresAt: null }, // Tokens without expiry date (old tokens)
+          { metaTokenExpiresAt: { lt: sevenDaysFromNow } }, // Tokens expiring within 7 days
+        ],
+      },
+      include: {
+        app: true,
+      },
+    });
+
+    console.log(`[Token Refresh] Found ${appsWithExpiringTokens.length} apps with expiring tokens`);
+
+    let refreshedCount = 0;
+    let failedCount = 0;
+
+    for (const settings of appsWithExpiringTokens) {
+      try {
+        const newToken = await checkAndRefreshToken(settings.appId);
+        if (newToken) {
+          refreshedCount++;
+        } else {
+          failedCount++;
+        }
+      } catch (error) {
+        console.error(`[Token Refresh] Error refreshing token for app ${settings.appId}:`, error);
+        failedCount++;
+      }
+    }
+
+    console.log(`[Token Refresh] Batch refresh complete: ${refreshedCount} refreshed, ${failedCount} failed, ${appsWithExpiringTokens.length} total`);
+    
+    return {
+      refreshed: refreshedCount,
+      failed: failedCount,
+      total: appsWithExpiringTokens.length,
+    };
+  } catch (error) {
+    console.error('[Token Refresh] Error in batch token refresh:', error);
+    return { refreshed: 0, failed: 0, total: 0 };
+  }
+}
+
+/**
  * Handle Facebook API error and attempt token refresh if it's an auth error
  * @param error - The Facebook API error
  * @param appId - The app ID

@@ -2,6 +2,7 @@
 // Unified pipeline for all events with catalog field injection
 import prisma from "~/db.server";
 import crypto from "crypto";
+import { refreshMetaAccessToken } from "./meta-capi.server";
 
 /**
  * Internal data model for catalog mapping
@@ -36,6 +37,7 @@ interface EventClassification {
 /**
  * 1️⃣ Get catalog mapping for store
  * Returns: pixel_id, catalog_id, access_token
+ * Automatically refreshes expired tokens
  */
 export async function getCatalogMapping(userId: string, pixelId: string): Promise<CatalogMapping | null> {
   try {
@@ -62,10 +64,46 @@ export async function getCatalogMapping(userId: string, pixelId: string): Promis
       return null;
     }
 
+    // Check if token is expired and refresh if needed
+    const now = new Date();
+    const tokenExpiresAt = app.settings.metaTokenExpiresAt;
+    const isTokenExpired = tokenExpiresAt && now > tokenExpiresAt;
+    const isTokenExpiringSoon = tokenExpiresAt && now > new Date(tokenExpiresAt.getTime() - 7 * 24 * 60 * 60 * 1000); // 7 days before expiry
+
+    let accessToken = app.settings.metaAccessToken;
+
+    if (isTokenExpired || isTokenExpiringSoon) {
+      console.log('[Catalog Handler] Facebook access token expired or expiring soon, attempting refresh...');
+
+      try {
+        const refreshResult = await refreshMetaAccessToken(app.settings.metaAccessToken);
+
+        if (refreshResult.success && refreshResult.newToken) {
+          // Update the token in database
+          await prisma.appSettings.update({
+            where: { appId: app.id },
+            data: {
+              metaAccessToken: refreshResult.newToken,
+              metaTokenExpiresAt: refreshResult.expiresAt,
+            },
+          });
+
+          accessToken = refreshResult.newToken;
+          console.log('[Catalog Handler] Facebook access token refreshed successfully');
+        } else {
+          console.warn('[Catalog Handler] Facebook access token refresh failed:', refreshResult.error);
+          console.warn('[Catalog Handler] Using existing token. User may need to re-authenticate.');
+        }
+      } catch (refreshError) {
+        console.error('[Catalog Handler] Error refreshing Facebook token:', refreshError);
+        console.warn('[Catalog Handler] Using existing token. User may need to re-authenticate.');
+      }
+    }
+
     return {
       pixelId,
       catalogId: catalog.catalogId,
-      accessToken: app.settings.metaAccessToken,
+      accessToken,
     };
   } catch (error) {
     console.error('[Catalog Handler] Error fetching catalog mapping:', error);

@@ -2,6 +2,7 @@ import type { LoaderFunctionArgs } from "react-router";
 import { redirect } from "react-router";
 import { getShopifyInstance } from "../shopify.server";
 import prisma from "../db.server";
+import { cache } from "~/lib/cache.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
@@ -118,6 +119,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       });
       console.log(`[Facebook OAuth] Created new app with token: ${newApp.name}`);
     }
+
+    // Invalidate all caches to ensure fresh data with new token
+    cache.invalidatePattern(`dashboard:${shop}:`);
+    cache.invalidatePattern(`catalog:${shop}:`);
+    cache.invalidatePattern(`settings:${shop}:`);
+    cache.invalidatePattern(`app-settings:${shop}:`);
+    console.log('[Facebook OAuth] Cleared all caches for fresh token data');
 
     return redirect(`${state}?success=facebook_connected`);
   } catch (error) {
