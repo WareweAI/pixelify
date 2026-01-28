@@ -36,6 +36,7 @@ model App {
   dailyStats        DailyStats[]
   errorLogs         ErrorLog[]
   events            Event[]
+  subscriptions     Subscription[]
 
   @@index([websiteDomain])
 }
@@ -182,6 +183,7 @@ model AppSettings {
   autoTrackInitiateCheckout Boolean @default(true)
   autoTrackPurchase         Boolean @default(true)
   
+  // Facebook Pixel Integration
   metaPixelId        String?
   metaAccessToken    String?
   metaTokenExpiresAt DateTime?
@@ -263,4 +265,88 @@ model Session {
   refreshTokenExpires DateTime?
 
   @@map("session")
+}
+
+// Subscription Management
+model Subscription {
+  id                    String   @id @default(uuid())
+  appId                 String
+  shopifySubscriptionId String?  @unique // Shopify's subscription ID
+  
+  // Plan details
+  planName              String   // Free, Basic, Advance
+  planLevel             Int      // 0, 1, 2
+  billingCycle          String   // monthly, yearly
+  price                 Float    // Actual price paid
+  
+  // Status
+  status                String   @default("pending") // pending, active, cancelled, expired
+  
+  // Dates
+  startDate             DateTime
+  endDate               DateTime
+  cancelledAt           DateTime?
+  
+  // Transition management
+  isCurrentPlan         Boolean  @default(false)
+  isPendingPlan         Boolean  @default(false)
+  transitionType        String?  // upgrade, downgrade, renewal
+  replacesSubscriptionId String? // ID of subscription this replaces
+  
+  // Metadata
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  
+  app                   App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@index([appId, status])
+  @@index([appId, isCurrentPlan])
+  @@index([endDate, status])
+  @@index([shopifySubscriptionId])
+}
+
+// Subscription History for audit trail
+model SubscriptionHistory {
+  id              String   @id @default(uuid())
+  appId           String
+  subscriptionId  String
+  
+  // Event details
+  eventType       String   // created, activated, upgraded, downgraded, cancelled, expired
+  fromPlan        String?
+  toPlan          String?
+  
+  // Additional data
+  metadata        Json?
+  
+  createdAt       DateTime @default(now())
+
+  @@index([appId, createdAt])
+  @@index([subscriptionId])
+}
+
+// Email notifications log
+model EmailNotification {
+  id          String   @id @default(uuid())
+  appId       String
+  email       String
+  
+  // Email details
+  type        String   // welcome, upgrade, downgrade, cancellation, expiry_warning
+  subject     String
+  templateId  String?
+  
+  // Status
+  status      String   @default("pending") // pending, sent, failed
+  sentAt      DateTime?
+  error       String?
+  
+  // Metadata
+  metadata    Json?
+  
+  createdAt   DateTime @default(now())
+
+  @@index([appId, type])
+  @@index([status])
+  @@index([createdAt])
 }

@@ -3,56 +3,6 @@ import { getShopifyInstance } from "../shopify.server";
 import db from "../db.server";
 import { sendPlanUpgradeEmail, sendPlanDowngradeEmail } from "../services/email.server";
 
-function getPlanNameFromSubscription(subscription: any) {
-  console.log("🔍 Subscription data for mapping:", {
-    name: subscription.name,
-    status: subscription.status,
-    line_items: subscription.line_items
-  });
-
-  // More flexible plan mapping - handle various naming conventions
-  const planMap: Record<string, string> = {
-    'Free': 'Free',
-    'Basic': 'Basic',
-    'Advance': 'Advance',
-  };
-
-  let internalPlanName = planMap[subscription.name] || 'Free';
-
-  // If still Free but subscription is active, try to infer from line items or other data
-  if (internalPlanName === 'Free' && subscription.status === 'ACTIVE' && subscription.line_items) {
-    const lineItem = subscription.line_items[0];
-    if (lineItem && lineItem.title) {
-      const title = lineItem.title.toLowerCase();
-      if (title.includes('basic')) {
-        internalPlanName = 'Basic';
-      } else if (title.includes('advance') || title.includes('advanced')) {
-        internalPlanName = 'Advance';
-      }
-    }
-  }
-
-  console.log(`🎯 FINAL MAPPING: "${subscription.name}" (status: ${subscription.status}) → ${internalPlanName}`);
-  return internalPlanName;
-}
-
-function getPlanLevel(planName: string): number {
-  const levels: Record<string, number> = {
-    'Free': 0,
-    'Basic': 1,
-    'Advance': 2
-  };
-  return levels[planName] || 0;
-}
-
-function isUpgrade(oldPlan: string, newPlan: string): boolean {
-  return getPlanLevel(newPlan) > getPlanLevel(oldPlan);
-}
-
-function isDowngrade(oldPlan: string, newPlan: string): boolean {
-  return getPlanLevel(newPlan) < getPlanLevel(oldPlan);
-}
-
 export const action = async ({ request }: ActionFunctionArgs) => {
   const shopify = getShopifyInstance();
   const { payload, session, topic, shop } = await shopify.authenticate.webhook(request);
@@ -66,6 +16,61 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   try {
     console.log("🔍 Subscription update payload:", JSON.stringify(payload, null, 2));
+
+    // Import server functions inside action
+    const { createSubscription, getPlanLevel } = await import("../services/subscription.server");
+
+    // Helper functions
+    function getPlanNameFromSubscription(subscription: any) {
+      console.log("🔍 Subscription data for mapping:", {
+        name: subscription.name,
+        status: subscription.status,
+        line_items: subscription.line_items
+      });
+
+      const planMap: Record<string, string> = {
+        'Free': 'Free',
+        'Basic': 'Basic',
+        'Advance': 'Advance',
+      };
+
+      let internalPlanName = planMap[subscription.name] || 'Free';
+
+      if (internalPlanName === 'Free' && subscription.status === 'ACTIVE' && subscription.line_items) {
+        const lineItem = subscription.line_items[0];
+        if (lineItem && lineItem.title) {
+          const title = lineItem.title.toLowerCase();
+          if (title.includes('basic')) {
+            internalPlanName = 'Basic';
+          } else if (title.includes('advance') || title.includes('advanced')) {
+            internalPlanName = 'Advance';
+          }
+        }
+      }
+
+      console.log(`🎯 FINAL MAPPING: "${subscription.name}" (status: ${subscription.status}) → ${internalPlanName}`);
+      return internalPlanName;
+    }
+
+    function getBillingCycleFromSubscription(subscription: any): 'monthly' | 'yearly' {
+      if (subscription.line_items && subscription.line_items.length > 0) {
+        const lineItem = subscription.line_items[0];
+        if (lineItem.plan?.pricing_details?.interval === 'ANNUAL') {
+          return 'yearly';
+        }
+      }
+      return 'monthly';
+    }
+
+    function getPriceFromSubscription(subscription: any): number {
+      if (subscription.line_items && subscription.line_items.length > 0) {
+        const lineItem = subscription.line_items[0];
+        if (lineItem.price) {
+          return parseFloat(lineItem.price.amount || '0');
+        }
+      }
+      return 0;
+    }
 
     // Get user first
     const user = await db.user.findUnique({
@@ -95,11 +100,28 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     console.log('🔍 Mapping plan name...');
     const internalPlanName = getPlanNameFromSubscription(subscription);
-
-    // Normalize old plan name
-    const oldPlan = getPlanNameFromSubscription({ name: app.plan });
+    const oldPlan = app.plan || 'Free';
     const isPlanChange = oldPlan !== internalPlanName;
+    
     console.log(`📊 Plan change: ${oldPlan} → ${internalPlanName} (${isPlanChange ? 'YES' : 'NO'})`);
+
+    // Extract subscription details
+    const shopifySubscriptionId = subscription.id?.toString();
+    const billingCycle = getBillingCycleFromSubscription(subscription);
+    const price = getPriceFromSubscription(subscription);
+    
+    // Parse dates from Shopify
+    const createdAt = subscription.created_at ? new Date(subscription.created_at) : new Date();
+    const billingOn = subscription.billing_on ? new Date(subscription.billing_on) : null;
+    const trialEndsOn = subscription.trial_ends_on ? new Date(subscription.trial_ends_on) : null;
+
+    console.log('📅 Subscription dates:', {
+      createdAt: createdAt.toISOString(),
+      billingOn: billingOn?.toISOString(),
+      trialEndsOn: trialEndsOn?.toISOString(),
+      billingCycle,
+      price
+    });
 
     // Use shop email from database
     let shopEmail = app.shopEmail;
@@ -149,11 +171,41 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
     }
 
-    const shopName = session.shop;
+    const shopName = app.name || session.shop;
 
     // Handle different subscription statuses
     if (subscription.status === 'CANCELLED' || subscription.status === 'EXPIRED') {
       console.log(`🔄 Subscription ${subscription.status} - processing downgrade to free`);
+
+      // Cancel active subscription in our system
+      const currentSubscription = await db.subscription.findFirst({
+        where: {
+          appId: app.id,
+          isCurrentPlan: true
+        }
+      });
+
+      if (currentSubscription) {
+        await db.subscription.update({
+          where: { id: currentSubscription.id },
+          data: {
+            status: subscription.status === 'CANCELLED' ? 'cancelled' : 'expired',
+            cancelledAt: new Date(),
+            isCurrentPlan: false
+          }
+        });
+
+        // Log history
+        await db.subscriptionHistory.create({
+          data: {
+            appId: app.id,
+            subscriptionId: currentSubscription.id,
+            eventType: subscription.status === 'CANCELLED' ? 'cancelled' : 'expired',
+            fromPlan: oldPlan,
+            toPlan: 'Free'
+          }
+        });
+      }
 
       if (shopEmail && isPlanChange) {
         console.log(`📧 Sending downgrade email: ${oldPlan} → Free to ${shopEmail}`);
@@ -171,27 +223,31 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     } else if (subscription.status === 'ACTIVE') {
       console.log(`🔄 Subscription active - processing plan change`);
 
-      if (shopEmail && isPlanChange) {
-        if (isUpgrade(oldPlan, internalPlanName)) {
-          console.log(`📧 Sending upgrade email: ${oldPlan} → ${internalPlanName} to ${shopEmail}`);
-          await sendPlanUpgradeEmail(shopEmail, shopName, oldPlan, internalPlanName);
-        } else if (isDowngrade(oldPlan, internalPlanName)) {
-          console.log(`📧 Sending downgrade email: ${oldPlan} → ${internalPlanName} to ${shopEmail}`);
-          await sendPlanDowngradeEmail(shopEmail, shopName, oldPlan, internalPlanName);
-        } else {
-          // Same level plan change (shouldn't happen, but handle gracefully)
-          console.log(`📧 Sending upgrade email (same level): ${oldPlan} → ${internalPlanName} to ${shopEmail}`);
-          await sendPlanUpgradeEmail(shopEmail, shopName, oldPlan, internalPlanName);
-        }
+      if (isPlanChange) {
+        // Create subscription using our service
+        const result = await createSubscription({
+          appId: app.id,
+          planName: internalPlanName,
+          billingCycle,
+          shopifySubscriptionId,
+          price
+        });
+
+        console.log(`✅ Subscription created: ${result.subscription.id}`);
+        console.log(`📊 Transition type: ${result.transitionType}`);
+        console.log(`⚡ Effective immediately: ${result.effectiveImmediately}`);
+        console.log(`📅 Start date: ${result.subscription.startDate.toISOString()}`);
+        console.log(`📅 End date: ${result.subscription.endDate.toISOString()}`);
+
+        // Email is sent by createSubscription service
+      } else {
+        console.log(`ℹ️ No plan change detected, skipping subscription creation`);
       }
 
-      // Update the plan in database
-      await db.app.update({
-        where: { id: app.id },
-        data: { plan: internalPlanName },
-      });
-
       console.log(`✅ Active subscription update completed`);
+    } else if (subscription.status === 'PENDING') {
+      console.log(`⏳ Subscription pending - waiting for activation`);
+      // Don't create subscription yet, wait for ACTIVE status
     }
 
     console.log(`✅ SUCCESS: Webhook processing completed for ${shop}`);

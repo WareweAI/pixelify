@@ -1,4 +1,3 @@
-// Bulk Analytics API endpoint - OPTIMIZED for speed
 import type { LoaderFunctionArgs } from 'react-router';
 import prisma from '~/db.server';
 

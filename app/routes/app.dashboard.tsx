@@ -94,7 +94,18 @@ export default function DashboardPage() {
   const [isLoadingPages, setIsLoadingPages] = useState(true);
   
   // Theme extension status fetcher
-  const themeExtensionFetcher = useFetcher<{ isEnabled: boolean; enabled: boolean; reason?: string; themeName?: string; checkedIndicators?: string[] }>();
+  const themeExtensionFetcher = useFetcher<{ 
+    isEnabled: boolean; 
+    enabled: boolean; 
+    reason?: string; 
+    themeName?: string; 
+    checkedIndicators?: string[];
+    themeId?: string;
+    extensionType?: string;
+    deepLinkUrl?: string;
+    note?: string;
+    appInstalled?: boolean;
+  }>();
   const [themeExtensionEnabled, setThemeExtensionEnabled] = useState(false);
   const [themeExtensionChecked, setThemeExtensionChecked] = useState(false);
   const [lastThemeExtensionCheck, setLastThemeExtensionCheck] = useState<number>(0);
@@ -1045,13 +1056,26 @@ export default function DashboardPage() {
                     onClick={() => {
                       const data = themeExtensionFetcher.data;
                       if (data) {
+                        const debugInfo = (data as any).debug;
                         alert(`Theme Extension Status Debug:
                         
 Enabled: ${data.isEnabled || data.enabled}
 Reason: ${data.reason || 'N/A'}
-Theme: ${data.themeName || 'Unknown'}
-Checked Indicators: ${data.checkedIndicators?.join(', ') || 'None'}
-Total Indicators Checked: ${(data as any).totalIndicatorsChecked || 'N/A'}`);
+Extension Type: ${data.extensionType || 'Not found'}
+Theme ID: ${data.themeId || 'Unknown'}
+App Installed: ${data.appInstalled}
+
+${debugInfo ? `
+Debug Info:
+- Total Embeds: ${debugInfo.totalEmbeds}
+- Found Extension: ${debugInfo.foundExtension}
+- Extension Disabled Flag: ${debugInfo.extensionDisabledFlag}
+- Calculated Enabled: ${debugInfo.calculatedEnabled}
+- Available Types: ${debugInfo.availableTypes?.join(', ') || 'None'}
+- Searching For: ${debugInfo.searchingFor || 'N/A'}
+` : 'No debug info available'}
+
+Deep Link: ${data.deepLinkUrl || 'N/A'}`);
                       } else {
                         alert('Theme extension status not loaded yet. Please wait...');
                       }
@@ -1077,9 +1101,17 @@ Total Indicators Checked: ${(data as any).totalIndicatorsChecked || 'N/A'}`);
                     <Button
                       variant="primary"
                       onClick={() => {
-                        const storeHandle = shop.replace('.myshopify.com', '');
-                        const themeEditorUrl = `https://admin.shopify.com/store/${storeHandle}/themes/current/editor?context=apps`;
-                        window.open(themeEditorUrl, '_blank');
+                        // Use deep link from API if available, otherwise fallback to generic theme editor URL
+                        const data = themeExtensionFetcher.data;
+                        const deepLinkUrl = data?.deepLinkUrl;
+                        
+                        if (deepLinkUrl) {
+                          window.open(deepLinkUrl, '_blank');
+                        } else {
+                          const storeHandle = shop.replace('.myshopify.com', '');
+                          const themeEditorUrl = `https://admin.shopify.com/store/${storeHandle}/themes/current/editor?context=apps`;
+                          window.open(themeEditorUrl, '_blank');
+                        }
                       }}
                     >
                       Activate Now
