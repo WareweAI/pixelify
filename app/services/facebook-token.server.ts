@@ -56,7 +56,10 @@ export class FacebookTokenService {
   /**
    * Get valid token for an app, with automatic validation
    */
-  static async getValidToken(appId: string): Promise<string | null> {
+  static async getValidToken(appId: string, bypassCache: boolean = true): Promise<string | null> {
+    // ALWAYS bypass cache for Facebook token validation (real-time validation required)
+    console.log(`[Facebook Token Service] Getting valid token for app: ${appId}, bypassCache: true (forced)`);
+    
     try {
       const app = await prisma.app.findUnique({
         where: { appId },
@@ -64,16 +67,19 @@ export class FacebookTokenService {
       });
 
       if (!app?.settings?.metaAccessToken) {
+        console.log(`[Facebook Token Service] No token found for app: ${appId}`);
         return null;
       }
 
       const token = app.settings.metaAccessToken;
+      console.log(`[Facebook Token Service] Token found for app: ${appId}, length: ${token.length}`);
 
-      // Validate token
+      // Always validate token for Facebook APIs (bypassCache is always true for Facebook)
+      console.log(`[Facebook Token Service] Validating token for app: ${appId}`);
       const isValid = await this.validateToken(token);
 
       if (!isValid) {
-        console.error(`Token for app ${appId} is invalid or expired`);
+        console.error(`[Facebook Token Service] Token for app ${appId} is invalid or expired`);
         
         // Mark token as expired in database
         await prisma.appSettings.update({
@@ -82,13 +88,15 @@ export class FacebookTokenService {
             metaTokenExpiresAt: new Date(), // Mark as expired
           },
         });
+        console.log(`[Facebook Token Service] Marked token as expired in database for app: ${appId}`);
 
         return null;
       }
 
+      console.log(`[Facebook Token Service] ✅ Token is valid for app: ${appId}`);
       return token;
     } catch (error) {
-      console.error("Error getting valid token:", error);
+      console.error("[Facebook Token Service] Error getting valid token:", error);
       return null;
     }
   }

@@ -61,6 +61,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       : null;
 
     console.log(`[Facebook OAuth] New token obtained, expires: ${expiresAt?.toISOString() || 'never'}`);
+    console.log(`[Facebook OAuth] Token length: ${longLivedToken.length} characters`);
+    console.log(`[Facebook OAuth] Token starts with: ${longLivedToken.substring(0, 20)}...`);
 
     // Save token to database - UPDATE ALL APPS for this user
     const user = await prisma.user.findUnique({
@@ -86,7 +88,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
             metaTokenExpiresAt: expiresAt,
           },
         });
-        console.log(`[Facebook OAuth] Updated token for app: ${app.name} (${app.appId})`);
+        console.log(`[Facebook OAuth] ✅ Updated token for app: ${app.name} (${app.appId})`);
+        console.log(`[Facebook OAuth] - Previous token removed, new token assigned`);
       } else {
         await prisma.appSettings.create({
           data: {
@@ -95,7 +98,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
             metaTokenExpiresAt: expiresAt,
           },
         });
-        console.log(`[Facebook OAuth] Created settings with token for app: ${app.name} (${app.appId})`);
+        console.log(`[Facebook OAuth] ✅ Created settings with token for app: ${app.name} (${app.appId})`);
+        console.log(`[Facebook OAuth] - New token created and assigned`);
       }
     }
 
@@ -121,13 +125,49 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
 
     // Invalidate all caches to ensure fresh data with new token
-    cache.invalidatePattern(`dashboard:${shop}:`);
-    cache.invalidatePattern(`catalog:${shop}:`);
-    cache.invalidatePattern(`settings:${shop}:`);
-    cache.invalidatePattern(`app-settings:${shop}:`);
-    console.log('[Facebook OAuth] Cleared all caches for fresh token data');
+    const cachePatterns = [
+      `dashboard:${shop}:`,
+      `app-settings:${shop}:`,
+      `catalog-data:${shop}:`,
+      `settings-data:${shop}:`,
+      `analytics:${shop}:`,
+      `analytics-data:${shop}:`,
+      `events-data:${shop}:`,
+      `custom-events:${shop}:`,
+      `pixels:${shop}:`,
+      `visitors:${shop}:`,
+      `pricing-data:${shop}:`,
+    ];
 
-    return redirect(`${state}?success=facebook_connected`);
+    let totalCleared = 0;
+    for (const pattern of cachePatterns) {
+      const cleared = cache.invalidatePattern(pattern);
+      totalCleared += cleared;
+    }
+    
+    // Also clear any Facebook-specific cache
+    const facebookPatterns = [
+      `facebook:${shop}:`,
+      `facebook-pixels:${shop}:`,
+      `facebook-user:${shop}:`,
+      `facebook-catalog:${shop}:`,
+    ];
+
+    for (const pattern of facebookPatterns) {
+      const cleared = cache.invalidatePattern(pattern);
+      totalCleared += cleared;
+    }
+    
+    // Clear all remaining cache entries for this shop
+    const shopPattern = `.*${shop}.*`;
+    const remainingCleared = cache.invalidatePattern(shopPattern);
+    totalCleared += remainingCleared;
+    
+    console.log(`[Facebook OAuth] Cleared ${totalCleared} cache entries for fresh token data`);
+
+    // Redirect with cache-busting query parameter to prevent browser caching
+    const redirectUrl = `${state}${state.includes('?') ? '&' : '?'}success=facebook_connected&t=${Date.now()}`;
+    return redirect(redirectUrl);
   } catch (error) {
     console.error('Error in Facebook OAuth callback:', error);
     return redirect(`/app/dashboard?error=oauth_failed`);

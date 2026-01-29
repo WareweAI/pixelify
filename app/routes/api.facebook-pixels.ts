@@ -1,5 +1,6 @@
 // API endpoint to fetch Facebook pixels using access token
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import { cache } from "~/lib/cache.server";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -17,11 +18,15 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  // Facebook APIs must always bypass cache - fetch live data
+  console.log("[Facebook Pixels API] Bypassing cache - fetching live data from Meta Graph API");
 
   const url = new URL(request.url);
   const accessToken = url.searchParams.get("accessToken");
+  const bypassCache = url.searchParams.get("bypassCache") !== "false"; // Default to true
 
   console.log("[Facebook Pixels API] Request received with token:", accessToken ? `${accessToken.substring(0, 20)}...` : "none");
+  console.log("[Facebook Pixels API] Cache bypass:", bypassCache);
 
   if (!accessToken) {
     return Response.json(
@@ -261,7 +266,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
     debugInfo.steps.push(`6. ✅ Total pixels found: ${pixels.length}`);
 
-    // Return comprehensive response
+    // Return comprehensive response with cache control headers
+    const responseHeaders = {
+      ...corsHeaders,
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+      "Pragma": "no-cache",
+      "Expires": "0",
+    };
+
     return Response.json({
       pixels,
       debug: debugInfo,
@@ -277,7 +289,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         "Check if your ad accounts are active and you have proper access",
         "Try creating a test pixel in Facebook Events Manager first"
       ] : undefined
-    }, { headers: corsHeaders });
+    }, { headers: responseHeaders });
 
   } catch (error) {
     debugInfo.errors.push(`Unexpected error: ${error}`);

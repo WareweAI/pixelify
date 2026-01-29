@@ -257,10 +257,55 @@ export default function DashboardPage() {
     }
   }, [themeExtensionFetcher.data]);
 
-  // Handle fetcher responses (Facebook token save, etc.)
+  // Handle fetcher responses (Facebook token save, disconnect, etc.)
   useEffect(() => {
     if (fetcher.data) {
       console.log('[Dashboard] Fetcher response:', fetcher.data);
+      
+      // If Facebook was disconnected successfully, clear all Facebook state and localStorage
+      if (fetcher.data.intent === "disconnect-facebook" && fetcher.data.success) {
+        console.log('[Dashboard] Facebook disconnected successfully, clearing all state...');
+        
+        // Clear localStorage
+        if (typeof window !== "undefined") {
+          localStorage.removeItem("facebook_access_token");
+          localStorage.removeItem("facebook_user");
+          localStorage.removeItem("facebook_pixels");
+          console.log('[Dashboard] Cleared Facebook data from localStorage');
+        }
+        
+        // Clear React state
+        setFacebookAccessToken("");
+        setIsConnectedToFacebook(false);
+        setFacebookUser(null);
+        setFacebookPixels([]);
+        setSelectedFacebookPixel("");
+        console.log('[Dashboard] Cleared Facebook state from React');
+        
+        // Refresh dashboard data to reflect disconnection
+        const loadDashboardData = async () => {
+          try {
+            setIsLoadingData(true);
+            const response = await fetch('/api/dashboard?refresh=true');
+            
+            if (!response.ok) {
+              throw new Error(`Failed to refresh dashboard: ${response.status} ${response.statusText}`);
+            }
+            
+            const data = await response.json();
+            setDashboardData(data);
+            setDashboardError(null);
+            console.log('[Dashboard] Dashboard data refreshed after disconnect');
+          } catch (error: any) {
+            console.error('[Dashboard] Failed to refresh dashboard after disconnect:', error);
+            setDashboardError(error.message || 'Failed to refresh dashboard');
+          } finally {
+            setIsLoadingData(false);
+          }
+        };
+        
+        loadDashboardData();
+      }
       
       // If Facebook token was saved successfully, refresh dashboard data
       if (fetcher.data.intent === "save-facebook-token" && fetcher.data.success) {

@@ -48,8 +48,15 @@ export function PageSelector({
     if (open) {
       console.log('[PageSelector] Modal opened with', availablePages.length, 'available pages');
       console.log('[PageSelector] Initial selected:', initialSelectedPages);
+      console.log('[PageSelector] Available pages:', availablePages);
+      
+      // Debug: Show breakdown by type
+      const systemCount = availablePages.filter(p => p.type === "system").length;
+      const collectionCount = availablePages.filter(p => p.type === "collection").length;
+      const productCount = availablePages.filter(p => p.type === "product").length;
+      console.log('[PageSelector] Page breakdown:', { system: systemCount, collections: collectionCount, products: productCount });
     }
-  }, [open, availablePages.length, initialSelectedPages]);
+  }, [open, availablePages.length, initialSelectedPages, availablePages]);
 
   const handleTogglePage = useCallback((pageValue: string) => {
     setSelectedPages((prev) =>
@@ -95,7 +102,6 @@ export function PageSelector({
           onAction: handleCancel,
         },
       ]}
-      large
     >
       <Modal.Section>
         <BlockStack gap="400">
@@ -171,7 +177,7 @@ export function PageSelector({
             <BlockStack gap="200">
               <InlineStack align="space-between" blockAlign="center">
                 <Text as="h3" variant="headingSm">Collection Pages</Text>
-                <Badge tone="info">{collectionPages.length} collections</Badge>
+                <Badge tone="info">{`${collectionPages.length} collections`}</Badge>
               </InlineStack>
               <IndexTable
                 itemCount={collectionPages.length}
@@ -217,7 +223,7 @@ export function PageSelector({
             <BlockStack gap="200">
               <InlineStack align="space-between" blockAlign="center">
                 <Text as="h3" variant="headingSm">Product Pages</Text>
-                <Badge tone="success">{productPages.length} products</Badge>
+                <Badge tone="success">{`${productPages.length} products`}</Badge>
               </InlineStack>
               <IndexTable
                 itemCount={productPages.length}

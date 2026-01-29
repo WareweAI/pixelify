@@ -39,8 +39,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     console.log(`[Dashboard API] Cache bypassed for ${shop}`);
   }
 
-  // Use cache with 5 minute TTL (300 seconds)
-  return withCache(cacheKey, 300, async () => {
+  // ALWAYS bypass cache for dashboard to ensure real-time Facebook token validation
+  // Facebook API calls need fresh data for disconnect/connect operations
+  cache.delete(cacheKey);
+  console.log(`[Dashboard API] Cache disabled for real-time Facebook validation`);
+
+  // Fetch fresh data without caching
+  const fetchDashboardData = async () => {
     console.log(`[Dashboard API] Fetching fresh data for ${shop}`);
     
     // ALWAYS fetch theme extension status from Shopify (independent of database)
@@ -187,7 +192,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
       throw new Response("Database temporarily unavailable", { status: 503 });
     }
-  });
+  };
+
+  return fetchDashboardData();
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {

@@ -462,19 +462,64 @@ export function FacebookIntegration({ onConnectionChange, onError }: FacebookInt
   }, [facebookAccessToken, fetcher, onError]);
 
   // Disconnect from Facebook
-  const handleDisconnectFacebook = useCallback(() => {
+  const handleDisconnectFacebook = useCallback(async () => {
+    console.log('[Facebook Integration] Starting Facebook disconnect process...');
+    
+    try {
+      // Call the disconnect API to clear server-side tokens and cache
+      const response = await fetch('/api/facebook-disconnect', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const result = await response.json();
+      
+      if (response.ok && result.success) {
+        console.log('[Facebook Integration] ✅ Server-side disconnect successful:', result.details);
+      } else {
+        console.error('[Facebook Integration] ❌ Server-side disconnect failed:', result.error);
+        // Still proceed with client-side cleanup even if server fails
+      }
+    } catch (error) {
+      console.error('[Facebook Integration] ❌ Error calling disconnect API:', error);
+      // Still proceed with client-side cleanup even if API call fails
+    }
+
+    // Clear client-side state
     setFacebookAccessToken("");
     setFacebookUser(null);
     setFacebookPixels([]);
     setIsConnectedToFacebook(false);
     setFacebookError("");
     
-    // Clear localStorage
+    // Clear localStorage and sessionStorage
     if (typeof window !== "undefined") {
       localStorage.removeItem("facebook_access_token");
       localStorage.removeItem("facebook_user");
       localStorage.removeItem("facebook_pixels");
+      
+      // Clear any Facebook-related session storage
+      sessionStorage.removeItem("facebook_access_token");
+      sessionStorage.removeItem("facebook_user");
+      sessionStorage.removeItem("facebook_pixels");
+      
+      // Clear any cached API responses that might be in localStorage
+      const keysToRemove = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.includes('facebook') || key.includes('pixel') || key.includes('dashboard'))) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(key => localStorage.removeItem(key));
+      
+      console.log(`[Facebook Integration] Cleared ${keysToRemove.length + 3} localStorage entries`);
     }
+    
+    // Log successful disconnect
+    console.log('[Facebook Integration] ✅ Facebook disconnect completed');
     
     onConnectionChange(false, null, [], "");
   }, [onConnectionChange]);

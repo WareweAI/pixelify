@@ -25,14 +25,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   // Generate cache key for this shop
   const cacheKey = generateCacheKey('settings-data', shop);
 
-  // If bypassing cache, invalidate it first
-  if (bypassCache) {
-    cache.delete(cacheKey);
-    console.log(`[Settings Data API] Cache bypassed for ${shop}`);
-  }
+  // ALWAYS bypass cache for settings data to ensure real-time Facebook validation
+  cache.delete(cacheKey);
+  console.log(`[Settings Data API] Cache disabled for real-time Facebook validation`);
 
-  // Use cache with 5 minute TTL (300 seconds)
-  const cachedData = await withCache(cacheKey, 300, async () => {
+  // Fetch fresh data without caching
+  const fetchSettingsData = async () => {
     console.log(`[Settings Data API] Fetching fresh data for ${shop}`);
 
     const user = await prisma.user.findUnique({
@@ -61,7 +59,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       cached: false,
       cacheTimestamp: new Date().toISOString(),
     };
-  });
+  };
 
-  return Response.json(cachedData);
+  const settingsData = await fetchSettingsData();
+  return Response.json(settingsData);
 };

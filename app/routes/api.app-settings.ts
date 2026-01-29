@@ -30,14 +30,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   // Generate cache key for this app's settings
   const cacheKey = generateCacheKey('app-settings', shop, appId);
 
-  // If bypassing cache, invalidate it first
-  if (bypassCache) {
-    cache.delete(cacheKey);
-    console.log(`[App Settings API] Cache bypassed for ${shop}:${appId}`);
-  }
+  // ALWAYS bypass cache for app settings to ensure real-time Facebook token validation
+  cache.delete(cacheKey);
+  console.log(`[App Settings API] Cache disabled for real-time Facebook validation`);
 
-  // Use cache with 5 minute TTL (300 seconds)
-  const cachedData = await withCache(cacheKey, 300, async () => {
+  // Fetch fresh data without caching
+  const fetchAppSettings = async () => {
     console.log(`[App Settings API] Fetching fresh data for ${shop}:${appId}`);
 
     const user = await prisma.user.findUnique({
@@ -80,7 +78,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       cached: false,
       cacheTimestamp: new Date().toISOString(),
     };
-  });
+  };
 
-  return Response.json(cachedData);
+  const appSettings = await fetchAppSettings();
+  return Response.json(appSettings);
 };
