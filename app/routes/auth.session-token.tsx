@@ -66,11 +66,30 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       },
     });
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    
+    // Check if it's a database/session table error
+    const isDatabaseError = errorMessage.includes('session') || 
+                           errorMessage.includes('Prisma') || 
+                           errorMessage.includes('database') ||
+                           errorMessage.includes('table');
+    
     console.error("Session token authentication error:", {
-      message: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined,
+      message: errorMessage,
+      stack: errorStack,
+      isDatabaseError,
       timestamp: new Date().toISOString(),
     });
+    
+    // If it's a database error, log additional context
+    if (isDatabaseError) {
+      console.error("[Session Token] Database/Session table error detected. This may indicate:");
+      console.error("  1. Database migrations haven't been applied");
+      console.error("  2. Session table doesn't exist");
+      console.error("  3. Database connection issues");
+      console.error("  Run: npx prisma migrate deploy");
+    }
     
     // Extract URL parameters for retry
     const url = new URL(request.url);

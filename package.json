@@ -2,8 +2,8 @@
   "name": "pixelify",
   "private": true,
   "scripts": {
-    "build": "react-router build",
-    "postbuild": "prisma generate && prisma migrate deploy",
+    "build": "prisma generate && react-router build",
+    "postinstall": "prisma generate",
     "dev": "shopify app dev",
     "config:link": "shopify app config link",
     "generate": "shopify app generate",

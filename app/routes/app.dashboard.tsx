@@ -547,15 +547,18 @@ export default function DashboardPage() {
           console.error('[Dashboard] Error parsing saved pixels:', err);
         }
       } else {
-        // Auto-fetch pixels if we have token but no cached pixels
-        console.log('[Dashboard] No saved pixels, fetching from API...');
-        fetcher.submit(
-          {
-            intent: "fetch-facebook-pixels",
-            accessToken: savedToken,
-          },
-          { method: "POST" }
-        );
+        // Only fetch pixels if we don't have them cached AND we haven't already started fetching
+        // This prevents infinite loop
+        if (fetcher.state === 'idle') {
+          console.log('[Dashboard] No saved pixels, fetching from API...');
+          fetcher.submit(
+            {
+              intent: "fetch-facebook-pixels",
+              accessToken: savedToken,
+            },
+            { method: "POST" }
+          );
+        }
       }
     } else if (hasValidFacebookToken) {
       // Server indicates we have a valid token but localStorage is empty
@@ -565,7 +568,7 @@ export default function DashboardPage() {
     } else {
       console.log('[Dashboard] No saved Facebook token found');
     }
-  }, [mounted, fetcher, hasValidFacebookToken]);
+  }, [mounted]); // REMOVED hasValidFacebookToken and fetcher from dependencies to prevent infinite loop
 
   // Handle Facebook OAuth callback
   useEffect(() => {
