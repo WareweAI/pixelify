@@ -24,6 +24,7 @@ import {
 import { CheckIcon, ConnectIcon, ExportIcon } from "@shopify/polaris-icons";
 import { ClientOnly } from "~/components/ClientOnly";
 import { PageSelector } from "~/components/PageSelector";
+import { OnboardingWizard } from "~/components/dashboard/OnboardingWizard";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopify = getShopifyInstance();
@@ -132,6 +133,24 @@ export default function DashboardPage() {
   // Pixel validation state
   const [pixelValidationResult, setPixelValidationResult] = useState<{ valid: boolean; pixelName?: string; error?: string } | null>(null);
   const [isValidatingPixel, setIsValidatingPixel] = useState(false);
+  
+  // Success/Error message state to prevent hydration mismatch
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  
+  // Manual loading state for onboarding to handle edge cases
+  const [isOnboardingLoading, setIsOnboardingLoading] = useState(false);
+  
+  // Track if we've already fetched pixels to prevent duplicate requests
+  const [hasFetchedPixels, setHasFetchedPixels] = useState(false);
+  
+  // Track the last fetcher submission time to detect stuck requests
+  const [lastSubmitTime, setLastSubmitTime] = useState<number>(0);
+  
+  // Track loading progress
+  const [loadingProgress, setLoadingProgress] = useState(0);
+
+  const isLoading = fetcher.state !== "idle" || isOnboardingLoading;
 
   // Load dashboard data from API on mount
   useEffect(() => {
@@ -260,7 +279,52 @@ export default function DashboardPage() {
   // Handle fetcher responses (Facebook token save, disconnect, etc.)
   useEffect(() => {
     if (fetcher.data) {
-      console.log('[Dashboard] Fetcher response:', fetcher.data);
+      console.log('[Dashboard] 📥 Fetcher response received:', fetcher.data);
+      console.log('[Dashboard] Fetcher state:', fetcher.state);
+      
+      // If pixel was created successfully during onboarding, reload the page
+      if (fetcher.data.success && fetcher.data.appId) {
+        console.log('[Dashboard] ✅ Pixel created successfully! AppId:', fetcher.data.appId);
+        console.log('[Dashboard] 🔄 Reloading page in 1 second...');
+        setIsOnboardingLoading(false);
+        setLastSubmitTime(0);
+        // Small delay to ensure the database transaction is complete
+        setTimeout(() => {
+          window.location.reload();
+        }, 1000);
+        return;
+      }
+      
+      // Handle pixel creation errors - check both error field and success flag
+      if (fetcher.data.error || fetcher.data.success === false) {
+        console.error('[Dashboard] ❌ Pixel creation error:', fetcher.data.error);
+        setErrorMessage(fetcher.data.error || 'Failed to create pixel. Please try again.');
+        setIsOnboardingLoading(false);
+        setLastSubmitTime(0);
+        return;
+      }
+      
+      // If Facebook pixels were fetched successfully, update state
+      if (fetcher.data.success && fetcher.data.facebookPixels) {
+        console.log('[Dashboard] ✅ Facebook pixels fetched:', fetcher.data.facebookPixels.length);
+        setFacebookPixels(fetcher.data.facebookPixels);
+        
+        // Save to localStorage for persistence
+        if (typeof window !== "undefined") {
+          localStorage.setItem("facebook_pixels", JSON.stringify(fetcher.data.facebookPixels));
+          console.log('[Dashboard] Saved pixels to localStorage');
+        }
+        
+        // Also save user info if provided
+        if (fetcher.data.user) {
+          console.log('[Dashboard] Saving Facebook user info:', fetcher.data.user.name);
+          setFacebookUser(fetcher.data.user);
+          if (typeof window !== "undefined") {
+            localStorage.setItem("facebook_user", JSON.stringify(fetcher.data.user));
+          }
+        }
+        return; // Exit early after handling
+      }
       
       // If Facebook was disconnected successfully, clear all Facebook state and localStorage
       if (fetcher.data.intent === "disconnect-facebook" && fetcher.data.success) {
@@ -307,7 +371,7 @@ export default function DashboardPage() {
         loadDashboardData();
       }
       
-      // If Facebook token was saved successfully, refresh dashboard data
+      // If Facebook token was saved successfully, refresh dashboard data AND fetch pixels
       if (fetcher.data.intent === "save-facebook-token" && fetcher.data.success) {
         console.log('[Dashboard] Facebook token saved, refreshing dashboard data...');
         const loadDashboardData = async () => {
@@ -332,9 +396,57 @@ export default function DashboardPage() {
         };
         
         loadDashboardData();
+        
+        // Also fetch pixels immediately after token save
+        if (facebookAccessToken) {
+          console.log('[Dashboard] Fetching pixels after token save...');
+          fetcher.submit(
+            {
+              intent: "fetch-facebook-pixels",
+              accessToken: facebookAccessToken,
+            },
+            { method: "POST" }
+          );
+        }
+      }
+      
+      // Handle errors from pixel fetch
+      if (fetcher.data.error && !fetcher.data.success) {
+        console.error('[Dashboard] Fetcher error:', fetcher.data.error);
+        
+        // Check if this is the "all pixels already added" case
+        if (fetcher.data.totalPixels && fetcher.data.existingPixels) {
+          console.log(`[Dashboard] Total pixels in Facebook: ${fetcher.data.totalPixels}, Already in DB: ${fetcher.data.existingPixels}`);
+          setFacebookError(`You have ${fetcher.data.totalPixels} pixel(s) in Facebook, but all are already added to your app. Create new pixels in Facebook Events Manager or use Manual Input.`);
+        } else {
+          setFacebookError(fetcher.data.error);
+        }
+        
+        // If user info is still available despite error, save it
+        if (fetcher.data.user) {
+          console.log('[Dashboard] Saving Facebook user info despite error:', fetcher.data.user.name);
+          setFacebookUser(fetcher.data.user);
+          if (typeof window !== "undefined") {
+            localStorage.setItem("facebook_user", JSON.stringify(fetcher.data.user));
+          }
+        }
       }
     }
-  }, [fetcher.data]);
+  }, [fetcher.data, facebookAccessToken]);
+  
+  // Monitor fetcher state - if it goes back to idle without data, something went wrong
+  useEffect(() => {
+    if (fetcher.state === 'idle' && isOnboardingLoading && !fetcher.data && lastSubmitTime > 0) {
+      const elapsed = Date.now() - lastSubmitTime;
+      // Only trigger if we've been loading for at least 1 second (to avoid false positives)
+      if (elapsed > 1000) {
+        console.error('[Dashboard] ⚠️ Fetcher returned to idle without data');
+        setIsOnboardingLoading(false);
+        setErrorMessage('Request failed. Please check your connection and try again.');
+        setLastSubmitTime(0);
+      }
+    }
+  }, [fetcher.state, isOnboardingLoading, fetcher.data, lastSubmitTime]);
 
   // Extract data from dashboardData with fallbacks
   const apps = dashboardData?.apps || [];
@@ -418,12 +530,6 @@ export default function DashboardPage() {
   const [renameValue, setRenameValue] = useState("");
   const [websiteDomain, setWebsiteDomain] = useState("");
 
-  // Success/Error message state to prevent hydration mismatch
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  const isLoading = fetcher.state !== "idle";
-
   // Debug: Watch showPageSelector state changes
   useEffect(() => {
     console.log('[Dashboard] showPageSelector changed to:', showPageSelector);
@@ -446,6 +552,12 @@ export default function DashboardPage() {
   // Mark component as mounted to prevent hydration mismatch
   useEffect(() => {
     setMounted(true);
+    
+    // Clear any stale pixel cache on mount
+    console.log('[Dashboard] Component mounted - clearing stale pixel cache');
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("facebook_pixels");
+    }
   }, []);
 
   // Sync offset with loader data
@@ -521,7 +633,6 @@ export default function DashboardPage() {
     console.log('[Dashboard] Checking localStorage for saved Facebook connection...');
     const savedToken = localStorage.getItem("facebook_access_token");
     const savedUser = localStorage.getItem("facebook_user");
-    const savedPixels = localStorage.getItem("facebook_pixels");
 
     console.log('[Dashboard] Saved token exists:', !!savedToken);
     console.log('[Dashboard] Saved user exists:', !!savedUser);
@@ -540,35 +651,16 @@ export default function DashboardPage() {
         }
       }
 
-      if (savedPixels) {
-        try {
-          setFacebookPixels(JSON.parse(savedPixels));
-        } catch (err) {
-          console.error('[Dashboard] Error parsing saved pixels:', err);
-        }
-      } else {
-        // Only fetch pixels if we don't have them cached AND we haven't already started fetching
-        // This prevents infinite loop
-        if (fetcher.state === 'idle') {
-          console.log('[Dashboard] No saved pixels, fetching from API...');
-          fetcher.submit(
-            {
-              intent: "fetch-facebook-pixels",
-              accessToken: savedToken,
-            },
-            { method: "POST" }
-          );
-        }
-      }
+      // DON'T automatically fetch pixels - let user trigger it manually
+      console.log('[Dashboard] Facebook connection restored. Pixels will be fetched when needed.');
     } else if (hasValidFacebookToken) {
       // Server indicates we have a valid token but localStorage is empty
-      // This can happen after browser refresh or different device
       console.log('[Dashboard] Server has valid token but localStorage is empty - showing connected state');
       setIsConnectedToFacebook(true);
     } else {
       console.log('[Dashboard] No saved Facebook token found');
     }
-  }, [mounted]); // REMOVED hasValidFacebookToken and fetcher from dependencies to prevent infinite loop
+  }, [mounted, hasValidFacebookToken]);
 
   // Handle Facebook OAuth callback
   useEffect(() => {
@@ -842,6 +934,25 @@ export default function DashboardPage() {
   }, [fetcher]);
 
   const handleDisconnectFacebook = useCallback(() => {
+    console.log('[Dashboard] Disconnecting Facebook - clearing all local state first...');
+    
+    // Clear localStorage immediately
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("facebook_access_token");
+      localStorage.removeItem("facebook_user");
+      localStorage.removeItem("facebook_pixels");
+      console.log('[Dashboard] Cleared all Facebook data from localStorage');
+    }
+    
+    // Clear React state immediately
+    setFacebookAccessToken("");
+    setIsConnectedToFacebook(false);
+    setFacebookUser(null);
+    setFacebookPixels([]);
+    setSelectedFacebookPixel("");
+    console.log('[Dashboard] Cleared all Facebook state from React');
+    
+    // Now call the API to clear database
     fetcher.submit(
       { intent: "disconnect-facebook" },
       { method: "POST" }
@@ -939,7 +1050,7 @@ export default function DashboardPage() {
     return (
       <Page title="Dashboard" fullWidth>
         <Layout>
-          <Layout.Section fullWidth>
+          <Layout.Section>
             <Card>
               <div style={{ padding: '60px', textAlign: 'center' }}>
                 <div style={{ marginBottom: '16px' }}>
@@ -992,14 +1103,14 @@ export default function DashboardPage() {
         <Layout>
           {/* Success/Error Banner */}
           {successMessage && (
-            <Layout.Section fullWidth>
+            <Layout.Section>
               <Banner tone="success" onDismiss={() => setSuccessMessage(null)}>
                 <p>{successMessage}</p>
               </Banner>
             </Layout.Section>
           )}
           {errorMessage && (
-            <Layout.Section fullWidth>
+            <Layout.Section>
               <Banner tone="critical" onDismiss={() => setErrorMessage(null)}>
                 <p>{errorMessage}</p>
               </Banner>
@@ -1009,7 +1120,7 @@ export default function DashboardPage() {
           {/* Facebook Connection Status Card */}
           <ClientOnly>
             {mounted && isConnectedToFacebook ? (
-              <Layout.Section fullWidth>
+              <Layout.Section>
                 <Card>
                   <InlineStack align="space-between" blockAlign="center">
                     <InlineStack gap="300" blockAlign="center">
@@ -1066,7 +1177,7 @@ export default function DashboardPage() {
           </ClientOnly>
 
           {/* Theme Extension Status Card */}
-          <Layout.Section fullWidth>
+          <Layout.Section>
             <Card>
               <InlineStack align="space-between" blockAlign="center">
                 <InlineStack gap="300" blockAlign="center">
@@ -1171,7 +1282,7 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
           </Layout.Section>
 
           {/* Dashboard Overview Stats */}
-          <Layout.Section fullWidth>
+          <Layout.Section>
             <BlockStack gap="400">
               <Text variant="headingLg" as="h2">Performance Overview</Text>
               <InlineStack gap="400" wrap={false}>
@@ -1186,7 +1297,7 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
                   <BlockStack gap="200">
                     <Text variant="bodySm" as="p" tone="subdued">Assigned Domains</Text>
                     <Text variant="headingXl" as="p">{apps.filter((app: any) => app.websiteDomain).length}</Text>
-                    <Text variant="bodySm" as="p" tone="info">Domain-specific pixels</Text>
+                    <Text variant="bodySm" as="p" tone="subdued">Domain-specific pixels</Text>
                   </BlockStack>
                 </Card>
                 <Card>
@@ -1215,7 +1326,7 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
           </Layout.Section>
 
           {/* Facebook Pixels List */}
-          <Layout.Section fullWidth>
+          <Layout.Section>
             <BlockStack gap="400">
               <InlineStack align="space-between" blockAlign="center">
                 <Text variant="headingLg" as="h2">Your Facebook Pixels</Text>
@@ -1308,7 +1419,7 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
                         <Text variant="bodySm" as="span" tone="subdued">{settings?.metaPixelId || appId}</Text>,
                         websiteDomain ? (
                           <InlineStack gap="100" blockAlign="center">
-                            <Badge tone="info">{`🌐 ${websiteDomain}`}</Badge>
+                            <Badge>{`🌐 ${websiteDomain}`}</Badge>
                           </InlineStack>
                         ) : (
                           <Badge tone="attention">Unassigned</Badge>
@@ -1378,7 +1489,7 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
 
           {/* Recent Purchase Events */}
           {recentPurchaseEvents.length > 0 && (
-            <Layout.Section fullWidth>
+            <Layout.Section>
               <Card>
                 <BlockStack gap="400">
                   <InlineStack align="space-between" blockAlign="center">
@@ -2208,856 +2319,57 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
   }
 
   return (
-    <div style={{
-      backgroundColor: "#f6f6f7",
-      minHeight: "100vh",
-      padding: "40px 20px"
-    }}>
-      <div style={{
-        maxWidth: "1200px",
-        margin: "0 auto"
-      }}>
-        {/* Header */}
-        <div style={{ textAlign: "center", marginBottom: "40px" }}>
-          <Text variant="heading2xl" as="h1" alignment="center">
-            Get your Pixels ready
-          </Text>
-          <Text as="p" tone="subdued" alignment="center" variant="bodyLg">
-            Install the right pixels, and install the pixels right
-          </Text>
-        </div>
-
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: "300px 1fr",
-          gap: "40px",
-          alignItems: "start"
-        }}>
-          {/* Left Sidebar - Steps */}
-          <Card>
-            <BlockStack gap="400">
-              {/* Step 1 */}
-              <div style={{
-                display: "flex",
-                alignItems: "flex-start",
-                gap: "12px",
-                padding: "16px",
-                backgroundColor: currentStep === 1 ? "#f0f8ff" : "transparent",
-                borderRadius: "8px"
-              }}>
-                <div style={{
-                  width: "24px",
-                  height: "24px",
-                  borderRadius: "50%",
-                  backgroundColor: currentStep >= 1 ? "#2563eb" : "#e5e7eb",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  flexShrink: 0,
-                  marginTop: "2px"
-                }}>
-                  {currentStep > 1 ? (
-                    <Icon source={CheckIcon} tone="base" />
-                  ) : (
-                    <Text as="span" variant="bodySm" tone={currentStep === 1 ? "base" : "subdued"}>
-                      1
-                    </Text>
-                  )}
-                </div>
-                <BlockStack gap="100">
-                  <Text variant="headingSm" as="h3">
-                    Add Facebook Pixel
-                  </Text>
-                  <Text variant="bodySm" as="p" tone="subdued">
-                    Install the right pixels, and install the pixels right
-                  </Text>
-                </BlockStack>
-              </div>
-
-              {/* Step 2 */}
-              <div style={{
-                display: "flex",
-                alignItems: "flex-start",
-                gap: "12px",
-                padding: "16px",
-                backgroundColor: currentStep === 2 ? "#f0f8ff" : "transparent",
-                borderRadius: "8px"
-              }}>
-                <div style={{
-                  width: "24px",
-                  height: "24px",
-                  borderRadius: "50%",
-                  backgroundColor: currentStep >= 2 ? "#2563eb" : "#e5e7eb",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  flexShrink: 0,
-                  marginTop: "2px"
-                }}>
-                  <Text as="span" variant="bodySm" tone={currentStep >= 2 ? "base" : "subdued"}>
-                    2
-                  </Text>
-                </div>
-                <BlockStack gap="100">
-                  <Text variant="headingSm" as="h3">
-                    Conversion API
-                  </Text>
-                  <Text variant="bodySm" as="p" tone="subdued">
-                    Track all customer behavior events bypassing the browser's limitation
-                  </Text>
-                </BlockStack>
-              </div>
-
-              {/* Step 3 */}
-              <div style={{
-                display: "flex",
-                alignItems: "flex-start",
-                gap: "12px",
-                padding: "16px",
-                backgroundColor: currentStep === 3 ? "#f0f8ff" : "transparent",
-                borderRadius: "8px"
-              }}>
-                <div style={{
-                  width: "24px",
-                  height: "24px",
-                  borderRadius: "50%",
-                  backgroundColor: currentStep >= 3 ? "#2563eb" : "#e5e7eb",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  flexShrink: 0,
-                  marginTop: "2px"
-                }}>
-                  <Text as="span" variant="bodySm" tone={currentStep >= 3 ? "base" : "subdued"}>
-                    3
-                  </Text>
-                </div>
-                <BlockStack gap="100">
-                  <Text variant="headingSm" as="h3">
-                    Timezone
-                  </Text>
-                  <Text variant="bodySm" as="p" tone="subdued">
-                    Set the timezone for sending tracking events
-                  </Text>
-                </BlockStack>
-              </div>
-
-              {/* Step 4 */}
-              <div style={{
-                display: "flex",
-                alignItems: "flex-start",
-                gap: "12px",
-                padding: "16px",
-                backgroundColor: currentStep === 4 ? "#f0f8ff" : "transparent",
-                borderRadius: "8px"
-              }}>
-                <div style={{
-                  width: "24px",
-                  height: "24px",
-                  borderRadius: "50%",
-                  backgroundColor: currentStep >= 4 ? "#2563eb" : "#e5e7eb",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  flexShrink: 0,
-                  marginTop: "2px"
-                }}>
-                  <Text as="span" variant="bodySm" tone={currentStep >= 4 ? "base" : "subdued"}>
-                    4
-                  </Text>
-                </div>
-                <BlockStack gap="100">
-                  <Text variant="headingSm" as="h3">
-                    Activate app
-                  </Text>
-                  <Text variant="bodySm" as="p" tone="subdued">
-                    Make sure the app work
-                  </Text>
-                </BlockStack>
-              </div>
-            </BlockStack>
-          </Card>
-
-          {/* Right Content Area */}
-          <Card>
-            <BlockStack gap="400">
-              {/* Success/Error Banner */}
-              {successMessage && (
-                <Banner tone="success" onDismiss={() => setSuccessMessage(null)}>
-                  <p>{successMessage}</p>
-                </Banner>
-              )}
-              {errorMessage && (
-                <Banner tone="critical" onDismiss={() => setErrorMessage(null)}>
-                  <p>{errorMessage}</p>
-                </Banner>
-              )}
-
-              {/* Step 1: Create Pixel */}
-              {currentStep === 1 && (
-                <>
-                  <Text variant="headingLg" as="h2">
-                    Create New Pixel
-                  </Text>
-
-                  <Banner tone="info">
-                    <p>
-                      <strong>Two ways to add pixels:</strong> Connect your Facebook account to auto-fetch existing pixels, or manually enter your Pixel ID and Access Token.
-                    </p>
-                  </Banner>
-
-                  {/* Input Method Tabs */}
-                  <div style={{
-                    display: "flex",
-                    gap: "1px",
-                    backgroundColor: "#e5e7eb",
-                    borderRadius: "8px",
-                    padding: "4px"
-                  }}>
-                    <button
-                      onClick={() => {
-                        setInputMethod("auto");
-                        setPixelForm({
-                          pixelName: "",
-                          pixelId: "",
-                          trackingPages: "all",
-                          selectedCollections: [],
-                          selectedProductTypes: [],
-                          selectedProductTags: [],
-                          selectedProducts: [],
-                        });
-                      }}
-                      style={{
-                        flex: 1,
-                        padding: "12px 24px",
-                        backgroundColor: inputMethod === "auto" ? "white" : "transparent",
-                        border: "none",
-                        borderRadius: "6px",
-                        cursor: "pointer",
-                        fontWeight: inputMethod === "auto" ? "600" : "400",
-                        color: inputMethod === "auto" ? "#1f2937" : "#6b7280"
-                      }}
-                      suppressHydrationWarning={true}
-                    >
-                      Auto Input Pixel
-                    </button>
-                    <button
-                      onClick={() => {
-                        setInputMethod("manual");
-                        setPixelForm({
-                          pixelName: "",
-                          pixelId: "",
-                          trackingPages: "all",
-                          selectedCollections: [],
-                          selectedProductTypes: [],
-                          selectedProductTags: [],
-                          selectedProducts: [],
-                        });
-                        setIsConnectedToFacebook(false);
-                        setFacebookPixels([]);
-                        setSelectedFacebookPixel("");
-                      }}
-                      style={{
-                        flex: 1,
-                        padding: "12px 24px",
-                        backgroundColor: inputMethod === "manual" ? "white" : "transparent",
-                        border: "none",
-                        borderRadius: "6px",
-                        cursor: "pointer",
-                        fontWeight: inputMethod === "manual" ? "600" : "400",
-                        color: inputMethod === "manual" ? "#1f2937" : "#6b7280"
-                      }}
-                      suppressHydrationWarning={true}
-                    >
-                      Manual Input
-                    </button>
-                  </div>
-                </>
-              )}
-
-              {/* Step 2: Choose Timezone */}
-              {currentStep === 2 && (
-                <>
-                  <Text variant="headingLg" as="h2">
-                    Choose GMT Timezone
-                  </Text>
-
-                  <Banner tone="success">
-                    <p>✅ Pixel created successfully! Now choose your GMT timezone for tracking events.</p>
-                  </Banner>
-
-                  <div>
-                    <Text as="p" variant="bodyMd" fontWeight="medium">
-                      Select GMT Timezone <Text as="span" tone="critical">*</Text>
-                    </Text>
-                    <div style={{ marginTop: "8px", marginBottom: "4px" }}>
-                      <Select
-                        label=""
-                        options={timezoneOptions}
-                        value={selectedTimezone}
-                        onChange={setSelectedTimezone}
-                      />
-                    </div>
-                    <Text as="p" variant="bodySm" tone="subdued">
-                      This timezone will be used for sending tracking events to Facebook.
-                    </Text>
-                  </div>
-
-                  {/* Current Selection Display */}
-                  <Card>
-                    <BlockStack gap="200">
-                      <Text variant="headingSm" as="h3">Selected Timezone</Text>
-                      <InlineStack gap="200" blockAlign="center">
-                        <div style={{
-                          width: "12px",
-                          height: "12px",
-                          borderRadius: "50%",
-                          backgroundColor: "#10b981"
-                        }}></div>
-                        <Text as="p" variant="bodyMd" fontWeight="medium">
-                          {timezoneOptions.find(tz => tz.value === selectedTimezone)?.label || selectedTimezone}
-                        </Text>
-                      </InlineStack>
-                    </BlockStack>
-                  </Card>
-
-                  <Banner tone="info">
-                    <BlockStack gap="100">
-                      <Text as="p" variant="bodyMd" fontWeight="medium">Why timezone matters:</Text>
-                      <Text as="p" variant="bodySm">
-                        • Facebook uses timezone to properly attribute conversions
-                      </Text>
-                      <Text as="p" variant="bodySm">
-                        • Events are timestamped based on your selected timezone
-                      </Text>
-                      <Text as="p" variant="bodySm">
-                        • Helps with accurate reporting and audience insights
-                      </Text>
-                    </BlockStack>
-                  </Banner>
-                </>
-              )}
-
-              {/* Form Fields */}
-              <BlockStack gap="400">
-                {inputMethod === "auto" ? (
-                  // Auto Input - Facebook Integration
-                  <BlockStack gap="400">
-                    {facebookError && (
-                      <Banner tone="critical" onDismiss={() => setFacebookError("")}>
-                        <p>{facebookError}</p>
-                      </Banner>
-                    )}
-
-                    <ClientOnly>
-                      {!mounted || !isConnectedToFacebook ? (
-                        <Card background="bg-surface-secondary">
-                          <BlockStack gap="300">
-                            <InlineStack gap="200" blockAlign="center">
-                              <Icon source={ConnectIcon} tone="base" />
-                              <Text variant="headingSm" as="h3">
-                                Connect to Facebook
-                              </Text>
-                            </InlineStack>
-                            <Text as="p" tone="subdued">
-                              Connect your Facebook account to automatically fetch your available pixels.
-                            </Text>
-                            <InlineStack gap="200">
-                              <Button
-                                variant="primary"
-                                onClick={handleConnectToFacebook}
-                              >
-                                Connect to Facebook
-                              </Button>
-                              <Button
-                                variant="secondary"
-                                onClick={() => setShowFacebookModal(true)}
-                              >
-                                Manual Token
-                              </Button>
-                            </InlineStack>
-                          </BlockStack>
-                        </Card>
-                      ) : (
-                        <BlockStack gap="300">
-                          <Banner tone="success">
-                            <p>✅ Connected to Facebook! Found {facebookPixels.length} pixel(s).</p>
-                          </Banner>
-
-                          {facebookPixels.length > 0 && (
-                            <>
-                              <Select
-                                label="Select a Facebook Pixel"
-                                options={[
-                                  { label: "Choose a pixel...", value: "" },
-                                  ...facebookPixels
-                                    .filter(pixel => {
-                                      // Filter out pixels that are already added
-                                      return !apps.some((app: any) => app.settings?.metaPixelId === pixel.id);
-                                    })
-                                    .map(pixel => ({
-                                      label: `${pixel.name} (${pixel.accountName})`,
-                                      value: pixel.id
-                                    }))
-                                ]}
-                                value={selectedFacebookPixel}
-                                onChange={(value) => {
-                                  setSelectedFacebookPixel(value);
-                                  const selectedPixel = facebookPixels.find(p => p.id === value);
-                                  if (selectedPixel) {
-                                    setPixelForm(prev => ({
-                                      ...prev,
-                                      pixelName: selectedPixel.name,
-                                      pixelId: selectedPixel.id,
-                                    }));
-                                  }
-                                }}
-                              />
-
-                              {/* Show message if some pixels are already added */}
-                              {facebookPixels.some(pixel => apps.some((app: any) => app.settings?.metaPixelId === pixel.id)) && (
-                                <Banner tone="info">
-                                  <p>
-                                    Some pixels are hidden because they're already added to your app.
-                                    Each pixel can only be added once.
-                                  </p>
-                                </Banner>
-                              )}
-
-                              {/* Show message if all pixels are already added */}
-                              {facebookPixels.every(pixel => apps.some((app: any) => app.settings?.metaPixelId === pixel.id)) && (
-                                <Banner tone="warning">
-                                  <p>
-                                    All your Facebook pixels are already added to this app.
-                                    You can manage them from the main dashboard.
-                                  </p>
-                                </Banner>
-                              )}
-                            </>
-                          )}
-
-                          <Button
-                            onClick={() => {
-                              setIsConnectedToFacebook(false);
-                              setFacebookPixels([]);
-                              setSelectedFacebookPixel("");
-                            }}
-                            variant="plain"
-                          >
-                            Disconnect from Facebook
-                          </Button>
-                        </BlockStack>
-                      )}
-                    </ClientOnly>
-                  </BlockStack>
-                ) : (
-                  // Manual Input
-                  <BlockStack gap="400">
-                    <TextField
-                      label="Name your pixel"
-                      value={pixelForm.pixelName}
-                      onChange={(value) => setPixelForm(prev => ({ ...prev, pixelName: value }))}
-                      placeholder="Any name will do. This is just so you can manage different pixels easily."
-                      helpText="Name is required"
-                      error={!pixelForm.pixelName && fetcher.data?.error ? "Name is required" : undefined}
-                      autoComplete="off"
-                      requiredIndicator
-                    />
-
-                    <div>
-                      <Text as="p" variant="bodyMd" fontWeight="medium">
-                        Pixel ID (Dataset ID) <Text as="span" tone="critical">*</Text>
-                      </Text>
-                      <div style={{ marginTop: "8px", marginBottom: "4px" }}>
-                        <TextField
-                          label=""
-                          value={pixelForm.pixelId}
-                          onChange={(value) => setPixelForm(prev => ({ ...prev, pixelId: value }))}
-                          placeholder="Enter your Facebook Pixel ID / Dataset ID"
-                          error={
-                            (!pixelForm.pixelId && fetcher.data?.error)
-                              ? "Facebook Pixel ID is required"
-                              : (pixelForm.pixelId && apps.some((app: any) => app.settings?.metaPixelId === pixelForm.pixelId))
-                                ? "This pixel is already added to your app"
-                                : undefined
-                          }
-                          autoComplete="off"
-                        />
-                      </div>
-                      <Text as="p" variant="bodySm" tone="subdued">
-                        This is your Facebook Pixel ID (also called Dataset ID)
-                      </Text>
-
-                      {/* Show warning if pixel already exists */}
-                      {pixelForm.pixelId &&
-                        apps.some((app: any) => app.settings?.metaPixelId === pixelForm.pixelId) && (
-                          <div style={{ marginTop: "8px" }}>
-                            <Banner tone="critical">
-                              <p>
-                                This pixel ID is already added to your app as "{apps.find((app: any) => app.settings?.metaPixelId === pixelForm.pixelId)?.name}".
-                                Each pixel can only be added once.
-                              </p>
-                            </Banner>
-                          </div>
-                        )}
-                    </div>
-
-                    <div>
-                      <Text as="p" variant="bodyMd" fontWeight="medium">
-                        Access Token <Text as="span" tone="critical">*</Text>
-                      </Text>
-                      <div style={{ marginTop: "8px", marginBottom: "4px" }}>
-                        <TextField
-                          label=""
-                          value={facebookAccessToken}
-                          onChange={setFacebookAccessToken}
-                          type="password"
-                          placeholder="Enter your Facebook access token"
-                          error={!facebookAccessToken && fetcher.data?.error ? "Access token is required" : undefined}
-                          autoComplete="off"
-                        />
-                      </div>
-                      <Text as="p" variant="bodySm" tone="subdued">
-                        Required to validate the pixel and create connection
-                      </Text>
-                    </div>
-
-                    <Banner tone="info">
-                      <p>Both Pixel ID and Access Token are required to validate and create the pixel connection.</p>
-                    </Banner>
-
-                    {pixelForm.pixelId && facebookAccessToken && (
-                      <Button
-                        onClick={() => {
-                          fetcher.submit(
-                            {
-                              intent: "validate-pixel",
-                              pixelId: pixelForm.pixelId,
-                              accessToken: facebookAccessToken,
-                            },
-                            { method: "POST" }
-                          );
-                        }}
-                        loading={isLoading}
-                        variant="secondary"
-                      >
-                        Test Connection
-                      </Button>
-                    )}
-                  </BlockStack>
-                )}
-
-                {/* Common fields for both methods */}
-                {(inputMethod === "manual" || (inputMethod === "auto" && pixelForm.pixelId)) && (
-                  <div>
-                    <Text as="p" variant="bodyMd" fontWeight="medium">
-                      Tracking on pages
-                    </Text>
-                    <div style={{ marginTop: "12px" }}>
-                      <BlockStack gap="200">
-                        <RadioButton
-                          label="All pages"
-                          checked={pixelForm.trackingPages === "all"}
-                          id="all-pages"
-                          name="tracking-pages"
-                          onChange={() => setPixelForm(prev => ({ ...prev, trackingPages: "all" }))}
-                        />
-                        <RadioButton
-                          label="Selected pages"
-                          checked={pixelForm.trackingPages === "selected"}
-                          id="selected-pages"
-                          name="tracking-pages"
-                          onChange={() => setPixelForm(prev => ({ ...prev, trackingPages: "selected" }))}
-                        />
-                        <RadioButton
-                          label="Excluded pages"
-                          checked={pixelForm.trackingPages === "excluded"}
-                          id="excluded-pages"
-                          name="tracking-pages"
-                          onChange={() => setPixelForm(prev => ({ ...prev, trackingPages: "excluded" }))}
-                        />
-                      </BlockStack>
-
-                      {/* Collection/Product/Tag Selectors */}
-                      {(pixelForm.trackingPages === "selected" || pixelForm.trackingPages === "excluded") && (
-                        <div style={{ marginTop: "16px" }}>
-                          <BlockStack gap="300">
-                            {/* Collection Selector */}
-                            <div style={{
-                              padding: "12px",
-                              backgroundColor: "#f6f6f7",
-                              borderRadius: "8px"
-                            }}>
-                              <BlockStack gap="200">
-                                <Button
-                                  onClick={() => {/* TODO: Open collection selector modal */ }}
-                                  variant="plain"
-                                  textAlign="left"
-                                >
-                                  + Select collection(s)
-                                </Button>
-                                {pixelForm.selectedCollections.length > 0 && (
-                                  <Text as="p" variant="bodySm" tone="subdued">
-                                    {pixelForm.selectedCollections.length} collection(s) {pixelForm.trackingPages === "selected" ? "selected" : "excluded"}
-                                  </Text>
-                                )}
-                              </BlockStack>
-                            </div>
-
-                            {/* Product Type Selector */}
-                            <div style={{
-                              padding: "12px",
-                              backgroundColor: "#f6f6f7",
-                              borderRadius: "8px"
-                            }}>
-                              <BlockStack gap="200">
-                                <Button
-                                  onClick={() => {/* TODO: Open product type selector modal */ }}
-                                  variant="plain"
-                                  textAlign="left"
-                                >
-                                  + Product with Type(s)
-                                </Button>
-                                {pixelForm.selectedProductTypes.length > 0 && (
-                                  <Text as="p" variant="bodySm" tone="subdued">
-                                    {pixelForm.selectedProductTypes.length} type(s) {pixelForm.trackingPages === "selected" ? "selected" : "excluded"}
-                                  </Text>
-                                )}
-                              </BlockStack>
-                            </div>
-
-                            {/* Product Tag Selector */}
-                            <div style={{
-                              padding: "12px",
-                              backgroundColor: "#f6f6f7",
-                              borderRadius: "8px"
-                            }}>
-                              <BlockStack gap="200">
-                                <Button
-                                  onClick={() => {/* TODO: Open product tag selector modal */ }}
-                                  variant="plain"
-                                  textAlign="left"
-                                >
-                                  + Product with Tag(s)
-                                </Button>
-                                {pixelForm.selectedProductTags.length > 0 && (
-                                  <Text as="p" variant="bodySm" tone="subdued">
-                                    {pixelForm.selectedProductTags.length} tag(s) {pixelForm.trackingPages === "selected" ? "selected" : "excluded"}
-                                  </Text>
-                                )}
-                              </BlockStack>
-                            </div>
-
-                            {/* Product Selector */}
-                            <div style={{
-                              padding: "12px",
-                              backgroundColor: "#f6f6f7",
-                              borderRadius: "8px"
-                            }}>
-                              <BlockStack gap="200">
-                                <Button
-                                  onClick={() => {/* TODO: Open product selector modal */ }}
-                                  variant="plain"
-                                  textAlign="left"
-                                >
-                                  + Select Product(s)
-                                </Button>
-                                {pixelForm.selectedProducts.length > 0 && (
-                                  <Text as="p" variant="bodySm" tone="subdued">
-                                    {pixelForm.selectedProducts.length} product(s) {pixelForm.trackingPages === "selected" ? "selected" : "excluded"}
-                                  </Text>
-                                )}
-                              </BlockStack>
-                            </div>
-                          </BlockStack>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </BlockStack>
-
-              {/* Footer */}
-              <div style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                paddingTop: "24px",
-                borderTop: "1px solid #e5e7eb"
-              }}>
-                <Text as="p" variant="bodySm" tone="subdued">
-                  Step {currentStep} of 4
-                </Text>
-
-                {currentStep === 1 && (
-                  <Button
-                    variant="primary"
-                    onClick={handleCreatePixel}
-                    loading={isLoading}
-                    disabled={
-                      inputMethod === "auto"
-                        ? !pixelForm.pixelId || !selectedFacebookPixel
-                        : !pixelForm.pixelName ||
-                        !pixelForm.pixelId ||
-                        !facebookAccessToken ||
-                        apps.some((app: any) => app.settings?.metaPixelId === pixelForm.pixelId)
-                    }
-                  >
-                    {inputMethod === "manual" ? "Validate & Create Pixel" : "Next"}
-                  </Button>
-                )}
-
-                {currentStep === 2 && (
-                  <InlineStack gap="200">
-                    <Button
-                      onClick={() => setCurrentStep(1)}
-                    >
-                      Back
-                    </Button>
-                    <Button
-                      variant="primary"
-                      loading={isLoading}
-                      onClick={() => {
-                        if (createdAppId) {
-                          fetcher.submit(
-                            {
-                              intent: "save-timezone",
-                              appId: createdAppId,
-                              timezone: selectedTimezone,
-                            },
-                            { method: "POST" }
-                          );
-                        } else {
-                          setCurrentStep(3);
-                        }
-                      }}
-                    >
-                      Continue
-                    </Button>
-                  </InlineStack>
-                )}
-              </div>
-            </BlockStack>
-          </Card>
-        </div>
-      </div>
-
-      {/* Facebook Connection Modal */}
-      <Modal
-        open={showFacebookModal}
-        onClose={() => {
-          setShowFacebookModal(false);
-          setFacebookAccessToken("");
-          setFacebookError("");
-        }}
-        title="Connect to Facebook"
-        primaryAction={{
-          content: facebookAccessToken ? "Fetch Pixels" : "Connect with OAuth",
-          onAction: facebookAccessToken ?
-            () => {
+    <Page title="Get Started">
+      <Layout>
+        <Layout.Section>
+          <OnboardingWizard
+            onComplete={(data) => {
+              // CRITICAL: Prevent duplicate submissions
+              if (isOnboardingLoading || lastSubmitTime > 0) {
+                console.warn('[Dashboard] ⚠️ Submission already in progress, ignoring duplicate call');
+                return;
+              }
+              
+              console.log('[Dashboard] ⏱️ Onboarding complete, submitting pixel creation...');
+              console.log('[Dashboard] 📋 Pixel data:', {
+                pixelName: data.pixelName,
+                pixelId: data.pixelId,
+                timezone: data.timezone,
+                hasAccessToken: !!data.accessToken,
+                tokenLength: data.accessToken?.length || 0
+              });
+              
+              // Clear any previous errors
+              setErrorMessage(null);
+              setIsOnboardingLoading(true);
+              const submitTime = Date.now();
+              setLastSubmitTime(submitTime);
+              
+              console.log('[Dashboard] 📤 Submitting create-pixel request...');
+              
+              // Create pixel with the onboarding data
               fetcher.submit(
                 {
-                  intent: "fetch-facebook-pixels",
-                  accessToken: facebookAccessToken,
+                  intent: "create-pixel",
+                  pixelName: data.pixelName,
+                  pixelId: data.pixelId,
+                  accessToken: data.accessToken,
+                  timezone: data.timezone,
                 },
-                { method: "POST" }
+                { method: "POST", action: "/api/dashboard" }
               );
-              setShowFacebookModal(false);
-            } :
-            handleConnectToFacebook,
-          loading: isLoading,
-        }}
-        secondaryActions={[
-          {
-            content: "Cancel",
-            onAction: () => {
-              setShowFacebookModal(false);
-              setFacebookAccessToken("");
-              setFacebookError("");
-            },
-          },
-        ]}
-      >
-        <Modal.Section>
-          <BlockStack gap="400">
-            {facebookError && (
-              <Banner tone="critical">
-                <p>{facebookError}</p>
-              </Banner>
-            )}
-
-            <Card>
-              <BlockStack gap="300">
-                <Text variant="headingSm" as="h3">🚀 Recommended: OAuth Login</Text>
-                <Text as="p" variant="bodyMd">
-                  Click "Connect with OAuth" above to automatically authenticate with Facebook and fetch your pixels.
-                </Text>
-                <Text as="p" variant="bodySm" tone="subdued">
-                  This will open a popup window where you can log in to Facebook and grant permissions.
-                </Text>
-              </BlockStack>
-            </Card>
-
-            <Divider />
-
-            <Card>
-              <BlockStack gap="300">
-                <Text variant="headingSm" as="h3">🔧 Alternative: Manual Token</Text>
-
-                <TextField
-                  label="Facebook Pixel Access Token"
-                  value={facebookAccessToken}
-                  onChange={setFacebookAccessToken}
-                  type="password"
-                  placeholder="Enter your Facebook Pixel access token..."
-                  helpText="Use this if OAuth doesn't work or you prefer manual setup"
-                  autoComplete="off"
-                />
-
-                <BlockStack gap="200">
-                  <Text as="p" variant="bodySm">
-                    <strong>To get a manual token:</strong>
-                  </Text>
-                  <Text as="p" variant="bodySm">
-                    1. Go to <a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noopener noreferrer" style={{ color: "#2563eb" }}>Facebook Graph API Explorer</a>
-                  </Text>
-                  <Text as="p" variant="bodySm">
-                    2. Select your app and generate a token with <code>ads_read</code>, <code>business_management</code>, <code>ads_management</code>, <code>pages_show_list</code>, <code>pages_read_engagement</code>, <code>catalog_management</code> permissions
-                  </Text>
-                  <Text as="p" variant="bodySm">
-                    3. Copy and paste the token above
-                  </Text>
-                </BlockStack>
-              </BlockStack>
-            </Card>
-
-            <Banner tone="info">
-              <p><strong>Required Permissions:</strong> Your Facebook app needs <code>ads_read</code>, <code>business_management</code>, <code>ads_management</code>, <code>pages_show_list</code>, <code>pages_read_engagement</code>, <code>catalog_management</code> permissions to access pixel data and manage product catalogs.</p>
-            </Banner>
-          </BlockStack>
-        </Modal.Section>
-      </Modal>
-
-      {/* Page Selector Modal */}
-      {mounted && (
-        <PageSelector
-          open={showPageSelector}
-          onClose={() => {
-            console.log('[PageSelector] Closing modal');
-            setShowPageSelector(false);
-          }}
-          onSelectPages={(pages) => {
-            console.log('[PageSelector] Selected pages:', pages);
-            setEnhancedCreateForm(prev => ({
-              ...prev,
-              selectedPageTypes: pages
-            }));
-            setShowPageSelector(false);
-          }}
-          initialSelectedPages={enhancedCreateForm.selectedPageTypes}
-          availablePages={pageTypeOptions.filter((p: any) => p.value !== "all")}
-        />
-      )}
-    </div>
+              console.log('[Dashboard] ✅ Request submitted, waiting for response...');
+            }}
+            onSkip={() => {
+              console.log('[Dashboard] User skipped onboarding');
+              // User skipped onboarding, show them the dashboard anyway
+              window.location.reload();
+            }}
+            isLoading={isLoading}
+            error={errorMessage}
+          />
+        </Layout.Section>
+      </Layout>
+    </Page>
   );
 }

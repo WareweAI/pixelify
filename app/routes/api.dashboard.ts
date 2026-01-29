@@ -260,61 +260,120 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   // Create pixel (new flow)
   if (intent === "create-pixel") {
-    const pixelName = formData.get("pixelName") as string;
-    const pixelId = formData.get("pixelId") as string;
-    const accessToken = formData.get("accessToken") as string;
+    console.log('[API] 🔵 CREATE-PIXEL request received');
+    console.log('[API] Request timestamp:', new Date().toISOString());
+    
+    try {
+      const pixelName = formData.get("pixelName") as string;
+      const pixelId = formData.get("pixelId") as string;
+      const accessToken = formData.get("accessToken") as string;
+      const timezone = formData.get("timezone") as string || "GMT+0";
 
-    if (!pixelName || !pixelId || !accessToken) {
-      return { error: "Pixel name, ID, and access token are required" };
+      console.log('[API] 📋 Pixel data:', {
+        pixelName,
+        pixelId,
+        timezone,
+        hasAccessToken: !!accessToken,
+        tokenLength: accessToken?.length || 0
+      });
+
+      if (!pixelName || !pixelId || !accessToken) {
+        console.error('[API] ❌ Missing required fields');
+        return { success: false, error: "Pixel name, ID, and access token are required" };
+      }
+
+      // Check if pixel already exists
+      console.log('[API] 🔍 Checking for existing pixel...');
+      const existingPixel = await prisma.appSettings.findFirst({
+        where: { metaPixelId: pixelId, app: { userId: user.id } },
+        include: { app: { select: { name: true } } }
+      });
+
+      if (existingPixel) {
+        console.log('[API] ⚠️ Pixel already exists:', existingPixel.app.name);
+        return { success: false, error: `Pixel already exists as "${existingPixel.app.name}"` };
+      }
+      console.log('[API] ✅ No existing pixel found');
+
+      // Validate pixel with Facebook (with timeout)
+      console.log('[API] 🔍 Validating pixel with Facebook...');
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+      
+      try {
+        const validateResponse = await fetch(
+          `https://graph.facebook.com/v24.0/${pixelId}?access_token=${accessToken}`,
+          { signal: controller.signal }
+        );
+        clearTimeout(timeoutId);
+        
+        console.log('[API] Facebook validation response status:', validateResponse.status);
+        
+        if (!validateResponse.ok) {
+          console.error('[API] ❌ Facebook validation failed with HTTP', validateResponse.status);
+          return { success: false, error: `Failed to validate pixel with Facebook (HTTP ${validateResponse.status})` };
+        }
+        
+        const validateData = await validateResponse.json();
+        console.log('[API] Facebook validation data:', validateData);
+
+        if (validateData.error) {
+          console.error('[API] ❌ Facebook returned error:', validateData.error.message);
+          return { success: false, error: `Pixel validation failed: ${validateData.error.message}` };
+        }
+        
+        console.log('[API] ✅ Pixel validated successfully');
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          console.error('[API] ❌ Facebook validation timed out after 8 seconds');
+          return { success: false, error: 'Facebook validation timed out. Please check your access token and try again.' };
+        }
+        console.error('[API] ❌ Facebook validation error:', fetchError.message);
+        return { success: false, error: `Failed to validate pixel: ${fetchError.message}` };
+      }
+
+      // Create pixel
+      console.log('[API] 💾 Creating app in database...');
+      const app = await prisma.app.create({
+        data: {
+          userId: user.id,
+          name: pixelName,
+          appId: `pixel_${Date.now()}`,
+          appToken: `token_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+        },
+      });
+      console.log('[API] ✅ App created with ID:', app.id);
+
+      console.log('[API] 💾 Creating app settings...');
+      await prisma.appSettings.create({
+        data: {
+          appId: app.id,
+          metaPixelId: pixelId,
+          metaAccessToken: accessToken,
+          metaPixelEnabled: true,
+          metaVerified: true,
+          autoTrackPageviews: true,
+          autoTrackClicks: true,
+          recordIp: true,
+          recordLocation: true,
+          recordSession: true,
+          timezone: timezone,
+        },
+      });
+      console.log('[API] ✅ App settings created');
+
+      // Invalidate cache after creating pixel
+      invalidateDashboardCache();
+      console.log('[API] ✅ Cache invalidated');
+
+      console.log('[API] 🎉 Pixel creation complete! Returning success response');
+      return { success: true, message: "Pixel created successfully", appId: app.id };
+    } catch (error: any) {
+      console.error('[API] ❌ CRITICAL ERROR creating pixel:', error);
+      console.error('[API] Error stack:', error.stack);
+      return { success: false, error: `Failed to create pixel: ${error.message || 'Unknown error'}` };
     }
-
-    // Check if pixel already exists
-    const existingPixel = await prisma.appSettings.findFirst({
-      where: { metaPixelId: pixelId, app: { userId: user.id } },
-      include: { app: { select: { name: true } } }
-    });
-
-    if (existingPixel) {
-      return { error: `Pixel already exists as "${existingPixel.app.name}"` };
-    }
-
-    // Validate pixel with Facebook
-    const validateResponse = await fetch(`https://graph.facebook.com/v24.0/${pixelId}?access_token=${accessToken}`);
-    const validateData = await validateResponse.json();
-
-    if (validateData.error) {
-      return { error: `Pixel validation failed: ${validateData.error.message}` };
-    }
-
-    // Create pixel
-    const app = await prisma.app.create({
-      data: {
-        userId: user.id,
-        name: pixelName,
-        appId: `pixel_${Date.now()}`,
-        appToken: `token_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
-      },
-    });
-
-    await prisma.appSettings.create({
-      data: {
-        appId: app.id,
-        metaPixelId: pixelId,
-        metaAccessToken: accessToken,
-        metaPixelEnabled: true,
-        metaVerified: true,
-        autoTrackPageviews: true,
-        autoTrackClicks: true,
-        recordIp: true,
-        recordLocation: true,
-        recordSession: true,
-      },
-    });
-
-    // Invalidate cache after creating pixel
-    invalidateDashboardCache();
-
-    return { success: true, message: "Pixel created successfully", step: 2 };
   }
 
   // Validate pixel
@@ -552,52 +611,186 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const accessToken = formData.get("accessToken") as string;
 
     if (!accessToken) {
-      return { error: "Access token is required" };
+      return { error: "Access token is required", success: false };
     }
 
-    const adAccountsResponse = await fetch(
-      `https://graph.facebook.com/v24.0/me/adaccounts?fields=id,name,business&access_token=${accessToken}`
-    );
-    const adAccountsData = await adAccountsResponse.json();
+    console.log('[Dashboard API] Fetching Facebook pixels from API...');
 
-    if (adAccountsData.error) {
-      return { error: "Failed to access Facebook ad accounts" };
-    }
-
-    let businessId: string | null = null;
-    let businessName: string | null = null;
-    const adAccounts = adAccountsData.data || [];
-
-    const accountWithBusiness = adAccounts.find((acc: any) => acc.business?.id);
-    if (accountWithBusiness) {
-      businessId = accountWithBusiness.business.id;
-      businessName = accountWithBusiness.business.name || "Business Manager";
-    }
-
-    const pixels: Array<{ id: string; name: string; accountName: string }> = [];
-
-    if (businessId) {
-      const pixelsResponse = await fetch(
-        `https://graph.facebook.com/v24.0/${businessId}/adspixels?fields=id,name&access_token=${accessToken}`
+    try {
+      // First, get user info
+      const userResponse = await fetch(
+        `https://graph.facebook.com/v24.0/me?fields=id,name,picture&access_token=${accessToken}`
       );
-      const pixelsData = await pixelsResponse.json();
+      const userData = await userResponse.json();
 
-      if (pixelsData.data) {
-        pixelsData.data.forEach((pixel: any) => {
-          pixels.push({
-            id: pixel.id,
-            name: pixel.name,
-            accountName: businessName || "Business Manager",
+      if (userData.error) {
+        console.error('[Dashboard API] Failed to fetch user info:', userData.error);
+        return { error: "Failed to access Facebook user info", success: false };
+      }
+
+      console.log('[Dashboard API] Facebook user:', userData.name);
+
+      // Get ad accounts
+      const adAccountsResponse = await fetch(
+        `https://graph.facebook.com/v24.0/me/adaccounts?fields=id,name,business&access_token=${accessToken}`
+      );
+      const adAccountsData = await adAccountsResponse.json();
+
+      if (adAccountsData.error) {
+        console.error('[Dashboard API] Failed to fetch ad accounts:', adAccountsData.error);
+        return { error: "Failed to access Facebook ad accounts", success: false };
+      }
+
+      let businessId: string | null = null;
+      let businessName: string | null = null;
+      const adAccounts = adAccountsData.data || [];
+
+      console.log('[Dashboard API] Found', adAccounts.length, 'ad accounts');
+
+      const accountWithBusiness = adAccounts.find((acc: any) => acc.business?.id);
+      if (accountWithBusiness) {
+        businessId = accountWithBusiness.business.id;
+        businessName = accountWithBusiness.business.name || "Business Manager";
+        console.log('[Dashboard API] Using business:', businessName, '(', businessId, ')');
+      }
+
+      const allPixels: Array<{ id: string; name: string; accountName: string }> = [];
+
+      if (businessId) {
+        const pixelsResponse = await fetch(
+          `https://graph.facebook.com/v24.0/${businessId}/adspixels?fields=id,name&access_token=${accessToken}`
+        );
+        const pixelsData = await pixelsResponse.json();
+
+        if (pixelsData.error) {
+          console.error('[Dashboard API] Failed to fetch pixels:', pixelsData.error);
+        } else if (pixelsData.data) {
+          pixelsData.data.forEach((pixel: any) => {
+            allPixels.push({
+              id: pixel.id,
+              name: pixel.name,
+              accountName: businessName || "Business Manager",
+            });
           });
+          console.log('[Dashboard API] Found', allPixels.length, 'pixels from business');
+        }
+      } else {
+        console.warn('[Dashboard API] No business manager found - checking ad accounts directly');
+        
+        // Try to get pixels from each ad account
+        for (const account of adAccounts) {
+          try {
+            const pixelsResponse = await fetch(
+              `https://graph.facebook.com/v24.0/${account.id}/adspixels?fields=id,name&access_token=${accessToken}`
+            );
+            const pixelsData = await pixelsResponse.json();
+
+            if (pixelsData.data) {
+              pixelsData.data.forEach((pixel: any) => {
+                allPixels.push({
+                  id: pixel.id,
+                  name: pixel.name,
+                  accountName: account.name || "Ad Account",
+                });
+              });
+            }
+          } catch (err) {
+            console.error('[Dashboard API] Error fetching pixels from account', account.id, ':', err);
+          }
+        }
+      }
+
+      console.log('[Dashboard API] Total pixels from Facebook:', allPixels.length);
+      
+      // Log the actual pixel IDs from Facebook
+      if (allPixels.length > 0) {
+        console.log('[Dashboard API] Facebook pixel IDs:', allPixels.map(p => p.id).join(', '));
+      }
+
+      // Check if user has any pixels in Facebook at all
+      if (allPixels.length === 0) {
+        console.warn('[Dashboard API] No pixels found in Facebook account');
+        return { 
+          error: "No pixels found in your Facebook account. Create pixels in Facebook Events Manager first.", 
+          success: false,
+          user: userData,
+          totalPixels: 0,
+          existingPixels: 0
+        };
+      }
+
+      // NOW CHECK DATABASE - Filter out pixels that already exist in the database
+      console.log('[Dashboard API] Checking database for existing pixels...');
+      const existingPixels = await prisma.appSettings.findMany({
+        where: {
+          app: { userId: user.id },
+          metaPixelId: { in: allPixels.map(p => p.id) }
+        },
+        select: { 
+          metaPixelId: true,
+          app: {
+            select: {
+              name: true,
+              appId: true
+            }
+          }
+        }
+      });
+
+      const existingPixelIds = new Set(existingPixels.map(p => p.metaPixelId).filter(Boolean));
+      console.log('[Dashboard API] Pixels already in database:', existingPixelIds.size);
+      
+      // Log which pixels are in the database
+      if (existingPixelIds.size > 0) {
+        console.log('[Dashboard API] Existing pixel IDs in DB:', Array.from(existingPixelIds).join(', '));
+        existingPixels.forEach(p => {
+          console.log(`[Dashboard API] - Pixel ${p.metaPixelId} in app: ${p.app.name} (${p.app.appId})`);
         });
       }
-    }
 
-    if (pixels.length === 0) {
-      return { error: "No pixels found. Create pixels in Facebook Events Manager." };
-    }
+      // Filter out pixels that are already in the database
+      const availablePixels = allPixels.filter(pixel => !existingPixelIds.has(pixel.id));
 
-    return { success: true, facebookPixels: pixels };
+      console.log('[Dashboard API] Available pixels (not in DB):', availablePixels.length);
+      
+      // Log which pixels are available
+      if (availablePixels.length > 0) {
+        console.log('[Dashboard API] Available pixel IDs:', availablePixels.map(p => p.id).join(', '));
+      }
+
+      if (availablePixels.length === 0 && allPixels.length > 0) {
+        console.warn('[Dashboard API] All pixels are already added to your account');
+        console.log('[Dashboard API] Summary: Total in Facebook:', allPixels.length, ', Already in DB:', existingPixelIds.size);
+        return { 
+          error: "All your Facebook pixels are already added. Create new pixels in Facebook Events Manager or use Manual Input.", 
+          success: false,
+          user: userData,
+          totalPixels: allPixels.length,
+          existingPixels: existingPixelIds.size,
+          existingPixelDetails: existingPixels.map(p => ({
+            pixelId: p.metaPixelId,
+            appName: p.app.name,
+            appId: p.app.appId
+          }))
+        };
+      }
+
+      console.log('[Dashboard API] Successfully fetched', availablePixels.length, 'available pixels');
+      return { 
+        success: true, 
+        facebookPixels: availablePixels,
+        user: userData,
+        totalPixels: allPixels.length,
+        availablePixels: availablePixels.length,
+        existingPixels: existingPixelIds.size
+      };
+    } catch (error) {
+      console.error('[Dashboard API] Error fetching Facebook pixels:', error);
+      return { 
+        error: "Failed to fetch pixels from Facebook. Please try again.", 
+        success: false 
+      };
+    }
   }
 
   // Refresh Facebook access tokens

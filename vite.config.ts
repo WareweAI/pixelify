@@ -58,6 +58,18 @@ export default defineConfig({
   plugins: [reactRouter(), tsconfigPaths()],
   build: {
     assetsInlineLimit: 0,
+    rollupOptions: {
+      output: {
+        manualChunks: undefined,
+      },
+      onwarn(warning, warn) {
+        // Suppress "Generated an empty chunk" warnings for API routes
+        if (warning.code === 'EMPTY_BUNDLE' && warning.message?.includes('api.')) {
+          return;
+        }
+        warn(warning);
+      },
+    },
   },
   optimizeDeps: {
     include: ["@shopify/app-bridge-react"],

@@ -278,11 +278,7 @@ export default function PixelsPage() {
                       onClick={() => openPageTrackingModal(pixel)}
                       accessibilityLabel={`Configure page tracking for ${pixel.name}`}
                     >
-                      <div style={{ display: 'inline-block' }}>
-                        <Badge tone="info">
-                          {getTrackingPagesLabel(pixel.trackingPages)}
-                        </Badge>
-                      </div>
+                      {getTrackingPagesLabel(pixel.trackingPages)}
                     </Button>
                   </IndexTable.Cell>
 
