@@ -17,6 +17,8 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  // Facebook APIs must always bypass cache - fetch live data
+  console.log("[Facebook Pixels by Token API] Bypassing cache - fetching live data from Meta Graph API");
 
   const url = new URL(request.url);
   const accessToken = url.searchParams.get("accessToken");
@@ -148,7 +150,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
     flow.steps.push(`4. ✅ Total pixels found: ${flow.pixels.length}`);
     console.log(`[Pixels by Token] Total pixels found: ${flow.pixels.length}`);
 
-    // Return result
+    // Return result with cache control headers
+    const responseHeaders = {
+      ...corsHeaders,
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+      "Pragma": "no-cache",
+      "Expires": "0",
+    };
+
     return Response.json({
       success: flow.pixels.length > 0,
       pixels: flow.pixels,
@@ -163,7 +172,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       message: flow.pixels.length > 0 
         ? `Found ${flow.pixels.length} pixel(s) from ${flow.adAccounts.length} ad account(s)`
         : "No pixels found - create pixels in Facebook Events Manager"
-    }, { headers: corsHeaders });
+    }, { headers: responseHeaders });
 
   } catch (error) {
     console.error("[Pixels by Token] Unexpected error:", error);

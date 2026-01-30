@@ -2,8 +2,9 @@
   "name": "pixelify",
   "private": true,
   "scripts": {
-    "build": "react-router build",
-    "postbuild": "prisma generate && prisma migrate deploy",
+    "build": "prisma generate && react-router build",
+    "postinstall": "prisma generate",
+    "vercel-build": "prisma generate && prisma migrate deploy && npm run build",
     "dev": "shopify app dev",
     "config:link": "shopify app config link",
     "generate": "shopify app generate",
@@ -20,10 +21,15 @@
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
     "typecheck": "react-router typegen && tsc --noEmit",
+<<<<<<< HEAD
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:db": "node scripts/test-db-connection.js"
+=======
+    "test:db": "node scripts/test-db-connection.js",
+    "ensure-session": "node scripts/startup.js"
+>>>>>>> b4f4fb986f9ba0ba7efd8c13266a6d47fbf24594
   },
   "type": "module",
   "engines": {
@@ -48,7 +54,7 @@
     "react-dom": "^18.3.1",
     "react-router": "^7.9.3",
     "ua-parser-js": "^2.0.6",
-    "vercel": "^50.4.0",
+    "vercel": "^32.3.0",
     "vite-tsconfig-paths": "^5.1.4"
   },
   "devDependencies": {

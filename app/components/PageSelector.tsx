@@ -47,14 +47,8 @@ export function PageSelector({
     if (open) {
       console.log('[PageSelector] Modal opened with', availablePages.length, 'available pages');
       console.log('[PageSelector] Initial selected:', initialSelectedPages);
-      console.log('[PageSelector] Available pages:', availablePages);
-      // Debug: Show breakdown by type
-      const systemCount = availablePages.filter(p => p.type === "system").length;
-      const collectionCount = availablePages.filter(p => p.type === "collection").length;
-      const productCount = availablePages.filter(p => p.type === "product").length;
-      console.log('[PageSelector] Page breakdown:', { system: systemCount, collections: collectionCount, products: productCount });
     }
-  }, [open, availablePages.length, initialSelectedPages, availablePages]);
+  }, [open, availablePages.length, initialSelectedPages]);
 
   const handleTogglePage = useCallback((pageValue: string) => {
     setSelectedPages((prev) =>

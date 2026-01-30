@@ -19,6 +19,7 @@ import {
   Box,
 } from "@shopify/polaris";
 import { EditIcon } from "@shopify/polaris-icons";
+import { FacebookPixelPageSelector } from "~/components/dashboard/FacebookPixelPageSelector";
 
 interface PixelData {
   id: string;
@@ -66,6 +67,8 @@ export default function PixelsPage() {
   const [testEventName, setTestEventName] = useState("TestEvent");
   const [isSendingTest, setIsSendingTest] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [showPageTrackingModal, setShowPageTrackingModal] = useState(false);
+  const [selectedPixelForPages, setSelectedPixelForPages] = useState<PixelData | null>(null);
 
   // Load pixels data from API on mount
   useEffect(() => {
@@ -135,6 +138,17 @@ export default function PixelsPage() {
     setSelectedPixel(pixel);
     setShowTestModal(true);
     setTestResult(null);
+  };
+
+  const openPageTrackingModal = (pixel: PixelData) => {
+    setSelectedPixelForPages(pixel);
+    setShowPageTrackingModal(true);
+  };
+
+  const handlePageSettingsChange = (appId: string, settings: { trackingPages: string; selectedPages: string[] }) => {
+    setPixels(prev => prev.map(p => 
+      p.appId === appId ? { ...p, trackingPages: settings.trackingPages } : p
+    ));
   };
 
   const getTrackingPagesLabel = (trackingPages: string) => {
@@ -259,9 +273,13 @@ export default function PixelsPage() {
 
                   {/* Pages */}
                   <IndexTable.Cell>
-                    <Badge tone="success">
+                    <Button 
+                      variant="plain" 
+                      onClick={() => openPageTrackingModal(pixel)}
+                      accessibilityLabel={`Configure page tracking for ${pixel.name}`}
+                    >
                       {getTrackingPagesLabel(pixel.trackingPages)}
-                    </Badge>
+                    </Button>
                   </IndexTable.Cell>
 
                   {/* Server-Side API Toggle */}
@@ -443,6 +461,15 @@ export default function PixelsPage() {
           </BlockStack>
         </Modal.Section>
       </Modal>
+
+      {/* Page Tracking Modal */}
+      {selectedPixelForPages && (
+        <FacebookPixelPageSelector
+          appId={selectedPixelForPages.appId}
+          initialTrackingPages={selectedPixelForPages.trackingPages}
+          onSettingsChange={(settings) => handlePageSettingsChange(selectedPixelForPages.appId, settings)}
+        />
+      )}
     </Page>
   );
 }

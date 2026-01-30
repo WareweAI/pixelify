@@ -39,14 +39,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   // Generate cache key for this shop
   const cacheKey = generateCacheKey('catalog-data', shop);
 
+<<<<<<< HEAD
   // If bypassing cache, invalidate it first
   if (bypassCache) {
     cache.delete(cacheKey);
     console.log(`[Catalog Data API] Cache bypassed for ${shop} (refresh=${url.searchParams.get('refresh')}, force=${url.searchParams.get('force')})`);
   }
+=======
+  // ALWAYS bypass cache for catalog data to ensure real-time Facebook API calls
+  // This is critical for disconnect/connect operations and pixel validation
+  cache.delete(cacheKey);
+  console.log(`[Catalog Data API] Cache disabled for real-time Facebook validation`);
+>>>>>>> b4f4fb986f9ba0ba7efd8c13266a6d47fbf24594
 
-  // Use cache with 5 minute TTL (300 seconds)
-  const cachedData = await withCache(cacheKey, 300, async () => {
+  // Fetch fresh data without caching
+  const fetchCatalogData = async () => {
     console.log(`[Catalog Data API] Fetching fresh data for ${shop}`);
 
     // Get user first
@@ -235,7 +242,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       cached: false,
       cacheTimestamp: new Date().toISOString(),
     };
-  });
+  };
 
-  return Response.json(cachedData);
+  const catalogData = await fetchCatalogData();
+  return Response.json(catalogData);
 };

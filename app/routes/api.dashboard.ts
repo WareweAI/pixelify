@@ -1301,9 +1301,5 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
-  console.log('[Dashboard API] ❌ No matching intent found');
-  console.log('[Dashboard API] Received intent:', intent);
-  console.log('[Dashboard API] Available intents: assign-website, create-pixel, validate-pixel, rename, delete, save-timezone, toggle-pixel, save-facebook-token, test-facebook-api, fetch-facebook-pixels, refresh-facebook-token, disconnect-facebook, cleanup-expired-tokens, clear-cache');
-  
   return { error: "Invalid action" };
 };

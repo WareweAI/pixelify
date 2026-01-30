@@ -24,6 +24,7 @@ import {
 import { CheckIcon, ConnectIcon, ExportIcon } from "@shopify/polaris-icons";
 import { ClientOnly } from "~/components/ClientOnly";
 import { PageSelector } from "~/components/PageSelector";
+import { OnboardingWizard } from "~/components/dashboard/OnboardingWizard";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopify = getShopifyInstance();
@@ -166,6 +167,24 @@ export default function DashboardPage() {
   // Pixel validation state
   const [pixelValidationResult, setPixelValidationResult] = useState<{ valid: boolean; pixelName?: string; error?: string } | null>(null);
   const [isValidatingPixel, setIsValidatingPixel] = useState(false);
+  
+  // Success/Error message state to prevent hydration mismatch
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  
+  // Manual loading state for onboarding to handle edge cases
+  const [isOnboardingLoading, setIsOnboardingLoading] = useState(false);
+  
+  // Track if we've already fetched pixels to prevent duplicate requests
+  const [hasFetchedPixels, setHasFetchedPixels] = useState(false);
+  
+  // Track the last fetcher submission time to detect stuck requests
+  const [lastSubmitTime, setLastSubmitTime] = useState<number>(0);
+  
+  // Track loading progress
+  const [loadingProgress, setLoadingProgress] = useState(0);
+
+  const isLoading = fetcher.state !== "idle" || isOnboardingLoading;
 
   // Load dashboard data from API on mount
   useEffect(() => {
@@ -252,105 +271,10 @@ export default function DashboardPage() {
     }
   }, [themeExtensionFetcher.data]);
 
-  // Handle fetcher responses (Facebook token save, etc.)
+  // Handle fetcher responses (Facebook token save, disconnect, etc.)
   useEffect(() => {
     if (fetcher.data) {
       console.log('[Dashboard] Fetcher response:', fetcher.data);
-      
-      // Handle Facebook API test response
-      if (fetcher.data.intent === "test-facebook-api") {
-        if (fetcher.data.success) {
-          console.log('[Dashboard] 🧪 Facebook API test completed successfully!');
-          console.log('[Dashboard] Test results:', fetcher.data.testResults);
-          
-          const results = fetcher.data.testResults;
-          let message = "Facebook API Test Results:\n\n";
-          
-          if (results.userTest?.success) {
-            message += `✅ User Info: ${results.userTest.data.name} (ID: ${results.userTest.data.id})\n`;
-          } else {
-            message += `❌ User Info: ${results.userTest?.error?.message || 'Failed'}\n`;
-          }
-          
-          if (results.businessTest?.success) {
-            message += `✅ Businesses: Found ${results.businessTest.data.length} business(es)\n`;
-            results.businessTest.data.forEach((business: any, index: number) => {
-              message += `   ${index + 1}. ${business.name} (ID: ${business.id})\n`;
-            });
-          } else {
-            message += `❌ Businesses: ${results.businessTest?.error?.message || 'Failed'}\n`;
-          }
-          
-          if (results.pixelTest?.success) {
-            message += `✅ Business Pixels: Found ${results.pixelTest.data.length} pixel(s)\n`;
-            results.pixelTest.data.forEach((pixel: any, index: number) => {
-              message += `   ${index + 1}. ${pixel.name} (ID: ${pixel.id}) - Business: ${pixel.businessName}\n`;
-            });
-          } else {
-            message += `❌ Business Pixels: ${results.pixelTest?.error?.message || 'Failed'}\n`;
-          }
-          
-          alert(message);
-        } else {
-          console.error('[Dashboard] ❌ Facebook API test failed:', fetcher.data.error);
-          alert(`Facebook API Test Failed:\n\n${fetcher.data.error}`);
-        }
-      }
-
-      // Handle Facebook pixels fetch response
-      if (fetcher.data.intent === "fetch-facebook-pixels") {
-        if (fetcher.data.success) {
-          console.log('[Dashboard] 🎯 Facebook pixels fetched successfully!');
-          console.log('[Dashboard] Pixels count:', fetcher.data.facebookPixels?.length || 0);
-          console.log('[Dashboard] 📊 FULL Pixels data:', fetcher.data.facebookPixels);
-          
-          if (fetcher.data.facebookPixels && fetcher.data.facebookPixels.length > 0) {
-            setFacebookPixels(fetcher.data.facebookPixels);
-            localStorage.setItem("facebook_pixels", JSON.stringify(fetcher.data.facebookPixels));
-            console.log('[Dashboard] ✅ Pixels saved to state and localStorage');
-            
-            // Log each pixel individually
-            fetcher.data.facebookPixels.forEach((pixel: any, index: number) => {
-              console.log(`[Dashboard] Pixel ${index + 1}:`, {
-                id: pixel.id,
-                name: pixel.name,
-                accountName: pixel.accountName
-              });
-            });
-          } else {
-            console.log('[Dashboard] ⚠️ No pixels in response');
-            setFacebookPixels([]);
-            localStorage.removeItem("facebook_pixels"); // Clear cached pixels
-          }
-          
-          if (fetcher.data.debugInfo) {
-            console.log('[Dashboard] 🔍 Debug info:', fetcher.data.debugInfo);
-          }
-        } else {
-          console.error('[Dashboard] ❌ Facebook pixels fetch failed:', fetcher.data.error);
-          if (fetcher.data.debugInfo) {
-            console.error('[Dashboard] 🔍 Debug info:', fetcher.data.debugInfo);
-          }
-          setFacebookError(fetcher.data.error || 'Failed to fetch pixels');
-          setFacebookPixels([]); // Clear pixels on error
-          localStorage.removeItem("facebook_pixels"); // Clear cached pixels
-        }
-      }
-      
-      // Handle pixel creation success
-      if (fetcher.data.intent === "create-pixel" && fetcher.data.success) {
-        console.log('[Dashboard] ✅ Pixel created successfully!');
-        console.log('[Dashboard] Redirecting to main dashboard...');
-        
-        // Redirect to main dashboard after successful creation
-        window.location.href = '/app/dashboard';
-      }
-
-      // Handle pixel creation errors
-      if (fetcher.data.intent === "create-pixel" && !fetcher.data.success) {
-        console.error('[Dashboard] ❌ Pixel creation failed:', fetcher.data.error);
-        setErrorMessage(fetcher.data.error || 'Failed to create pixel');
-      }
       
       // If Facebook token was saved successfully, refresh dashboard data
       if (fetcher.data.intent === "save-facebook-token" && fetcher.data.success) {
@@ -490,9 +414,57 @@ export default function DashboardPage() {
         };
         
         loadDashboardData();
+        
+        // Also fetch pixels immediately after token save
+        if (facebookAccessToken) {
+          console.log('[Dashboard] Fetching pixels after token save...');
+          fetcher.submit(
+            {
+              intent: "fetch-facebook-pixels",
+              accessToken: facebookAccessToken,
+            },
+            { method: "POST" }
+          );
+        }
+      }
+      
+      // Handle errors from pixel fetch
+      if (fetcher.data.error && !fetcher.data.success) {
+        console.error('[Dashboard] Fetcher error:', fetcher.data.error);
+        
+        // Check if this is the "all pixels already added" case
+        if (fetcher.data.totalPixels && fetcher.data.existingPixels) {
+          console.log(`[Dashboard] Total pixels in Facebook: ${fetcher.data.totalPixels}, Already in DB: ${fetcher.data.existingPixels}`);
+          setFacebookError(`You have ${fetcher.data.totalPixels} pixel(s) in Facebook, but all are already added to your app. Create new pixels in Facebook Events Manager or use Manual Input.`);
+        } else {
+          setFacebookError(fetcher.data.error);
+        }
+        
+        // If user info is still available despite error, save it
+        if (fetcher.data.user) {
+          console.log('[Dashboard] Saving Facebook user info despite error:', fetcher.data.user.name);
+          setFacebookUser(fetcher.data.user);
+          if (typeof window !== "undefined") {
+            localStorage.setItem("facebook_user", JSON.stringify(fetcher.data.user));
+          }
+        }
       }
     }
-  }, [fetcher.data]);
+  }, [fetcher.data, facebookAccessToken]);
+  
+  // Monitor fetcher state - if it goes back to idle without data, something went wrong
+  useEffect(() => {
+    if (fetcher.state === 'idle' && isOnboardingLoading && !fetcher.data && lastSubmitTime > 0) {
+      const elapsed = Date.now() - lastSubmitTime;
+      // Only trigger if we've been loading for at least 1 second (to avoid false positives)
+      if (elapsed > 1000) {
+        console.error('[Dashboard] ⚠️ Fetcher returned to idle without data');
+        setIsOnboardingLoading(false);
+        setErrorMessage('Request failed. Please check your connection and try again.');
+        setLastSubmitTime(0);
+      }
+    }
+  }, [fetcher.state, isOnboardingLoading, fetcher.data, lastSubmitTime]);
 
   // Extract data from dashboardData with fallbacks
   const apps = dashboardData?.apps || [];
@@ -646,50 +618,6 @@ export default function DashboardPage() {
 
   const isLoading = fetcher.state !== "idle";
 
-  // Load store pages on demand (when PageSelector is opened)
-  const loadStorePagesOnDemand = useCallback(async () => {
-    if (storePages.length > 16) { // More than just system pages
-      console.log('[Dashboard] Pages already loaded, skipping fetch');
-      return;
-    }
-    
-    try {
-      // setIsLoadingPages(true); // DISABLED to prevent loading button issues
-      console.log('[Dashboard] Loading store pages on demand...');
-      const response = await fetch('/api/shopify-store-pages');
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('[Dashboard] Pages API error response:', errorText);
-        throw new Error(`Failed to load pages: ${response.status} ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      console.log('[Dashboard] Pages API response data:', data);
-      
-      if (data.warning) {
-        console.warn('[Dashboard] ⚠️ Warning:', data.warning);
-      }
-      
-      // Always set pages even if there's a warning
-      if (data.pages && data.pages.length > 0) {
-        setStorePages(data.pages);
-        console.log('[Dashboard] ✅ Loaded', data.pages.length, 'pages from Shopify');
-        
-        if (data.breakdown) {
-          console.log('[Dashboard] Pages breakdown:', data.breakdown);
-        }
-      } else {
-        console.warn('[Dashboard] No pages returned, keeping system pages only');
-      }
-    } catch (error: any) {
-      console.error('[Dashboard] ❌ Failed to load pages on demand:', error);
-      // Keep existing pages on error
-    } finally {
-      // setIsLoadingPages(false); // DISABLED to prevent loading button issues
-    }
-  }, [storePages.length]);
-
   // Debug: Watch showPageSelector state changes
   useEffect(() => {
     console.log('[Dashboard] showPageSelector changed to:', showPageSelector);
@@ -712,6 +640,12 @@ export default function DashboardPage() {
   // Mark component as mounted to prevent hydration mismatch
   useEffect(() => {
     setMounted(true);
+    
+    // Clear any stale pixel cache on mount
+    console.log('[Dashboard] Component mounted - clearing stale pixel cache');
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("facebook_pixels");
+    }
   }, []);
 
   // Sync offset with loader data
@@ -795,7 +729,6 @@ export default function DashboardPage() {
     const savedToken = localStorage.getItem("facebook_access_token");
     const savedTokenExpiresAt = localStorage.getItem("facebook_token_expires_at");
     const savedUser = localStorage.getItem("facebook_user");
-    const savedPixels = localStorage.getItem("facebook_pixels");
 
     console.log('[Dashboard] Saved token exists:', !!savedToken);
     console.log('[Dashboard] Saved user exists:', !!savedUser);
@@ -831,31 +764,26 @@ export default function DashboardPage() {
         } catch (err) {
           console.error('[Dashboard] Error parsing saved pixels:', err);
         }
-      }
-
-      // Try to sync with server in background (but don't clear localStorage if it fails)
-      if (!hasValidFacebookToken) {
-        console.log('[Dashboard] Background sync: sending token to server...');
+      } else {
+        // Auto-fetch pixels if we have token but no cached pixels
+        console.log('[Dashboard] No saved pixels, fetching from API...');
         fetcher.submit(
-          { intent: "save-facebook-token", accessToken: savedToken },
+          {
+            intent: "fetch-facebook-pixels",
+            accessToken: savedToken,
+          },
           { method: "POST" }
         );
       }
-    } else if (savedToken && isTokenExpired) {
-      console.log('[Dashboard] ⚠️ EXPIRED: localStorage token is expired, clearing localStorage');
-      localStorage.removeItem("facebook_access_token");
-      localStorage.removeItem("facebook_token_expires_at");
-      localStorage.removeItem("facebook_user");
-      localStorage.removeItem("facebook_pixels");
-      setIsConnectedToFacebook(false);
-    } else if (!savedToken && hasValidFacebookToken) {
-      console.log('[Dashboard] ⚠️ MISMATCH: Server has valid token but localStorage is empty');
-      console.log('[Dashboard] Setting connected state based on server data');
+    } else if (hasValidFacebookToken) {
+      // Server indicates we have a valid token but localStorage is empty
+      // This can happen after browser refresh or different device
+      console.log('[Dashboard] Server has valid token but localStorage is empty - showing connected state');
       setIsConnectedToFacebook(true);
     } else {
       console.log('[Dashboard] ✅ SYNC: Both localStorage and server have no tokens (clean state)');
     }
-  }, [mounted, fetcher, hasValidFacebookToken]);
+  }, [mounted, hasValidFacebookToken]);
 
   // Handle Facebook OAuth callback
   useEffect(() => {
@@ -1172,6 +1100,25 @@ export default function DashboardPage() {
   }, [fetcher]);
 
   const handleDisconnectFacebook = useCallback(() => {
+    console.log('[Dashboard] Disconnecting Facebook - clearing all local state first...');
+    
+    // Clear localStorage immediately
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("facebook_access_token");
+      localStorage.removeItem("facebook_user");
+      localStorage.removeItem("facebook_pixels");
+      console.log('[Dashboard] Cleared all Facebook data from localStorage');
+    }
+    
+    // Clear React state immediately
+    setFacebookAccessToken("");
+    setIsConnectedToFacebook(false);
+    setFacebookUser(null);
+    setFacebookPixels([]);
+    setSelectedFacebookPixel("");
+    console.log('[Dashboard] Cleared all Facebook state from React');
+    
+    // Now call the API to clear database
     fetcher.submit(
       { intent: "disconnect-facebook" },
       { method: "POST" }
@@ -1269,7 +1216,7 @@ export default function DashboardPage() {
     return (
       <Page title="Dashboard" fullWidth>
         <Layout>
-          <Layout.Section fullWidth>
+          <Layout.Section>
             <Card>
               <div style={{ padding: '60px', textAlign: 'center' }}>
                 <div style={{ marginBottom: '16px' }}>
@@ -1320,14 +1267,14 @@ export default function DashboardPage() {
         <Layout>
           {/* Success/Error Banner */}
           {successMessage && (
-            <Layout.Section fullWidth>
+            <Layout.Section>
               <Banner tone="success" onDismiss={() => setSuccessMessage(null)}>
                 <p>{successMessage}</p>
               </Banner>
             </Layout.Section>
           )}
           {errorMessage && (
-            <Layout.Section fullWidth>
+            <Layout.Section>
               <Banner tone="critical" onDismiss={() => setErrorMessage(null)}>
                 <p>{errorMessage}</p>
               </Banner>
@@ -1337,7 +1284,7 @@ export default function DashboardPage() {
           {/* Facebook Connection Status Card */}
           <ClientOnly>
             {mounted && isConnectedToFacebook ? (
-              <Layout.Section fullWidth>
+              <Layout.Section>
                 <Card>
                   <InlineStack align="space-between" blockAlign="center">
                     <InlineStack gap="300" blockAlign="center">
@@ -1549,7 +1496,7 @@ Check browser console for full debug info.`);
           </ClientOnly>
 
           {/* Theme Extension Status Card */}
-          <Layout.Section fullWidth>
+          <Layout.Section>
             <Card>
               <InlineStack align="space-between" blockAlign="center">
                 <InlineStack gap="300" blockAlign="center">
@@ -1653,7 +1600,7 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
           </Layout.Section>
 
           {/* Dashboard Overview Stats */}
-          <Layout.Section fullWidth>
+          <Layout.Section>
             <BlockStack gap="400">
               <Text variant="headingLg" as="h2">Performance Overview</Text>
               <InlineStack gap="400" wrap={false}>
@@ -1668,7 +1615,7 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
                   <BlockStack gap="200">
                     <Text variant="bodySm" as="p" tone="subdued">Assigned Domains</Text>
                     <Text variant="headingXl" as="p">{apps.filter((app: any) => app.websiteDomain).length}</Text>
-                    <Text variant="bodySm" as="p" tone="info">Domain-specific pixels</Text>
+                    <Text variant="bodySm" as="p" tone="subdued">Domain-specific pixels</Text>
                   </BlockStack>
                 </Card>
                 <Card>
@@ -1697,7 +1644,7 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
           </Layout.Section>
 
           {/* Facebook Pixels List */}
-          <Layout.Section fullWidth>
+          <Layout.Section>
             <BlockStack gap="400">
               <InlineStack align="space-between" blockAlign="center">
                 <Text variant="headingLg" as="h2">Your Facebook Pixels</Text>
@@ -1790,7 +1737,7 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
                         <Text variant="bodySm" as="span" tone="subdued">{settings?.metaPixelId || appId}</Text>,
                         websiteDomain ? (
                           <InlineStack gap="100" blockAlign="center">
-                            <Badge tone="info">{`🌐 ${websiteDomain}`}</Badge>
+                            <Badge>{`🌐 ${websiteDomain}`}</Badge>
                           </InlineStack>
                         ) : (
                           <Badge tone="attention">Unassigned</Badge>
@@ -1860,7 +1807,7 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
 
           {/* Recent Purchase Events */}
           {recentPurchaseEvents.length > 0 && (
-            <Layout.Section fullWidth>
+            <Layout.Section>
               <Card>
                 <BlockStack gap="400">
                   <InlineStack align="space-between" blockAlign="center">
@@ -2786,10 +2733,10 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
                 </div>
                 <BlockStack gap="100">
                   <Text variant="headingSm" as="h3">
-                    Timezone
+                    Conversion API
                   </Text>
                   <Text variant="bodySm" as="p" tone="subdued">
-                    Set the timezone for sending tracking events
+                    Track all customer behavior events bypassing the browser's limitation
                   </Text>
                 </BlockStack>
               </div>
@@ -2816,6 +2763,40 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
                 }}>
                   <Text as="span" variant="bodySm" tone={currentStep >= 3 ? "base" : "subdued"}>
                     3
+                  </Text>
+                </div>
+                <BlockStack gap="100">
+                  <Text variant="headingSm" as="h3">
+                    Timezone
+                  </Text>
+                  <Text variant="bodySm" as="p" tone="subdued">
+                    Set the timezone for sending tracking events
+                  </Text>
+                </BlockStack>
+              </div>
+
+              {/* Step 4 */}
+              <div style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "12px",
+                padding: "16px",
+                backgroundColor: currentStep === 4 ? "#f0f8ff" : "transparent",
+                borderRadius: "8px"
+              }}>
+                <div style={{
+                  width: "24px",
+                  height: "24px",
+                  borderRadius: "50%",
+                  backgroundColor: currentStep >= 4 ? "#2563eb" : "#e5e7eb",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                  marginTop: "2px"
+                }}>
+                  <Text as="span" variant="bodySm" tone={currentStep >= 4 ? "base" : "subdued"}>
+                    4
                   </Text>
                 </div>
                 <BlockStack gap="100">
@@ -2990,67 +2971,7 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
                 </>
               )}
 
-              {/* Step 3: Create Pixel */}
-              {currentStep === 3 && (
-                <>
-                  <Text variant="headingLg" as="h2">
-                    Create Your Pixel
-                  </Text>
-
-                  <Banner tone="success">
-                    <p>✅ All settings configured! Ready to create your Facebook pixel.</p>
-                  </Banner>
-
-                  <Card>
-                    <BlockStack gap="300">
-                      <Text variant="headingMd" as="h3">Pixel Summary</Text>
-                      <div style={{ padding: "16px", backgroundColor: "#f6f6f7", borderRadius: "8px" }}>
-                        <BlockStack gap="200">
-                          <InlineStack gap="200" blockAlign="center">
-                            <Text variant="bodyMd" fontWeight="medium" as="span">Pixel Name:</Text>
-                            <Text variant="bodyMd" as="span">{pixelForm.pixelName || "My Pixel"}</Text>
-                          </InlineStack>
-                          <InlineStack gap="200" blockAlign="center">
-                            <Text variant="bodyMd" fontWeight="medium" as="span">Pixel ID:</Text>
-                            <Text variant="bodyMd" as="span">{pixelForm.pixelId}</Text>
-                          </InlineStack>
-                          <InlineStack gap="200" blockAlign="center">
-                            <Text variant="bodyMd" fontWeight="medium" as="span">Tracking:</Text>
-                            <Text variant="bodyMd" as="span">
-                              {pixelForm.trackingPages === "all" ? "All Pages" : 
-                               pixelForm.trackingPages === "selected" ? "Selected Pages" : "Excluded Pages"}
-                            </Text>
-                          </InlineStack>
-                          <InlineStack gap="200" blockAlign="center">
-                            <Text variant="bodyMd" fontWeight="medium" as="span">Timezone:</Text>
-                            <Text variant="bodyMd" as="span">
-                              {timezoneOptions.find(tz => tz.value === selectedTimezone)?.label || selectedTimezone}
-                            </Text>
-                          </InlineStack>
-                        </BlockStack>
-                      </div>
-                    </BlockStack>
-                  </Card>
-
-                  <Banner tone="info">
-                    <BlockStack gap="100">
-                      <Text as="p" variant="bodyMd" fontWeight="medium">What happens next:</Text>
-                      <Text as="p" variant="bodySm">
-                        • Your pixel will be created and configured
-                      </Text>
-                      <Text as="p" variant="bodySm">
-                        • Facebook connection will be established
-                      </Text>
-                      <Text as="p" variant="bodySm">
-                        • Tracking will start immediately on your selected pages
-                      </Text>
-                    </BlockStack>
-                  </Banner>
-                </>
-              )}
-
-              {/* Form Fields - Only show for steps 1 and 2 */}
-              {currentStep <= 2 && (
+              {/* Form Fields */}
               <BlockStack gap="400">
                 {inputMethod === "auto" ? (
                   // Auto Input - Facebook Integration
@@ -3250,7 +3171,7 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
                             { method: "POST" }
                           );
                         }}
-                        loading={false}
+                        loading={isLoading}
                         variant="secondary"
                       >
                         Test Connection
@@ -3289,46 +3210,105 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
                           onChange={() => setPixelForm(prev => ({ ...prev, trackingPages: "excluded" }))}
                         />
                       </BlockStack>
+
+                      {/* Collection/Product/Tag Selectors */}
+                      {(pixelForm.trackingPages === "selected" || pixelForm.trackingPages === "excluded") && (
+                        <div style={{ marginTop: "16px" }}>
+                          <BlockStack gap="300">
+                            {/* Collection Selector */}
+                            <div style={{
+                              padding: "12px",
+                              backgroundColor: "#f6f6f7",
+                              borderRadius: "8px"
+                            }}>
+                              <BlockStack gap="200">
+                                <Button
+                                  onClick={() => {/* TODO: Open collection selector modal */ }}
+                                  variant="plain"
+                                  textAlign="left"
+                                >
+                                  + Select collection(s)
+                                </Button>
+                                {pixelForm.selectedCollections.length > 0 && (
+                                  <Text as="p" variant="bodySm" tone="subdued">
+                                    {pixelForm.selectedCollections.length} collection(s) {pixelForm.trackingPages === "selected" ? "selected" : "excluded"}
+                                  </Text>
+                                )}
+                              </BlockStack>
+                            </div>
+
+                            {/* Product Type Selector */}
+                            <div style={{
+                              padding: "12px",
+                              backgroundColor: "#f6f6f7",
+                              borderRadius: "8px"
+                            }}>
+                              <BlockStack gap="200">
+                                <Button
+                                  onClick={() => {/* TODO: Open product type selector modal */ }}
+                                  variant="plain"
+                                  textAlign="left"
+                                >
+                                  + Product with Type(s)
+                                </Button>
+                                {pixelForm.selectedProductTypes.length > 0 && (
+                                  <Text as="p" variant="bodySm" tone="subdued">
+                                    {pixelForm.selectedProductTypes.length} type(s) {pixelForm.trackingPages === "selected" ? "selected" : "excluded"}
+                                  </Text>
+                                )}
+                              </BlockStack>
+                            </div>
+
+                            {/* Product Tag Selector */}
+                            <div style={{
+                              padding: "12px",
+                              backgroundColor: "#f6f6f7",
+                              borderRadius: "8px"
+                            }}>
+                              <BlockStack gap="200">
+                                <Button
+                                  onClick={() => {/* TODO: Open product tag selector modal */ }}
+                                  variant="plain"
+                                  textAlign="left"
+                                >
+                                  + Product with Tag(s)
+                                </Button>
+                                {pixelForm.selectedProductTags.length > 0 && (
+                                  <Text as="p" variant="bodySm" tone="subdued">
+                                    {pixelForm.selectedProductTags.length} tag(s) {pixelForm.trackingPages === "selected" ? "selected" : "excluded"}
+                                  </Text>
+                                )}
+                              </BlockStack>
+                            </div>
+
+                            {/* Product Selector */}
+                            <div style={{
+                              padding: "12px",
+                              backgroundColor: "#f6f6f7",
+                              borderRadius: "8px"
+                            }}>
+                              <BlockStack gap="200">
+                                <Button
+                                  onClick={() => {/* TODO: Open product selector modal */ }}
+                                  variant="plain"
+                                  textAlign="left"
+                                >
+                                  + Select Product(s)
+                                </Button>
+                                {pixelForm.selectedProducts.length > 0 && (
+                                  <Text as="p" variant="bodySm" tone="subdued">
+                                    {pixelForm.selectedProducts.length} product(s) {pixelForm.trackingPages === "selected" ? "selected" : "excluded"}
+                                  </Text>
+                                )}
+                              </BlockStack>
+                            </div>
+                          </BlockStack>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
-
-                {/* Page Selector - Show when pages are selected/excluded regardless of pixel selection */}
-                {(pixelForm.trackingPages === "selected" || pixelForm.trackingPages === "excluded") && (
-                  <div style={{ marginTop: "16px" }}>
-                    <BlockStack gap="300">
-                      {/* Unified Page Selector */}
-                      <div style={{
-                        padding: "12px",
-                        backgroundColor: "#f6f6f7",
-                        borderRadius: "8px"
-                      }}>
-                        <BlockStack gap="200">
-                          <Button
-                            onClick={async () => {
-                              console.log('[Dashboard] Opening page selector for pixel form...');
-                              // Load pages on demand before opening selector
-                              await loadStorePagesOnDemand();
-                              setShowPageSelector(true);
-                            }}
-                            variant="plain"
-                            textAlign="left"
-                            loading={false}
-                          >
-                            {'+ Select Pages'}
-                          </Button>
-                          {(pixelForm.selectedCollections.length > 0 || enhancedCreateForm.selectedPageTypes.length > 0) && (
-                            <Text as="p" variant="bodySm" tone="subdued">
-                              {(pixelForm.selectedCollections.length || enhancedCreateForm.selectedPageTypes.length)} page(s) {pixelForm.trackingPages === "selected" ? "selected" : "excluded"}
-                            </Text>
-                          )}
-                        </BlockStack>
-                      </div>
-                    </BlockStack>
-                  </div>
-                )}
               </BlockStack>
-              )}
 
               {/* Footer */}
               <div style={{
@@ -3339,14 +3319,14 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
                 borderTop: "1px solid #e5e7eb"
               }}>
                 <Text as="p" variant="bodySm" tone="subdued">
-                  Step {currentStep} of 3
+                  Step {currentStep} of 4
                 </Text>
 
                 {currentStep === 1 && (
                   <Button
                     variant="primary"
                     onClick={handleCreatePixel}
-                    loading={false}
+                    loading={isLoading}
                     disabled={
                       inputMethod === "auto"
                         ? !pixelForm.pixelId || !selectedFacebookPixel
@@ -3369,7 +3349,7 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
                     </Button>
                     <Button
                       variant="primary"
-                      loading={false}
+                      loading={isLoading}
                       onClick={() => {
                         if (createdAppId) {
                           fetcher.submit(
@@ -3381,36 +3361,11 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
                             { method: "POST" }
                           );
                         } else {
-                          setCurrentStep(3); // Go to step 3 (Activate app)
+                          setCurrentStep(3);
                         }
                       }}
                     >
                       Continue
-                    </Button>
-                  </InlineStack>
-                )}
-
-                {currentStep === 3 && (
-                  <InlineStack gap="200">
-                    <Button
-                      onClick={() => setCurrentStep(2)}
-                    >
-                      Back
-                    </Button>
-                    <Button
-                      variant="primary"
-                      loading={false}
-                      onClick={handleCreatePixel}
-                      disabled={
-                        inputMethod === "auto"
-                          ? !pixelForm.pixelId || !selectedFacebookPixel
-                          : !pixelForm.pixelName ||
-                          !pixelForm.pixelId ||
-                          !facebookAccessToken ||
-                          apps.some((app: any) => app.settings?.metaPixelId === pixelForm.pixelId)
-                      }
-                    >
-                      Create Pixel
                     </Button>
                   </InlineStack>
                 )}
@@ -3443,7 +3398,7 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
               setShowFacebookModal(false);
             } :
             handleConnectToFacebook,
-          loading: false,
+          loading: isLoading,
         }}
         secondaryActions={[
           {
@@ -3524,26 +3479,15 @@ Deep Link: ${data.deepLinkUrl || 'N/A'}`);
             console.log('[PageSelector] Closing modal');
             setShowPageSelector(false);
           }}
-          onSelectPages={(pages: any) => {
+          onSelectPages={(pages) => {
             console.log('[PageSelector] Selected pages:', pages);
-            
-            // Update both enhanced form and pixel form
             setEnhancedCreateForm(prev => ({
               ...prev,
               selectedPageTypes: pages
             }));
-            
-            // Also update pixel form for backward compatibility
-            setPixelForm(prev => ({
-              ...prev,
-              selectedCollections: pages // Store selected pages in selectedCollections for now
-            }));
-            
             setShowPageSelector(false);
           }}
-          initialSelectedPages={enhancedCreateForm.selectedPageTypes.length > 0 
-            ? enhancedCreateForm.selectedPageTypes 
-            : pixelForm.selectedCollections}
+          initialSelectedPages={enhancedCreateForm.selectedPageTypes}
           availablePages={pageTypeOptions.filter((p: any) => p.value !== "all")}
         />
       )}
