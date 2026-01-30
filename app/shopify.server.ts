@@ -6,14 +6,95 @@ import {
   BillingInterval,
 } from "@shopify/shopify-app-react-router/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
-import prisma, { ensureDatabaseConnection } from "./db.server";
+import { PrismaClient } from "@prisma/client";
+import prisma, { ensureDatabaseConnection, withDatabaseRetry } from "./db.server";
 
 // Billing configuration for development
 export const BASIC_PLAN = 'Basic Plan';
 export const ADVANCED_PLAN = 'Advanced Plan';
 
-// Create standard Shopify session storage with minimal configuration
-const sessionStorage = new PrismaSessionStorage(prisma);
+// Create resilient session storage with retry logic and fallback
+class ResilientPrismaSessionStorage extends PrismaSessionStorage<PrismaClient> {
+  private fallbackSessions = new Map<string, any>();
+  
+  constructor(prisma: PrismaClient) {
+    super(prisma);
+  }
+
+  async storeSession(session: any) {
+    try {
+      return await withDatabaseRetry(async () => {
+        return super.storeSession(session);
+      }, 2); // Reduced retries to prevent long delays
+    } catch (error) {
+      console.warn(`[Session Storage] Failed to store session in DB, using fallback: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Fallback to in-memory storage
+      this.fallbackSessions.set(session.id, session);
+      return true;
+    }
+  }
+
+  async loadSession(id: string) {
+    try {
+      return await withDatabaseRetry(async () => {
+        return super.loadSession(id);
+      }, 2); // Reduced retries
+    } catch (error) {
+      console.warn(`[Session Storage] Failed to load session from DB, checking fallback: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Try fallback storage
+      const fallbackSession = this.fallbackSessions.get(id);
+      if (fallbackSession) {
+        console.log(`[Session Storage] Found session in fallback storage: ${id}`);
+        return fallbackSession;
+      }
+      return undefined;
+    }
+  }
+
+  async deleteSession(id: string) {
+    try {
+      return await withDatabaseRetry(async () => {
+        return super.deleteSession(id);
+      }, 2);
+    } catch (error) {
+      console.warn(`[Session Storage] Failed to delete session from DB: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Remove from fallback storage
+      this.fallbackSessions.delete(id);
+      return true;
+    }
+  }
+
+  async deleteSessions(ids: string[]) {
+    try {
+      return await withDatabaseRetry(async () => {
+        return super.deleteSessions(ids);
+      }, 2);
+    } catch (error) {
+      console.warn(`[Session Storage] Failed to delete sessions from DB: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Remove from fallback storage
+      ids.forEach(id => this.fallbackSessions.delete(id));
+      return true;
+    }
+  }
+
+  async findSessionsByShop(shop: string) {
+    try {
+      return await withDatabaseRetry(async () => {
+        return super.findSessionsByShop(shop);
+      }, 2);
+    } catch (error) {
+      console.warn(`[Session Storage] Failed to find sessions by shop from DB: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Search fallback storage
+      const fallbackSessions = Array.from(this.fallbackSessions.values()).filter(
+        session => session.shop === shop
+      );
+      return fallbackSessions;
+    }
+  }
+}
+
+// Create resilient session storage
+const sessionStorage = new ResilientPrismaSessionStorage(prisma);
 
 // Create Shopify app instance
 const shopify = shopifyApp({
@@ -43,6 +124,33 @@ export function getShopifyInstance() {
   return shopify;
 }
 
+// Enhanced authentication wrapper with better error handling
+export async function authenticateAdmin(request: Request) {
+  try {
+    const result = await shopify.authenticate.admin(request);
+    return result;
+  } catch (error: any) {
+    console.error("[Shopify Auth] Authentication failed:", error.message);
+    
+    // Check if it's a database connection error
+    if (error.message?.includes('Max client connections reached') ||
+        error.message?.includes('connection') ||
+        error.message?.includes('timeout')) {
+      console.error("[Shopify Auth] Database connection issue detected");
+      
+      // Try to cleanup connections
+      try {
+        await prisma.$disconnect();
+        console.log("[Shopify Auth] Forced database disconnect for cleanup");
+      } catch (disconnectError) {
+        console.warn("[Shopify Auth] Error during forced disconnect:", disconnectError);
+      }
+    }
+    
+    throw error;
+  }
+}
+
 // Initialize database connection in the background
 ensureDatabaseConnection().then(isConnected => {
   if (!isConnected) {
@@ -53,3 +161,17 @@ ensureDatabaseConnection().then(isConnected => {
 }).catch(error => {
   console.error("[Shopify] Database initialization error:", error);
 });
+
+// Periodic connection cleanup to prevent pool exhaustion
+if (typeof global !== 'undefined') {
+  // Only run in server environment
+  setInterval(async () => {
+    try {
+      // Force disconnect and reconnect every 5 minutes to prevent stale connections
+      await prisma.$disconnect();
+      console.log("[Shopify] Periodic database connection cleanup completed");
+    } catch (error) {
+      console.warn("[Shopify] Periodic cleanup error:", error);
+    }
+  }, 5 * 60 * 1000); // 5 minutes
+}

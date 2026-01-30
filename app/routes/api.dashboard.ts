@@ -141,10 +141,28 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       const totalEvents = transformedApps.reduce((sum: number, app: any) => sum + app._count.events, 0);
       const totalSessions = transformedApps.reduce((sum: number, app: any) => sum + app._count.analyticsSessions, 0);
       
-      // Check if user has any Facebook tokens
-      const hasValidFacebookToken = transformedApps.some((app: any) => 
-        app.settings?.metaAccessToken && app.settings.metaAccessToken.length > 0
-      );
+      // Check if user has any Facebook tokens and if they're valid
+      let hasValidFacebookToken = false;
+      let hasExpiredTokens = false;
+      
+      for (const app of transformedApps) {
+        if (app.settings?.metaAccessToken && app.settings.metaAccessToken.length > 0) {
+          // Check if token is expired
+          const expiresAt = app.settings.metaTokenExpiresAt;
+          const now = new Date();
+          
+          if (expiresAt && now > new Date(expiresAt)) {
+            hasExpiredTokens = true;
+          } else {
+            hasValidFacebookToken = true;
+          }
+        }
+      }
+      
+      // If we only have expired tokens, mark as no valid token
+      if (hasExpiredTokens && !hasValidFacebookToken) {
+        hasValidFacebookToken = false;
+      }
 
       return {
         apps: transformedApps,
@@ -202,8 +220,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
 
+  console.log('[Dashboard API] 🔍 Action request received');
+  console.log('[Dashboard API] Intent:', intent);
+  console.log('[Dashboard API] Form data keys:', Array.from(formData.keys()));
+  console.log('[Dashboard API] Request method:', request.method);
+  console.log('[Dashboard API] Request URL:', request.url);
+
   const user = await prisma.user.findUnique({ where: { storeUrl: shop } });
   if (!user) {
+    console.error('[Dashboard API] ❌ User not found for shop:', shop);
     return { error: "User not found" };
   }
 
@@ -245,6 +270,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const pixelName = formData.get("pixelName") as string;
     const pixelId = formData.get("pixelId") as string;
     const accessToken = formData.get("accessToken") as string;
+    const trackingPages = formData.get("trackingPages") as string || "all";
+    const selectedPages = formData.get("selectedPages") as string || "[]";
 
     if (!pixelName || !pixelId || !accessToken) {
       return { error: "Pixel name, ID, and access token are required" };
@@ -290,6 +317,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         recordIp: true,
         recordLocation: true,
         recordSession: true,
+        trackingPages,
       },
     });
 
@@ -308,14 +336,39 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return { error: "Pixel ID and access token are required" };
     }
 
-    const response = await fetch(`https://graph.facebook.com/v24.0/${pixelId}?access_token=${accessToken}`);
-    const data = await response.json();
+    try {
+      console.log('[Dashboard API] 🔍 Validating pixel in real-time:', pixelId);
+      
+      const response = await fetch(
+        `https://graph.facebook.com/v24.0/${pixelId}?access_token=${accessToken}`,
+        {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json'
+          }
+        }
+      );
+      const data = await response.json();
 
-    if (data.error) {
-      return { error: `Validation failed: ${data.error.message}` };
+      if (data.error) {
+        console.error('[Dashboard API] ❌ Pixel validation failed:', data.error);
+        return { error: `Validation failed: ${data.error.message}` };
+      }
+
+      console.log('[Dashboard API] ✅ Pixel validated successfully:', data.name || 'Unknown');
+      return { 
+        success: true, 
+        message: `✅ Pixel validated: ${data.name || 'Unknown'}`,
+        pixelName: data.name || 'Unknown',
+        intent: "validate-pixel",
+        realTimeData: true // Flag to indicate this is real-time validation from Facebook API
+      };
+    } catch (error) {
+      console.error('[Dashboard API] ❌ Exception during pixel validation:', error);
+      return { 
+        error: `Validation failed: ${error instanceof Error ? error.message : 'Unknown error'}` 
+      };
     }
-
-    return { success: true, message: `✅ Pixel validated: ${data.name || 'Unknown'}` };
   }
 
   // Rename pixel
@@ -390,142 +443,366 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "save-facebook-token") {
     const accessToken = formData.get("accessToken") as string;
 
+    console.log('[Dashboard API] 🔄 save-facebook-token request received');
+    console.log('[Dashboard API] Access token provided:', !!accessToken);
+    console.log('[Dashboard API] Access token length:', accessToken?.length || 0);
+    console.log('[Dashboard API] User ID:', user.id);
+    console.log('[Dashboard API] Shop:', shop);
+
     if (!accessToken) {
-      return { error: "Access token is required" };
+      console.error('[Dashboard API] ❌ No access token provided');
+      return { 
+        success: false,
+        error: "Access token is required", 
+        intent: "save-facebook-token" 
+      };
     }
 
-    // Exchange short-lived token for long-lived token (60 days)
-    console.log('[Dashboard API] Exchanging short-lived token for long-lived token...');
-    const appId = process.env.FACEBOOK_APP_ID;
-    const appSecret = process.env.FACEBOOK_APP_SECRET;
-
     try {
+      // Exchange short-lived token for long-lived token (60 days)
+      const appId = process.env.FACEBOOK_APP_ID;
+      const appSecret = process.env.FACEBOOK_APP_SECRET;
+
+      console.log('[Dashboard API] Facebook app credentials check:');
+      console.log('[Dashboard API] - App ID configured:', !!appId);
+      console.log('[Dashboard API] - App Secret configured:', !!appSecret);
+
+      if (!appId || !appSecret) {
+        console.error('[Dashboard API] ❌ Facebook app credentials not configured');
+        return { 
+          success: false,
+          error: "Facebook app credentials not configured", 
+          intent: "save-facebook-token" 
+        };
+      }
+
+      console.log('[Dashboard API] Exchanging token for long-lived token...');
       const exchangeResponse = await fetch(
-        `https://graph.facebook.com/v18.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${accessToken}`
+        `https://graph.facebook.com/v18.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${accessToken}`,
+        {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json'
+          }
+        }
       );
+
+      if (!exchangeResponse.ok) {
+        console.error('[Dashboard API] Token exchange failed:', exchangeResponse.status);
+        return { error: `Token exchange failed: ${exchangeResponse.status}`, intent: "save-facebook-token" };
+      }
 
       const exchangeData = await exchangeResponse.json();
 
       if (exchangeData.error) {
-        console.error('[Dashboard API] Token exchange failed:', exchangeData.error);
-        return { error: `Failed to exchange token: ${exchangeData.error.message}` };
+        console.error('[Dashboard API] Token exchange error:', exchangeData.error);
+        return { error: `Failed to exchange token: ${exchangeData.error.message}`, intent: "save-facebook-token" };
       }
 
       const longLivedToken = exchangeData.access_token || accessToken;
+      console.log('[Dashboard API] Long-lived token obtained:', !!longLivedToken);
 
       // Get token expiry info
+      console.log('[Dashboard API] Getting token expiry info...');
       const debugResponse = await fetch(
-        `https://graph.facebook.com/v18.0/debug_token?input_token=${longLivedToken}&access_token=${longLivedToken}`
+        `https://graph.facebook.com/v18.0/debug_token?input_token=${longLivedToken}&access_token=${longLivedToken}`,
+        {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json'
+          }
+        }
       );
 
-      const debugData = await debugResponse.json();
-      const expiresAt = debugData.data?.expires_at 
-        ? new Date(debugData.data.expires_at * 1000)
-        : new Date(Date.now() + 60 * 24 * 60 * 60 * 1000); // Default to 60 days
+      let expiresAt = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000); // Default to 60 days
 
-      console.log(`[Dashboard API] Token exchanged successfully, expires: ${expiresAt.toISOString()}`);
-
-      // Save long-lived token to all apps
-      let apps = await prisma.app.findMany({
-        where: { userId: user.id },
-        include: { settings: true },
-      });
-
-      // If no apps exist, create a default app to store the token
-      if (apps.length === 0) {
-        console.log('[Dashboard API] No apps found, creating default app for token storage');
-        const defaultApp = await prisma.app.create({
-          data: {
-            userId: user.id,
-            name: "Facebook Integration",
-            appId: `fb_integration_${Date.now()}`,
-            appToken: `token_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
-          },
-        });
-        
-        await prisma.appSettings.create({
-          data: { 
-            appId: defaultApp.id, 
-            metaAccessToken: longLivedToken,
-            metaTokenExpiresAt: expiresAt,
-          },
-        });
-        
-        console.log('[Dashboard API] Created default app for Facebook token storage');
-        apps = [{ ...defaultApp, settings: { 
-          id: '', 
-          appId: defaultApp.id, 
-          timezone: "GMT+0",
-          autoTrackPageviews: true,
-          autoTrackClicks: true,
-          autoTrackScroll: true,
-          recordIp: true,
-          recordLocation: true,
-          recordSession: true,
-          customEventsEnabled: true,
-          autoTrackViewContent: true,
-          autoTrackAddToCart: true,
-          autoTrackInitiateCheckout: true,
-          autoTrackPurchase: true,
-          metaPixelId: null,
-          metaAccessToken: longLivedToken,
-          metaTokenExpiresAt: expiresAt,
-          metaPixelEnabled: false,
-          metaTestEventCode: null,
-          metaVerified: false,
-          trackingPages: "all",
-          selectedCollections: null,
-          selectedProductTypes: null,
-          selectedProductTags: null,
-          selectedProducts: null,
-          facebookCatalogId: null,
-          facebookCatalogEnabled: false,
-          facebookCatalogSyncStatus: null,
-          facebookCatalogLastSync: null,
-        } }];
+      if (debugResponse.ok) {
+        const debugData = await debugResponse.json();
+        if (debugData.data?.expires_at) {
+          expiresAt = new Date(debugData.data.expires_at * 1000);
+        }
       }
 
-      for (const app of apps) {
-        // Skip the default app we just created with settings
-        if (app.name === "Facebook Integration" && app.settings?.id === '') {
-          continue;
-        }
-        
-        if (app.settings) {
-          await prisma.appSettings.update({
-            where: { id: app.settings.id },
-            data: { 
-              metaAccessToken: longLivedToken,
-              metaTokenExpiresAt: expiresAt,
+      console.log('[Dashboard API] Token expires at:', expiresAt.toISOString());
+
+      // Use database retry wrapper for all database operations
+      console.log('[Dashboard API] Starting database operations...');
+      const result = await withDatabaseRetry(async () => {
+        // Get all user's apps
+        console.log('[Dashboard API] Fetching user apps...');
+        let apps = await prisma.app.findMany({
+          where: { userId: user.id },
+          include: { settings: true },
+        });
+
+        console.log('[Dashboard API] Found', apps.length, 'apps for user');
+
+        // If no apps exist, create a default app to store the token
+        if (apps.length === 0) {
+          console.log('[Dashboard API] No apps found, creating default app...');
+          const defaultApp = await prisma.app.create({
+            data: {
+              userId: user.id,
+              name: "Facebook Integration",
+              appId: `fb_integration_${Date.now()}`,
+              appToken: `token_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
             },
           });
-        } else {
+          
           await prisma.appSettings.create({
             data: { 
-              appId: app.id, 
+              appId: defaultApp.id, 
               metaAccessToken: longLivedToken,
               metaTokenExpiresAt: expiresAt,
             },
           });
+          
+          console.log('[Dashboard API] Created default app with token:', defaultApp.name);
+          
+          // Refresh apps list
+          apps = await prisma.app.findMany({
+            where: { userId: user.id },
+            include: { settings: true },
+          });
         }
-      }
 
-      // Invalidate ALL caches after token update
+        // Update ALL apps with the new token
+        let updatedCount = 0;
+        let createdCount = 0;
+
+        console.log('[Dashboard API] Updating tokens for all apps...');
+        for (const app of apps) {
+          if (app.settings) {
+            await prisma.appSettings.update({
+              where: { id: app.settings.id },
+              data: { 
+                metaAccessToken: longLivedToken,
+                metaTokenExpiresAt: expiresAt,
+              },
+            });
+            updatedCount++;
+            console.log('[Dashboard API] Updated token for app:', app.name);
+          } else {
+            await prisma.appSettings.create({
+              data: { 
+                appId: app.id, 
+                metaAccessToken: longLivedToken,
+                metaTokenExpiresAt: expiresAt,
+              },
+            });
+            createdCount++;
+            console.log('[Dashboard API] Created settings with token for app:', app.name);
+          }
+        }
+
+        // Verify the token was saved
+        console.log('[Dashboard API] Verifying token was saved...');
+        const verifyApps = await prisma.app.findMany({
+          where: { userId: user.id },
+          include: { settings: true },
+        });
+
+        const appsWithToken = verifyApps.filter(app => 
+          app.settings?.metaAccessToken && 
+          app.settings.metaAccessToken === longLivedToken
+        );
+
+        console.log('[Dashboard API] Verification: Found', appsWithToken.length, 'apps with the new token out of', verifyApps.length, 'total apps');
+
+        if (appsWithToken.length === 0) {
+          throw new Error("Token was not saved to any app - verification failed");
+        }
+
+        return {
+          updatedCount,
+          createdCount,
+          verifiedApps: appsWithToken.length,
+          totalApps: verifyApps.length
+        };
+      }, 3); // Retry up to 3 times
+
+      // IMPORTANT: Clear all caches after token save to ensure real-time data
+      console.log('[Dashboard API] Clearing all caches for real-time data...');
       invalidateDashboardCache();
-      cache.invalidatePattern(`catalog:${shop}:`);
+      cache.invalidatePattern(`catalog-data:${shop}:`);
       cache.invalidatePattern(`settings:${shop}:`);
       cache.invalidatePattern(`app-settings:${shop}:`);
-      console.log('[Dashboard API] Cleared all caches for fresh token data');
-
+      cache.invalidatePattern(`facebook:${shop}:`);
+      cache.invalidatePattern(`pixels:${shop}:`);
+      
+      console.log('[Dashboard API] ✅ Facebook token saved successfully!');
       return { 
         success: true, 
-        message: "Token saved and exchanged for long-lived token", 
+        message: `Facebook token saved successfully! Updated ${result.updatedCount} apps, created ${result.createdCount} settings.`, 
         expiresAt: expiresAt.toISOString(),
-        intent: "save-facebook-token" 
+        updatedApps: result.updatedCount,
+        createdSettings: result.createdCount,
+        intent: "save-facebook-token",
+        realTimeUpdate: true, // Flag to indicate this should trigger real-time refresh
+        saveToLocalStorage: {
+          accessToken: longLivedToken,
+          expiresAt: expiresAt.toISOString()
+        } // Data to save in localStorage
       };
     } catch (error) {
-      console.error('[Dashboard API] Error exchanging token:', error);
-      return { error: "Failed to exchange token for long-lived token" };
+      console.error('[Dashboard API] Error saving Facebook token:', error);
+      
+      // Check if it's a database connection error
+      if (error instanceof Error && (
+        error.message.includes('Max client connections reached') ||
+        error.message.includes('connection') ||
+        error.message.includes('timeout')
+      )) {
+        console.error('[Dashboard API] Database connection issue detected');
+        return { 
+          error: "Database connection issue. Please try again in a moment.",
+          intent: "save-facebook-token"
+        };
+      }
+      
+      return { 
+        error: `Failed to save Facebook token: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        intent: "save-facebook-token"
+      };
+    }
+  }
+
+  // Test Facebook API access
+  if (intent === "test-facebook-api") {
+    const accessToken = formData.get("accessToken") as string;
+
+    console.log('[Dashboard API] 🧪 Testing Facebook API access...');
+    console.log('[Dashboard API] Access token provided:', !!accessToken);
+
+    if (!accessToken) {
+      return { 
+        success: false,
+        error: "Access token is required for testing",
+        intent: "test-facebook-api"
+      };
+    }
+
+    try {
+      // Test 1: Get user info
+      console.log('[Dashboard API] Test 1: Fetching user info...');
+      const userResponse = await fetch(
+        `https://graph.facebook.com/v24.0/me?fields=id,name&access_token=${accessToken}`,
+        {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' }
+        }
+      );
+      
+      const userData = await userResponse.json();
+      console.log('[Dashboard API] User response:', userData);
+
+      if (userData.error) {
+        return {
+          success: false,
+          error: `Facebook API Error: ${userData.error.message}`,
+          intent: "test-facebook-api",
+          testResults: {
+            userTest: { success: false, error: userData.error }
+          }
+        };
+      }
+
+      // Test 2: Get businesses
+      console.log('[Dashboard API] Test 2: Fetching businesses...');
+      const businessResponse = await fetch(
+        `https://graph.facebook.com/v24.0/me/businesses?access_token=${accessToken}`,
+        {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' }
+        }
+      );
+      
+      const businessData = await businessResponse.json();
+      console.log('[Dashboard API] Business response:', businessData);
+
+      // Test 3: Get pixels from businesses (correct approach)
+      console.log('[Dashboard API] Test 3: Fetching pixels from businesses...');
+      let pixelTestResult: { success: boolean; data: any[]; error: any } = { success: false, data: [], error: null };
+      
+      if (businessData.data && businessData.data.length > 0) {
+        const allPixels: Array<{
+          id: string;
+          name: string;
+          businessName: string;
+          businessId: string;
+        }> = [];
+        
+        for (const business of businessData.data) {
+          try {
+            console.log(`[Dashboard API] Fetching pixels from business: ${business.name} (${business.id})`);
+            const pixelResponse = await fetch(
+              `https://graph.facebook.com/v24.0/${business.id}/adspixels?fields=id,name&access_token=${accessToken}`,
+              {
+                method: 'GET',
+                headers: { 'Accept': 'application/json' }
+              }
+            );
+            
+            const pixelData = await pixelResponse.json();
+            console.log(`[Dashboard API] Pixels from ${business.name}:`, pixelData);
+            
+            if (pixelData.data && pixelData.data.length > 0) {
+              pixelData.data.forEach((pixel: any) => {
+                allPixels.push({
+                  id: pixel.id,
+                  name: pixel.name,
+                  businessName: business.name,
+                  businessId: business.id
+                });
+              });
+            }
+          } catch (businessPixelError) {
+            console.error(`[Dashboard API] Error fetching pixels from business ${business.name}:`, businessPixelError);
+          }
+        }
+        
+        pixelTestResult = {
+          success: true,
+          data: allPixels,
+          error: null
+        };
+      } else {
+        pixelTestResult = {
+          success: false,
+          data: [],
+          error: { message: "No businesses found to fetch pixels from" }
+        };
+      }
+
+      return {
+        success: true,
+        message: "Facebook API tests completed",
+        intent: "test-facebook-api",
+        testResults: {
+          userTest: { 
+            success: true, 
+            data: { id: userData.id, name: userData.name } 
+          },
+          businessTest: { 
+            success: !businessData.error, 
+            data: businessData.data || [], 
+            error: businessData.error 
+          },
+          pixelTest: { 
+            success: pixelTestResult.success, 
+            data: pixelTestResult.data, 
+            error: pixelTestResult.error 
+          }
+        }
+      };
+
+    } catch (error) {
+      console.error('[Dashboard API] ❌ Facebook API test failed:', error);
+      return {
+        success: false,
+        error: `Test failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        intent: "test-facebook-api"
+      };
     }
   }
 
@@ -533,53 +810,303 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "fetch-facebook-pixels") {
     const accessToken = formData.get("accessToken") as string;
 
+    console.log('[Dashboard API] 🔍 fetch-facebook-pixels request received');
+    console.log('[Dashboard API] Access token provided:', !!accessToken);
+    console.log('[Dashboard API] Access token length:', accessToken?.length || 0);
+    console.log('[Dashboard API] Access token (first 20 chars):', accessToken?.substring(0, 20) + '...');
+
     if (!accessToken) {
-      return { error: "Access token is required" };
+      console.error('[Dashboard API] ❌ No access token provided');
+      return { 
+        success: false,
+        error: "Access token is required",
+        intent: "fetch-facebook-pixels",
+        facebookPixels: [],
+        debugInfo: {
+          errorType: 'missing_token',
+          message: 'No access token provided in request'
+        }
+      };
     }
 
-    const adAccountsResponse = await fetch(
-      `https://graph.facebook.com/v24.0/me/adaccounts?fields=id,name,business&access_token=${accessToken}`
-    );
-    const adAccountsData = await adAccountsResponse.json();
-
-    if (adAccountsData.error) {
-      return { error: "Failed to access Facebook ad accounts" };
-    }
-
-    let businessId: string | null = null;
-    let businessName: string | null = null;
-    const adAccounts = adAccountsData.data || [];
-
-    const accountWithBusiness = adAccounts.find((acc: any) => acc.business?.id);
-    if (accountWithBusiness) {
-      businessId = accountWithBusiness.business.id;
-      businessName = accountWithBusiness.business.name || "Business Manager";
-    }
-
-    const pixels: Array<{ id: string; name: string; accountName: string }> = [];
-
-    if (businessId) {
-      const pixelsResponse = await fetch(
-        `https://graph.facebook.com/v24.0/${businessId}/adspixels?fields=id,name&access_token=${accessToken}`
+    try {
+      // Step 1: Get businesses (me is resolved from access token)
+      console.log('[Dashboard API] 📡 Fetching businesses from /me/businesses...');
+      const businessesResponse = await fetch(
+        `https://graph.facebook.com/v24.0/me/businesses?access_token=${accessToken}`,
+        {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json'
+          }
+        }
       );
-      const pixelsData = await pixelsResponse.json();
+      
+      console.log('[Dashboard API] Businesses response status:', businessesResponse.status);
+      console.log('[Dashboard API] Businesses response headers:', Object.fromEntries(businessesResponse.headers.entries()));
+      
+      const businessesData = await businessesResponse.json();
+      console.log('[Dashboard API] 📊 FULL Businesses response:', JSON.stringify(businessesData, null, 2));
 
-      if (pixelsData.data) {
-        pixelsData.data.forEach((pixel: any) => {
-          pixels.push({
-            id: pixel.id,
-            name: pixel.name,
-            accountName: businessName || "Business Manager",
+      if (businessesData.error) {
+        console.error('[Dashboard API] ❌ Facebook API error (businesses):', businessesData.error);
+        return { 
+          success: false,
+          error: "Failed to fetch businesses: " + businessesData.error.message,
+          intent: "fetch-facebook-pixels",
+          facebookPixels: [],
+          debugInfo: {
+            errorCode: businessesData.error.code,
+            errorType: businessesData.error.type,
+            errorSubcode: businessesData.error.error_subcode,
+            fullError: businessesData.error
+          }
+        };
+      }
+
+      const businesses = businessesData.data || [];
+      console.log('[Dashboard API] 📈 Found', businesses.length, 'business(es)');
+      
+      if (businesses.length > 0) {
+        businesses.forEach((business: any, index: number) => {
+          console.log(`[Dashboard API] Business ${index + 1}:`, {
+            id: business.id,
+            name: business.name,
+            verification_status: business.verification_status,
+            permitted_tasks: business.permitted_tasks
           });
         });
       }
-    }
 
-    if (pixels.length === 0) {
-      return { error: "No pixels found. Create pixels in Facebook Events Manager." };
-    }
+      if (businesses.length === 0) {
+        console.warn('[Dashboard API] ⚠️ No businesses found for this user');
+        
+        // Try alternative approach: fetch pixels from user's businesses using user ID
+        console.log('[Dashboard API] 🔄 Trying alternative approach: fetch pixels via user businesses...');
+        try {
+          // First get user ID
+          const userResponse = await fetch(
+            `https://graph.facebook.com/v24.0/me?fields=id&access_token=${accessToken}`,
+            {
+              method: 'GET',
+              headers: { 'Accept': 'application/json' }
+            }
+          );
+          
+          const userData = await userResponse.json();
+          console.log('[Dashboard API] User data for alternative approach:', userData);
+          
+          if (userData.id) {
+            // Get businesses using user ID
+            const userBusinessesResponse = await fetch(
+              `https://graph.facebook.com/v24.0/${userData.id}/businesses?access_token=${accessToken}`,
+              {
+                method: 'GET',
+                headers: { 'Accept': 'application/json' }
+              }
+            );
+            
+            const userBusinessesData = await userBusinessesResponse.json();
+            console.log('[Dashboard API] User businesses data:', userBusinessesData);
+            
+            if (userBusinessesData.data && userBusinessesData.data.length > 0) {
+              const alternativePixels: { id: any; name: any; accountName: any; }[] = [];
+              
+              for (const business of userBusinessesData.data) {
+                try {
+                  console.log(`[Dashboard API] Fetching pixels from user business: ${business.name} (${business.id})`);
+                  const businessPixelsResponse = await fetch(
+                    `https://graph.facebook.com/v24.0/${business.id}/adspixels?fields=id,name&access_token=${accessToken}`,
+                    {
+                      method: 'GET',
+                      headers: { 'Accept': 'application/json' }
+                    }
+                  );
+                  
+                  const businessPixelsData = await businessPixelsResponse.json();
+                  console.log(`[Dashboard API] Business pixels from ${business.name}:`, businessPixelsData);
+                  
+                  if (businessPixelsData.data && businessPixelsData.data.length > 0) {
+                    businessPixelsData.data.forEach((pixel: any) => {
+                      alternativePixels.push({
+                        id: pixel.id,
+                        name: pixel.name,
+                        accountName: business.name
+                      });
+                    });
+                  }
+                } catch (businessError) {
+                  console.error(`[Dashboard API] Error fetching pixels from user business ${business.name}:`, businessError);
+                }
+              }
+              
+              if (alternativePixels.length > 0) {
+                console.log('[Dashboard API] ✅ Found', alternativePixels.length, 'pixel(s) via user businesses');
+                return { 
+                  success: true, 
+                  facebookPixels: alternativePixels,
+                  intent: "fetch-facebook-pixels",
+                  realTimeData: true,
+                  debugInfo: {
+                    method: "user_businesses",
+                    businessCount: userBusinessesData.data.length,
+                    pixelCount: alternativePixels.length,
+                    accessMethod: `${userData.id}/businesses -> {business_id}/adspixels`
+                  }
+                };
+              }
+            }
+          }
+        } catch (alternativeError) {
+          console.error('[Dashboard API] ❌ Alternative approach failed:', alternativeError);
+        }
+        
+        return { 
+          success: false,
+          error: "No businesses found and direct pixel access failed. Please ensure you have admin access to a Facebook Business Manager or create pixels in Facebook Events Manager.",
+          intent: "fetch-facebook-pixels",
+          facebookPixels: [],
+          debugInfo: {
+            businessCount: 0,
+            hasBusinessManagerAccess: false,
+            suggestedAction: "Create a Business Manager account or get admin access to an existing one",
+            directAccessAttempted: true,
+            directAccessFailed: true
+          }
+        };
+      }
 
-    return { success: true, facebookPixels: pixels };
+      // Step 2: Fetch pixels from each business
+      const allPixels: Array<{ id: string; name: string; accountName: string }> = [];
+      const businessResults: any[] = [];
+
+      for (const business of businesses) {
+        const businessId = business.id;
+        const businessName = business.name || "Business Manager";
+        
+        console.log('[Dashboard API] 📡 Fetching pixels from business:', businessName, '(ID:', businessId, ')');
+        
+        try {
+          const pixelsResponse = await fetch(
+            `https://graph.facebook.com/v24.0/${businessId}/adspixels?fields=id,name&access_token=${accessToken}`,
+            {
+              method: 'GET',
+              headers: {
+                'Accept': 'application/json'
+              }
+            }
+          );
+          
+          console.log('[Dashboard API] Pixels response status for', businessName, ':', pixelsResponse.status);
+          console.log('[Dashboard API] Pixels response headers for', businessName, ':', Object.fromEntries(pixelsResponse.headers.entries()));
+          
+          const pixelsData = await pixelsResponse.json();
+          console.log('[Dashboard API] 📊 FULL Pixels response for', businessName, ':', JSON.stringify(pixelsData, null, 2));
+
+          const businessResult = {
+            businessId,
+            businessName,
+            status: pixelsResponse.status,
+            pixelCount: 0,
+            error: null
+          };
+
+          if (pixelsData.error) {
+            console.error('[Dashboard API] ❌ Error fetching pixels from', businessName, ':', pixelsData.error);
+            businessResult.error = pixelsData.error;
+            businessResults.push(businessResult);
+            // Continue to next business instead of failing completely
+            continue;
+          }
+
+          if (pixelsData.data && pixelsData.data.length > 0) {
+            console.log('[Dashboard API] 🎯 Found', pixelsData.data.length, 'pixel(s) in', businessName);
+            businessResult.pixelCount = pixelsData.data.length;
+            
+            pixelsData.data.forEach((pixel: any, index: number) => {
+              console.log(`[Dashboard API] Pixel ${index + 1} in ${businessName}:`, {
+                id: pixel.id,
+                name: pixel.name,
+                business: businessName
+              });
+              
+              allPixels.push({
+                id: pixel.id,
+                name: pixel.name,
+                accountName: businessName,
+              });
+            });
+          } else {
+            console.warn('[Dashboard API] ⚠️ No pixels found in', businessName);
+            console.log('[Dashboard API] Pixels data structure:', pixelsData);
+          }
+          
+          businessResults.push(businessResult);
+        } catch (businessError) {
+          console.error('[Dashboard API] ❌ Exception fetching pixels from', businessName, ':', businessError);
+          businessResults.push({
+            businessId,
+            businessName,
+            status: 'exception',
+            pixelCount: 0,
+            error: businessError instanceof Error ? businessError.message : 'Unknown error'
+          });
+        }
+      }
+
+      console.log('[Dashboard API] 📊 SUMMARY:');
+      console.log('[Dashboard API] Total businesses checked:', businesses.length);
+      console.log('[Dashboard API] Total pixels found across all businesses:', allPixels.length);
+      console.log('[Dashboard API] Business results:', businessResults);
+
+      if (allPixels.length === 0) {
+        console.warn('[Dashboard API] ⚠️ No pixels found in any business');
+        return { 
+          success: false,
+          error: "No pixels found in any of your businesses. Create pixels in Facebook Events Manager.",
+          intent: "fetch-facebook-pixels",
+          facebookPixels: [],
+          debugInfo: {
+            businessCount: businesses.length,
+            businessResults,
+            suggestedAction: "Go to Facebook Events Manager and create a pixel, or check your Business Manager permissions",
+            method: "business_manager_complete_but_empty"
+          }
+        };
+      }
+
+      console.log('[Dashboard API] ✅ SUCCESS: Returning', allPixels.length, 'pixel(s)');
+      allPixels.forEach((pixel, index) => {
+        console.log(`[Dashboard API] Final Pixel ${index + 1}:`, pixel);
+      });
+      
+      return { 
+        success: true, 
+        facebookPixels: allPixels,
+        intent: "fetch-facebook-pixels",
+        realTimeData: true,
+        debugInfo: {
+          method: "business_manager",
+          businessCount: businesses.length,
+          pixelCount: allPixels.length,
+          businessResults
+        }
+      };
+      
+    } catch (error) {
+      console.error('[Dashboard API] ❌ Exception while fetching pixels:', error);
+      return { 
+        success: false,
+        error: `Failed to fetch pixels: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        intent: "fetch-facebook-pixels",
+        facebookPixels: [],
+        debugInfo: {
+          errorType: 'exception',
+          errorMessage: error instanceof Error ? error.message : 'Unknown error',
+          errorStack: error instanceof Error ? error.stack : undefined
+        }
+      };
+    }
   }
 
   // Refresh Facebook access tokens
@@ -589,13 +1116,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const refreshedCount = await refreshAllUserTokens(user.id);
       
       if (refreshedCount > 0) {
-        // Invalidate cache after token refresh
+        // Clear all caches after token refresh to ensure real-time data
         invalidateDashboardCache();
+        cache.invalidatePattern(`catalog-data:${shop}:`);
+        cache.invalidatePattern(`settings:${shop}:`);
+        cache.invalidatePattern(`app-settings:${shop}:`);
+        cache.invalidatePattern(`facebook:${shop}:`);
+        cache.invalidatePattern(`pixels:${shop}:`);
         
         return { 
           success: true, 
           message: `Successfully refreshed ${refreshedCount} token(s)`,
-          intent: "refresh-facebook-token" 
+          intent: "refresh-facebook-token",
+          realTimeUpdate: true // Flag to trigger real-time refresh
         };
       } else {
         return { 
@@ -609,12 +1142,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
-  // Disconnect Facebook (remove tokens from database)
+  // Disconnect Facebook (remove tokens from database) - ENHANCED
   if (intent === "disconnect-facebook") {
     try {
       console.log('[Dashboard API] Disconnecting Facebook for user:', user.id);
       
-      // Remove Facebook tokens from all user's apps
+      // Step 1: Remove Facebook tokens from all user's apps
       const apps = await prisma.app.findMany({
         where: { userId: user.id },
         include: { settings: true },
@@ -625,33 +1158,152 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           await prisma.appSettings.update({
             where: { id: app.settings.id },
             data: { 
+              // Clear ONLY authentication tokens
               metaAccessToken: null,
               metaTokenExpiresAt: null,
-              metaPixelId: null,
-              metaPixelEnabled: false,
+              metaVerified: false,
+              
+              // PRESERVE Facebook business data - these should NOT be cleared
+              // metaPixelId: KEEP - this is the user's pixel ID
+              // metaCatalogId: KEEP - this is the user's catalog ID  
+              // metaBusinessId: KEEP - this is the user's business ID
+              // metaAdAccountId: KEEP - this is the user's ad account ID
+              // metaPixelEnabled: KEEP - this is user's preference setting
             },
           });
-          console.log(`[Dashboard API] Removed Facebook token from app: ${app.name}`);
+          console.log(`[Dashboard API] Removed Facebook authentication tokens from app: ${app.name}`);
+          console.log(`[Dashboard API] Preserved Facebook business data (pixel ID, catalog ID, etc.) for app: ${app.name}`);
         }
       }
 
-      // Invalidate ALL caches related to this shop
+      // Step 2: Clear Facebook user ID from user record
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { 
+          facebookUserId: null,
+          // Clear any other Facebook-related fields
+        }
+      });
+      console.log('[Dashboard API] Cleared Facebook user ID from user record');
+
+      // Step 3: Invalidate ALL caches related to this shop (comprehensive cleanup)
       invalidateDashboardCache();
       cache.invalidatePattern(`catalog:${shop}:`);
       cache.invalidatePattern(`settings:${shop}:`);
       cache.invalidatePattern(`app-settings:${shop}:`);
+      cache.invalidatePattern(`facebook:${shop}:`);
+      cache.invalidatePattern(`pixels:${shop}:`);
       console.log('[Dashboard API] Cleared all Facebook-related caches');
 
+      // Step 4: Return success with instruction to clear client-side storage
       return { 
         success: true, 
-        message: "Facebook disconnected successfully. All tokens and caches cleared.",
-        intent: "disconnect-facebook" 
+        message: "Facebook authentication disconnected. Your pixel and catalog configurations are preserved.",
+        intent: "disconnect-facebook",
+        clearClientStorage: true, // Signal to client to clear localStorage
+        realTimeUpdate: true, // Flag to trigger real-time refresh
       };
     } catch (error) {
       console.error("Error disconnecting Facebook:", error);
-      return { error: "Failed to disconnect Facebook. Please try again." };
+      return { 
+        error: "Failed to disconnect Facebook. Please try again.",
+        intent: "disconnect-facebook",
+        success: false,
+      };
     }
   }
 
+  // Clean up expired Facebook tokens
+  if (intent === "cleanup-expired-tokens") {
+    try {
+      console.log('[Dashboard API] Cleaning up expired Facebook tokens...');
+      
+      const apps = await prisma.app.findMany({
+        where: { userId: user.id },
+        include: { settings: true },
+      });
+
+      let cleanedCount = 0;
+      for (const app of apps) {
+        if (app.settings?.metaAccessToken && app.settings.metaTokenExpiresAt) {
+          const now = new Date();
+          const expiresAt = new Date(app.settings.metaTokenExpiresAt);
+          
+          if (now > expiresAt) {
+            console.log(`[Dashboard API] Cleaning up expired token for app: ${app.name}`);
+            await prisma.appSettings.update({
+              where: { id: app.settings.id },
+              data: { 
+                metaAccessToken: null,
+                metaTokenExpiresAt: null,
+              },
+            });
+            cleanedCount++;
+          }
+        }
+      }
+
+      // Invalidate caches after cleanup
+      invalidateDashboardCache();
+      cache.invalidatePattern(`catalog:${shop}:`);
+      cache.invalidatePattern(`settings:${shop}:`);
+      cache.invalidatePattern(`app-settings:${shop}:`);
+      
+      console.log(`[Dashboard API] ✅ Cleaned up ${cleanedCount} expired tokens`);
+      
+      return { 
+        success: true, 
+        message: `Cleaned up ${cleanedCount} expired Facebook token(s).`,
+        cleanedCount,
+        intent: "cleanup-expired-tokens"
+      };
+    } catch (error) {
+      console.error("Error cleaning up expired tokens:", error);
+      return { error: "Failed to clean up expired tokens" };
+    }
+  }
+
+  // Clear all cache for this shop
+  if (intent === "clear-cache") {
+    try {
+      console.log('[Dashboard API] Clearing all cache for shop:', shop);
+      
+      // Clear all cache patterns for this shop
+      const patterns = [
+        `dashboard:${shop}:`,
+        `catalog:${shop}:`,
+        `settings:${shop}:`,
+        `app-settings:${shop}:`,
+        `facebook:${shop}:`,
+        `pixels:${shop}:`,
+        `analytics:${shop}:`,
+        `events:${shop}:`,
+        `sessions:${shop}:`,
+      ];
+
+      let totalCleared = 0;
+      for (const pattern of patterns) {
+        const cleared = cache.invalidatePattern(pattern);
+        totalCleared += cleared;
+      }
+
+      console.log(`[Dashboard API] ✅ Cleared ${totalCleared} cache entries for ${shop}`);
+      
+      return { 
+        success: true, 
+        message: `Cache cleared successfully! Removed ${totalCleared} cached entries.`,
+        clearedCount: totalCleared,
+        intent: "clear-cache"
+      };
+    } catch (error) {
+      console.error("Error clearing cache:", error);
+      return { error: "Failed to clear cache" };
+    }
+  }
+
+  console.log('[Dashboard API] ❌ No matching intent found');
+  console.log('[Dashboard API] Received intent:', intent);
+  console.log('[Dashboard API] Available intents: assign-website, create-pixel, validate-pixel, rename, delete, save-timezone, toggle-pixel, save-facebook-token, test-facebook-api, fetch-facebook-pixels, refresh-facebook-token, disconnect-facebook, cleanup-expired-tokens, clear-cache');
+  
   return { error: "Invalid action" };
 };

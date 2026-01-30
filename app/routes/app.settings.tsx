@@ -260,6 +260,43 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
+  if (intent === "clear-cache") {
+    try {
+      console.log('[Settings API] Clearing all cache for shop:', shop);
+      
+      // Clear all cache patterns for this shop
+      const patterns = [
+        `dashboard:${shop}:`,
+        `catalog:${shop}:`,
+        `settings:${shop}:`,
+        `app-settings:${shop}:`,
+        `facebook:${shop}:`,
+        `pixels:${shop}:`,
+        `analytics:${shop}:`,
+        `events:${shop}:`,
+        `sessions:${shop}:`,
+      ];
+
+      let totalCleared = 0;
+      for (const pattern of patterns) {
+        const cleared = cache.invalidatePattern(pattern);
+        totalCleared += cleared;
+      }
+
+      console.log(`[Settings API] ✅ Cleared ${totalCleared} cache entries for ${shop}`);
+      
+      return { 
+        success: true, 
+        message: `Cache cleared successfully! Removed ${totalCleared} cached entries. Data will be refreshed on next load.`,
+        clearedCount: totalCleared,
+        intent: "clear-cache"
+      };
+    } catch (error) {
+      console.error("Error clearing cache:", error);
+      return { error: "Failed to clear cache" };
+    }
+  }
+
 
 
   return { error: "Invalid intent" };
@@ -541,6 +578,13 @@ export default function SettingsPage() {
     );
   }, [fetcher]);
 
+  const handleClearCache = useCallback(() => {
+    fetcher.submit(
+      { intent: "clear-cache" },
+      { method: "POST" }
+    );
+  }, [fetcher]);
+
 
 
   const appOptions = apps.map((app: any) => ({
@@ -594,6 +638,66 @@ export default function SettingsPage() {
       <ClientOnly fallback={<Page title="Settings"><Layout><Layout.Section><Card><Text as="p">Loading...</Text></Card></Layout.Section></Layout></Page>}>
         <Page title="Settings">
           <Layout>
+            {/* Success/Error Banner */}
+            {fetcher.data?.success && (
+              <Layout.Section>
+                <Banner tone="success" onDismiss={() => {}}>
+                  <p>{fetcher.data.message}</p>
+                </Banner>
+              </Layout.Section>
+            )}
+            {fetcher.data?.error && (
+              <Layout.Section>
+                <Banner tone="critical" onDismiss={() => {}}>
+                  <p>{fetcher.data.error}</p>
+                </Banner>
+              </Layout.Section>
+            )}
+
+            {/* Clear Cache - Available even without pixels */}
+            <Layout.Section>
+              <Card>
+                <BlockStack gap="400">
+                  <Text variant="headingMd" as="h2">🗑️ Clear Cache</Text>
+                  <Banner tone="info">
+                    <p>Clear all cached data to force fresh data loading. Use this if you're seeing outdated information.</p>
+                  </Banner>
+                  <Text as="p" tone="subdued">
+                    This will clear all cached dashboard data, analytics, settings, and Facebook integration data. 
+                    The next time you visit any page, fresh data will be loaded from the database and APIs.
+                  </Text>
+                  <InlineStack gap="200">
+                    <Button onClick={handleClearCache} loading={isLoading} tone="critical">
+                      Clear All Cache
+                    </Button>
+                    <Text variant="bodySm" as="p" tone="subdued">
+                      This action is safe and will not delete any stored data
+                    </Text>
+                  </InlineStack>
+                </BlockStack>
+              </Card>
+            </Layout.Section>
+
+            {/* Delete Old Script Tags - Available even without pixels */}
+            <Layout.Section>
+              <Card>
+                <BlockStack gap="400">
+                  <Text variant="headingMd" as="h2">🔧 Fix CORB Errors</Text>
+                  <Banner tone="warning">
+                    <p>If you see CORB errors in browser console, old script tags may still be installed. Click below to remove them.</p>
+                  </Banner>
+                  <Text as="p" tone="subdued">
+                    The App Embed (Theme Editor → App embeds → Pixel Tracker) replaces the old script tags. 
+                    This will delete any old script tags causing CORB errors.
+                  </Text>
+                  <Button onClick={handleDeleteScriptTags} loading={isLoading} tone="critical">
+                    Delete Old Script Tags
+                  </Button>
+                </BlockStack>
+              </Card>
+            </Layout.Section>
+
+            {/* No Pixels Message */}
             <Layout.Section>
               <Card>
                 <EmptyState
@@ -601,7 +705,7 @@ export default function SettingsPage() {
                   action={{ content: "Go to Dashboard", url: "/app/dashboard" }}
                   image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
                 >
-                  <p>Create a pixel first to configure settings.</p>
+                  <p>Create a pixel first to configure pixel-specific settings.</p>
                 </EmptyState>
               </Card>
             </Layout.Section>
@@ -852,6 +956,30 @@ export default function SettingsPage() {
                 <Button onClick={handleDeleteScriptTags} loading={isLoading} tone="critical">
                   Delete Old Script Tags
                 </Button>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+
+          {/* Clear Cache */}
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="400">
+                <Text variant="headingMd" as="h2">🗑️ Clear Cache</Text>
+                <Banner tone="info">
+                  <p>Clear all cached data to force fresh data loading. Use this if you're seeing outdated information.</p>
+                </Banner>
+                <Text as="p" tone="subdued">
+                  This will clear all cached dashboard data, analytics, settings, and Facebook integration data. 
+                  The next time you visit any page, fresh data will be loaded from the database and APIs.
+                </Text>
+                <InlineStack gap="200">
+                  <Button onClick={handleClearCache} loading={isLoading} tone="critical">
+                    Clear All Cache
+                  </Button>
+                  <Text variant="bodySm" as="p" tone="subdued">
+                    This action is safe and will not delete any stored data
+                  </Text>
+                </InlineStack>
               </BlockStack>
             </Card>
           </Layout.Section>

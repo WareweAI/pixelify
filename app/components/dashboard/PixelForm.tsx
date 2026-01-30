@@ -38,6 +38,8 @@ interface PixelFormProps {
   onFacebookConnect: () => void;
   onFacebookModalOpen: () => void;
   fetcher: any;
+  shopifyPages?: any[];
+  onLoadShopifyPages?: () => void;
 }
 
 export function PixelForm({
@@ -52,6 +54,8 @@ export function PixelForm({
   onFacebookConnect,
   onFacebookModalOpen,
   fetcher,
+  shopifyPages = [],
+  onLoadShopifyPages,
 }: PixelFormProps) {
   const [pixelForm, setPixelForm] = useState({
     pixelName: "",
@@ -61,7 +65,10 @@ export function PixelForm({
     selectedProductTypes: [] as string[],
     selectedProductTags: [] as string[],
     selectedProducts: [] as string[],
+    selectedPages: [] as string[],
   });
+
+  const [showPageSelector, setShowPageSelector] = useState(false);
 
   const [selectedFacebookPixel, setSelectedFacebookPixel] = useState("");
   const [facebookError, setFacebookError] = useState("");
@@ -73,6 +80,13 @@ export function PixelForm({
   } | null>(null);
 
   const isLoading = fetcher.state !== "idle";
+
+  // Load Shopify pages when component mounts
+  useEffect(() => {
+    if (onLoadShopifyPages && shopifyPages.length === 0) {
+      onLoadShopifyPages();
+    }
+  }, [onLoadShopifyPages, shopifyPages.length]);
 
   // Validate pixel using Facebook SDK
   const validatePixelWithSDK = useCallback((pixelId: string, accessToken: string) => {
@@ -209,6 +223,7 @@ export function PixelForm({
               selectedProductTypes: [],
               selectedProductTags: [],
               selectedProducts: [],
+              selectedPages: [],
             });
           }}
           style={{
@@ -236,6 +251,7 @@ export function PixelForm({
               selectedProductTypes: [],
               selectedProductTags: [],
               selectedProducts: [],
+              selectedPages: [],
             });
           }}
           style={{
@@ -572,6 +588,28 @@ export function PixelForm({
                         )}
                       </BlockStack>
                     </div>
+
+                    {/* Shopify Pages Selector */}
+                    <div style={{ 
+                      padding: "12px", 
+                      backgroundColor: "#f6f6f7", 
+                      borderRadius: "8px" 
+                    }}>
+                      <BlockStack gap="200">
+                        <Button 
+                          onClick={() => setShowPageSelector(true)}
+                          variant="plain"
+                          textAlign="left"
+                        >
+                          + Select Shopify Page(s)
+                        </Button>
+                        {pixelForm.selectedPages.length > 0 && (
+                          <Text as="p" variant="bodySm" tone="subdued">
+                            {pixelForm.selectedPages.length} page(s) {pixelForm.trackingPages === "selected" ? "selected" : "excluded"}
+                          </Text>
+                        )}
+                      </BlockStack>
+                    </div>
                   </BlockStack>
                 </div>
               )}
@@ -579,6 +617,27 @@ export function PixelForm({
           </div>
         )}
       </BlockStack>
+
+      {/* Page Selector Modal */}
+      {showPageSelector && (
+        <ClientOnly>
+          <PageSelector
+            open={showPageSelector}
+            onClose={() => setShowPageSelector(false)}
+            onSelectPages={(pages: any) => {
+              setPixelForm(prev => ({ ...prev, selectedPages: pages }));
+              setShowPageSelector(false);
+            }}
+            initialSelectedPages={pixelForm.selectedPages}
+            availablePages={shopifyPages.map((page: any) => ({
+              label: page.title,
+              value: `/pages/${page.handle}`,
+              type: "page",
+              pageId: page.id,
+            }))}
+          />
+        </ClientOnly>
+      )}
 
       {/* Create Button */}
       <div style={{ 

@@ -137,3 +137,61 @@ export const STORE_PAGES_QUERY = `
     }
   }
 `;
+
+export const SHOPIFY_PAGES_QUERY = `
+  query GetPages($first: Int!, $after: String, $query: String) {
+    pages(first: $first, after: $after, query: $query, sortKey: TITLE) {
+      edges {
+        node {
+          id
+          handle
+          title
+          bodySummary
+          createdAt
+          updatedAt
+          metafields(first: 5, namespace: "custom") {
+            edges {
+              node {
+                id
+                key
+                value
+                namespace
+              }
+            }
+          }
+        }
+        cursor
+      }
+      pageInfo {
+        hasNextPage
+        hasPreviousPage
+        startCursor
+        endCursor
+      }
+    }
+  }
+`;
+
+export const SEARCH_PAGES_QUERY = `
+  query SearchPages($query: String!, $first: Int!, $after: String) {
+    pages(first: $first, after: $after, query: $query) {
+      edges {
+        node {
+          id
+          handle
+          title
+          bodySummary
+          createdAt
+          updatedAt
+        }
+        cursor
+      }
+      pageInfo {
+        hasNextPage
+        hasPreviousPage
+        startCursor
+        endCursor
+      }
+    }
+  }
+`;

@@ -90,13 +90,12 @@ export async function createSubscription(params: {
   planName: string;
   billingCycle: 'monthly' | 'yearly';
   shopifySubscriptionId?: string;
-  price?: number;
 }): Promise<{
   subscription: any;
   transitionType: 'upgrade' | 'downgrade' | 'renewal';
   effectiveImmediately: boolean;
 }> {
-  const { appId, planName, billingCycle, shopifySubscriptionId, price } = params;
+  const { appId, planName, billingCycle, shopifySubscriptionId } = params;
   
   console.log(`[Subscription] Creating subscription for ${appId}: ${planName} (${billingCycle})`);
 
@@ -134,7 +133,6 @@ export async function createSubscription(params: {
   }
   const transitionType = getTransitionType(currentPlan, planName);
   const planLevel = getPlanLevel(planName);
-  const planPrice = price ?? getPlanPrice(planName, billingCycle);
   
   const now = new Date();
   let startDate: Date;
@@ -282,7 +280,6 @@ export async function createSubscription(params: {
       planName,
       planLevel,
       billingCycle,
-      price: planPrice,
       status: isCurrentPlan ? 'active' : 'pending',
       startDate,
       endDate,
@@ -303,7 +300,6 @@ export async function createSubscription(params: {
       toPlan: planName,
       metadata: {
         billingCycle,
-        price: planPrice,
         transitionType,
         effectiveImmediately,
         cancelledPendingPlan: pendingSubscription?.planName
@@ -313,19 +309,32 @@ export async function createSubscription(params: {
 
   // Send email notification
   if (app.shopEmail) {
-    await sendSubscriptionEmail({
-      email: app.shopEmail,
-      shopName: app.name,
-      type: transitionType,
-      fromPlan: currentPlan,
-      toPlan: planName,
-      startDate,
-      endDate,
-      price: planPrice,
-      billingCycle,
-      appId,
-      currentPlanExpiresAt: transitionType === 'downgrade' ? currentSubscription?.endDate : undefined
-    });
+    console.log(`[Subscription] Sending ${transitionType} email to ${app.shopEmail}`);
+    try {
+      const emailSent = await sendSubscriptionEmail({
+        email: app.shopEmail,
+        shopName: app.name,
+        type: transitionType,
+        fromPlan: currentPlan,
+        toPlan: planName,
+        startDate,
+        endDate,
+        billingCycle,
+        appId,
+        currentPlanExpiresAt: transitionType === 'downgrade' ? currentSubscription?.endDate : undefined
+      });
+      
+      if (emailSent) {
+        console.log(`[Subscription] ✅ Email sent successfully`);
+      } else {
+        console.log(`[Subscription] ⚠️ Email sending returned false`);
+      }
+    } catch (emailError) {
+      console.error(`[Subscription] ❌ Email sending failed:`, emailError);
+      // Don't throw - subscription should still be created even if email fails
+    }
+  } else {
+    console.log(`[Subscription] ⚠️ No shop email configured, skipping email notification`);
   }
 
   console.log(`[Subscription] Created subscription ${subscription.id}`);
@@ -414,7 +423,6 @@ export async function activatePendingSubscriptions(): Promise<void> {
         toPlan: subscription.planName,
         startDate: subscription.startDate,
         endDate: subscription.endDate,
-        price: subscription.price,
         billingCycle: subscription.billingCycle as 'monthly' | 'yearly',
         appId: subscription.appId
       });
@@ -486,7 +494,6 @@ export async function expireSubscriptions(): Promise<void> {
         toPlan: 'Free',
         startDate: subscription.startDate,
         endDate: subscription.endDate,
-        price: subscription.price,
         billingCycle: subscription.billingCycle as 'monthly' | 'yearly',
         appId: subscription.appId
       });
@@ -571,7 +578,6 @@ export async function cancelSubscription(subscriptionId: string): Promise<void> 
       toPlan: 'Free',
       startDate: subscription.startDate,
       endDate: subscription.endDate,
-      price: subscription.price,
       billingCycle: subscription.billingCycle as 'monthly' | 'yearly',
       appId: subscription.appId
     });

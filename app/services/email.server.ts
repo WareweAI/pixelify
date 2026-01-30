@@ -6,41 +6,58 @@ export interface EmailData {
 
 export async function sendEmail({ to, subject, body }: EmailData) {
   const apiKey = process.env.PLUNK_API_SECRET;
+  
+  console.log(`📧 [EMAIL DEBUG] Environment check:`);
+  console.log(`   - PLUNK_API_SECRET exists: ${!!apiKey}`);
+  console.log(`   - PLUNK_API_SECRET length: ${apiKey?.length || 0}`);
+  console.log(`   - PLUNK_API_SECRET prefix: ${apiKey?.substring(0, 10) || 'N/A'}`);
+  
   if (!apiKey) {
-    console.warn("Plunk API secret not configured, email sending disabled");
-    throw new Error("Email service not configured");
+    console.error("❌ Plunk API secret not configured, email sending disabled");
+    throw new Error("Email service not configured - PLUNK_API_SECRET missing");
   }
 
   console.log(`📧 Attempting to send email to: ${to}`);
   console.log(`📧 Subject: ${subject}`);
+  console.log(`📧 Body length: ${body.length} characters`);
 
   try {
+    const requestBody = {
+      to,
+      subject,
+      body,
+    };
+    
+    console.log(`📧 Request payload:`, JSON.stringify(requestBody, null, 2));
+    
     const response = await fetch("https://api.useplunk.com/v1/send", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({
-        to,
-        subject,
-        body,
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     console.log(`📧 Plunk API response status: ${response.status}`);
+    console.log(`📧 Plunk API response headers:`, JSON.stringify(Object.fromEntries(response.headers.entries())));
+
+    const responseText = await response.text();
+    console.log(`📧 Plunk API raw response: ${responseText}`);
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`❌ Plunk API error: ${response.status} - ${errorText}`);
-      throw new Error(`Plunk API error: ${response.status} - ${response.statusText}`);
+      console.error(`❌ Plunk API error: ${response.status} - ${responseText}`);
+      throw new Error(`Plunk API error: ${response.status} - ${responseText}`);
     }
 
-    const result = await response.json();
-    console.log("✅ Plunk API success - Email sent:", result);
-    console.log(`Email sent to ${to}: ${subject}`);
+    const result = JSON.parse(responseText);
+    console.log("✅ Plunk API success - Email sent:", JSON.stringify(result, null, 2));
+    console.log(`✅ Email sent to ${to}: ${subject}`);
+    
+    return result;
   } catch (error) {
     console.error("❌ Email sending failed:", error);
+    console.error("❌ Error details:", error instanceof Error ? error.message : String(error));
     throw error;
   }
 }
@@ -308,12 +325,11 @@ export async function sendSubscriptionEmail(params: {
   toPlan: string;
   startDate: Date;
   endDate: Date;
-  price: number;
   billingCycle: 'monthly' | 'yearly';
   appId: string;
   currentPlanExpiresAt?: Date; // For downgrades - when current plan expires
 }): Promise<boolean> {
-  const { email, shopName, type, fromPlan, toPlan, startDate, endDate, price, billingCycle, appId, currentPlanExpiresAt } = params;
+  const { email, shopName, type, fromPlan, toPlan, startDate, endDate, billingCycle, appId, currentPlanExpiresAt } = params;
 
   let subject: string;
   let body: string;
@@ -356,7 +372,7 @@ export async function sendSubscriptionEmail(params: {
         <h3>Plan Details:</h3>
         <ul style="list-style: none; padding: 0;">
           <li>📦 <strong>Plan:</strong> ${toPlan}</li>
-          <li>💰 <strong>Price:</strong> $${price.toFixed(2)}/${billingCycle}</li>
+          <li>� <strong>Billing:</strong> ${billingCycle}</li>
           <li>📅 <strong>Started:</strong> ${formatDate(startDate)}</li>
           <li>🔄 <strong>Renews:</strong> ${formatDate(endDate)}</li>
         </ul>
@@ -434,7 +450,7 @@ export async function sendSubscriptionEmail(params: {
         <h3>New Plan Details:</h3>
         <ul style="list-style: none; padding: 0;">
           <li>📦 <strong>Plan:</strong> ${toPlan}</li>
-          <li>💰 <strong>Price:</strong> $${price.toFixed(2)}/${billingCycle}</li>
+          <li>� <strong>Billing:</strong> ${billingCycle}</li>
           <li>📅 <strong>Starts:</strong> ${formatDate(startDate)}</li>
           <li>🔄 <strong>Renews:</strong> ${formatDate(endDate)}</li>
         </ul>
@@ -491,7 +507,7 @@ export async function sendSubscriptionEmail(params: {
         <h3>Plan Details:</h3>
         <ul style="list-style: none; padding: 0;">
           <li>📦 <strong>Plan:</strong> ${toPlan}</li>
-          <li>💰 <strong>Price:</strong> $${price.toFixed(2)}/${billingCycle}</li>
+          <li>� <strong>Billing:</strong> ${billingCycle}</li>
           <li>📅 <strong>Started:</strong> ${formatDate(startDate)}</li>
           <li>🔄 <strong>Renews:</strong> ${formatDate(endDate)}</li>
         </ul>
@@ -639,7 +655,7 @@ export async function sendSubscriptionEmail(params: {
         <h3>Subscription Details:</h3>
         <ul style="list-style: none; padding: 0;">
           <li>📦 <strong>Plan:</strong> ${toPlan}</li>
-          <li>💰 <strong>Price:</strong> $${price.toFixed(2)}/${billingCycle}</li>
+          <li>� <strong>Billing:</strong> ${billingCycle}</li>
           <li>📅 <strong>Renewed:</strong> ${formatDate(startDate)}</li>
           <li>🔄 <strong>Next Renewal:</strong> ${formatDate(endDate)}</li>
         </ul>
@@ -664,6 +680,7 @@ export async function sendSubscriptionEmail(params: {
 
   // Log email notification to database
   try {
+    console.log(`[Email] Creating email notification record for ${email}`);
     const db = (await import("../db.server")).default;
     
     const notification = await db.emailNotification.create({
@@ -676,16 +693,17 @@ export async function sendSubscriptionEmail(params: {
         metadata: {
           fromPlan,
           toPlan,
-          price,
           billingCycle,
           startDate: startDate.toISOString(),
           endDate: endDate.toISOString()
         }
       }
     });
+    console.log(`[Email] Created notification record: ${notification.id}`);
 
     // Send email
     try {
+      console.log(`[Email] Calling sendEmail function...`);
       await sendEmail({
         to: email,
         subject,
@@ -701,21 +719,27 @@ export async function sendSubscriptionEmail(params: {
         }
       });
 
+      console.log(`[Email] ✅ Email sent and notification updated to 'sent'`);
       return true;
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[Email] ❌ Email sending failed: ${errorMessage}`);
+      
       // Update notification status
       await db.emailNotification.update({
         where: { id: notification.id },
         data: {
           status: 'failed',
-          error: error instanceof Error ? error.message : 'Unknown error'
+          error: errorMessage
         }
       });
 
+      console.log(`[Email] Updated notification to 'failed' status`);
       return false;
     }
   } catch (error) {
-    console.error('Error logging email notification:', error);
+    console.error('[Email] ❌ Error in sendSubscriptionEmail:', error);
+    console.error('[Email] Error details:', error instanceof Error ? error.stack : String(error));
     return false;
   }
 }

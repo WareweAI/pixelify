@@ -30,7 +30,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const redirectUri = `${process.env.SHOPIFY_APP_URL || 'https://pixelify-red.vercel.app'}/auth/facebook/callback`;
 
     const tokenResponse = await fetch(
-      `https://graph.facebook.com/v18.0/oauth/access_token?client_id=${appId}&client_secret=${appSecret}&code=${code}&redirect_uri=${encodeURIComponent(redirectUri)}`
+      `https://graph.facebook.com/v18.0/oauth/access_token?client_id=${appId}&client_secret=${appSecret}&code=${code}&redirect_uri=${encodeURIComponent(redirectUri)}`,
+      {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json'
+        }
+      }
     );
 
     const tokenData = await tokenResponse.json();
@@ -44,7 +50,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     // Get long-lived token (60 days)
     const longLivedResponse = await fetch(
-      `https://graph.facebook.com/v18.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${accessToken}`
+      `https://graph.facebook.com/v18.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${accessToken}`,
+      {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json'
+        }
+      }
     );
 
     const longLivedData = await longLivedResponse.json();
@@ -52,7 +64,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     // Get token expiry info
     const debugResponse = await fetch(
-      `https://graph.facebook.com/v18.0/debug_token?input_token=${longLivedToken}&access_token=${longLivedToken}`
+      `https://graph.facebook.com/v18.0/debug_token?input_token=${longLivedToken}&access_token=${longLivedToken}`,
+      {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json'
+        }
+      }
     );
 
     const debugData = await debugResponse.json();

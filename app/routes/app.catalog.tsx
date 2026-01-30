@@ -71,6 +71,7 @@ export default function CatalogPage() {
   const [apiData, setApiData] = useState<any>(null);
   const [dataLoading, setDataLoading] = useState(true);
   const [dataError, setDataError] = useState<string | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
 
   // Fetch data from API on mount
   useEffect(() => {
@@ -101,6 +102,7 @@ export default function CatalogPage() {
   const initialCatalogs = apiData?.catalogs || [];
   const initialFacebookUser = apiData?.facebookUser || null;
   const isConnected = apiData?.isConnected || false;
+  const tokenExpired = apiData?.tokenExpired || false;
 
   const [catalogs, setCatalogs] = useState<Catalog[]>(initialCatalogs); // Now mutable for optimistic updates
   const [facebookUser] = useState<{ id: string; name: string; picture?: string } | null>(initialFacebookUser); // Read-only
@@ -316,20 +318,20 @@ export default function CatalogPage() {
     );
   }
 
-  if (!hasToken) {
+  if (!hasToken || tokenExpired) {
     return (
       <Page title="Catalog manager" fullWidth>
         <Layout>
           <Layout.Section>
             <Card>
               <BlockStack gap="400" inlineAlign="center">
-                <div style={{ 
-                  width: "80px", 
-                  height: "80px", 
-                  borderRadius: "50%", 
-                  backgroundColor: "#f3f4f6", 
-                  display: "flex", 
-                  alignItems: "center", 
+                <div style={{
+                  width: "80px",
+                  height: "80px",
+                  borderRadius: "50%",
+                  backgroundColor: "#f3f4f6",
+                  display: "flex",
+                  alignItems: "center",
                   justifyContent: "center",
                   fontSize: "40px"
                 }}>
@@ -338,11 +340,14 @@ export default function CatalogPage() {
                 <BlockStack gap="200" inlineAlign="center">
                   <Text as="h2" variant="headingLg">Facebook Not Connected</Text>
                   <Text as="p" tone="subdued" alignment="center">
-                    Connect your Facebook account in Dashboard to create and manage product catalogs.
+                    {tokenExpired
+                      ? "Your Facebook access token has expired. Please reconnect your Facebook account in Dashboard to continue managing catalogs."
+                      : "Connect your Facebook account in Dashboard to create and manage product catalogs."
+                    }
                   </Text>
                 </BlockStack>
                 <Button variant="primary" size="large" onClick={() => navigate("/app/dashboard")}>
-                  Connect Facebook
+                  {tokenExpired ? "Reconnect Facebook" : "Connect Facebook"}
                 </Button>
               </BlockStack>
             </Card>

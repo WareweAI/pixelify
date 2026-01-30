@@ -43,6 +43,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const trackAddToCart = settings?.autoTrackAddToCart ?? true;
     const trackInitiateCheckout = settings?.autoTrackInitiateCheckout ?? true;
     const trackPurchase = settings?.autoTrackPurchase ?? true;
+    const trackingPages = settings?.trackingPages ?? "all";
+    const selectedPages = settings?.selectedPages ? JSON.parse(settings.selectedPages) : [];
 
     const script = `
 (function() {
@@ -52,6 +54,45 @@ export async function loader({ request }: LoaderFunctionArgs) {
   var ENDPOINT = '/apps/pixel-api/track';
   var DEBUG = true;
   var CUSTOM_EVENTS = ${JSON.stringify(customEvents.map(e => ({ name: e.name, selector: e.selector, eventType: e.eventType })))};
+  var TRACKING_PAGES = '${trackingPages}';
+  var SELECTED_PAGES = ${JSON.stringify(selectedPages)};
+
+  // Check if current page should be tracked
+  function shouldTrackPage() {
+    if (TRACKING_PAGES === 'all') {
+      return true;
+    }
+    
+    var currentPath = location.pathname;
+    var isMatch = false;
+    
+    for (var i = 0; i < SELECTED_PAGES.length; i++) {
+      var pagePath = SELECTED_PAGES[i];
+      
+      // Handle wildcard patterns
+      if (pagePath.includes('*')) {
+        var pattern = pagePath.replace(/\*/g, '.*');
+        var regex = new RegExp('^' + pattern + '$');
+        if (regex.test(currentPath)) {
+          isMatch = true;
+          break;
+        }
+      } else if (currentPath === pagePath) {
+        isMatch = true;
+        break;
+      }
+    }
+    
+    // If tracking mode is "selected", fire only on matched pages
+    // If tracking mode is "excluded", fire on all pages except matched ones
+    if (TRACKING_PAGES === 'selected') {
+      return isMatch;
+    } else if (TRACKING_PAGES === 'excluded') {
+      return !isMatch;
+    }
+    
+    return true;
+  }
 
   function generateId() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -88,6 +129,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 
   function track(eventName, props) {
+    // Check if page should be tracked
+    if (!shouldTrackPage()) {
+      if (DEBUG) console.log('[PixelTracker] Page not tracked due to page selection rules');
+      return;
+    }
+    
     props = props || {};
     var utm = getUtm();
     var currency = (window.Shopify && window.Shopify.currency && window.Shopify.currency.active) || 'USD';

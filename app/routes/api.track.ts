@@ -1,6 +1,6 @@
 // Track API endpoint - receives events from the pixel
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
-import prisma from '~/db.server';
+import prisma, { withDatabaseRetry } from '~/db.server';
 import { parseUserAgent, getDeviceType } from '~/services/device.server';
 import { getGeoData } from '~/services/geo.server';
 import { forwardToMeta } from '~/services/meta-capi.server';
@@ -37,9 +37,11 @@ export async function action({ request }: ActionFunctionArgs) {
     );
   }
 
-  // Handle database connection issues
+  // Handle database connection issues with Shopify best practices
   try {
-    await prisma.$queryRaw`SELECT 1`;
+    await withDatabaseRetry(async () => {
+      await prisma.$queryRaw`SELECT 1`;
+    });
   } catch (dbError) {
     console.error('[Track] Database connection error:', dbError);
     return Response.json(
@@ -120,18 +122,22 @@ export async function action({ request }: ActionFunctionArgs) {
       );
     }
 
-    // Find app
+    // Find app with retry logic
     console.log(`[Track] Looking up app: ${appId}`);
-    const app = await prisma.app.findUnique({
-      where: { appId },
-      include: { settings: true },
+    const app = await withDatabaseRetry(async () => {
+      return await prisma.app.findUnique({
+        where: { appId },
+        include: { settings: true },
+      });
     });
 
     if (!app) {
       console.log(`[Track] App not found: ${appId}`);
 
-      const anyApp = await prisma.app.findFirst({
-        select: { appId: true, name: true },
+      const anyApp = await withDatabaseRetry(async () => {
+        return await prisma.app.findFirst({
+          select: { appId: true, name: true },
+        });
       });
 
       if (anyApp) {
@@ -187,48 +193,50 @@ export async function action({ request }: ActionFunctionArgs) {
     });
 
     console.log('[Track] Creating event in database...');
-    const event = await prisma.event.create({
-      data: {
-        appId: app.id,
-        eventName,
-        url: url || null,
-        referrer: referrer || null,
-        sessionId: sessionId || null,
-        fingerprint: fingerprint || null,
-        ipAddress: app.settings?.recordIp ? ip : null,
-        userAgent,
-        browser: deviceInfo.browser,
-        browserVersion: deviceInfo.browserVersion,
-        os: deviceInfo.os,
-        osVersion: deviceInfo.osVersion,
-        deviceType,
-        screenWidth: screenWidth || null,
-        screenHeight: screenHeight || null,
-        pageTitle: pageTitle || null,
-        // UTM parameters
-        utmSource: utmSource || null,
-        utmMedium: utmMedium || null,
-        utmCampaign: utmCampaign || null,
-        utmTerm: utmTerm || null,
-        utmContent: utmContent || null,
-        // E-commerce data
-        value: value ? parseFloat(value) : null,
-        currency: currency || null,
-        productId: productId || null,
-        productName: productName || null,
-        quantity: quantity ? parseInt(quantity) : null,
-        // Geo data
-        city: geoData?.city || null,
-        region: geoData?.region || null,
-        country: geoData?.country || null,
-        countryCode: geoData?.countryCode || null,
-        timezone: geoData?.timezone || null,
-        // Custom data
-        customData:
-          customData || properties
-            ? JSON.parse(JSON.stringify(customData || properties))
-            : null,
-      },
+    const event = await withDatabaseRetry(async () => {
+      return await prisma.event.create({
+        data: {
+          appId: app.id,
+          eventName,
+          url: url || null,
+          referrer: referrer || null,
+          sessionId: sessionId || null,
+          fingerprint: fingerprint || null,
+          ipAddress: app.settings?.recordIp ? ip : null,
+          userAgent,
+          browser: deviceInfo.browser,
+          browserVersion: deviceInfo.browserVersion,
+          os: deviceInfo.os,
+          osVersion: deviceInfo.osVersion,
+          deviceType,
+          screenWidth: screenWidth || null,
+          screenHeight: screenHeight || null,
+          pageTitle: pageTitle || null,
+          // UTM parameters
+          utmSource: utmSource || null,
+          utmMedium: utmMedium || null,
+          utmCampaign: utmCampaign || null,
+          utmTerm: utmTerm || null,
+          utmContent: utmContent || null,
+          // E-commerce data
+          value: value ? parseFloat(value) : null,
+          currency: currency || null,
+          productId: productId || null,
+          productName: productName || null,
+          quantity: quantity ? parseInt(quantity) : null,
+          // Geo data
+          city: geoData?.city || null,
+          region: geoData?.region || null,
+          country: geoData?.country || null,
+          countryCode: geoData?.countryCode || null,
+          timezone: geoData?.timezone || null,
+          // Custom data
+          customData:
+            customData || properties
+              ? JSON.parse(JSON.stringify(customData || properties))
+              : null,
+        },
+      });
     });
 
     console.log(
@@ -310,10 +318,18 @@ export async function action({ request }: ActionFunctionArgs) {
     // Skip CAPI for test events if no test event code is configured
     const isTestEvent = customData?.test_event === true;
     const skipCapiForTest = isTestEvent && !app.settings?.metaTestEventCode;
+    
+    // Declare variables outside try block so they're available in catch
+    let metaEventName = eventName;
+    let eventData = properties || {};
+    let catalogId: string | undefined;
+    let eventId: string | undefined;
+    let customEvent: any = null;
+    
     if (app.settings?.metaPixelEnabled && app.settings?.metaVerified && !skipCapiForTest) {
       try {
         // Check if this is a custom event to get Meta event mapping
-        const customEvent = await prisma.customEvent.findFirst({
+        customEvent = await prisma.customEvent.findFirst({
           where: {
             appId: app.id,
             name: eventName,
@@ -362,7 +378,6 @@ export async function action({ request }: ActionFunctionArgs) {
         // Use Meta event name from custom event mapping if available, 
         // otherwise use default mapping, 
         // otherwise use the original event name
-        let metaEventName = eventName;
         if (customEvent?.metaEventName) {
           metaEventName = customEvent.metaEventName;
         } else if (defaultEventMapping[eventName]) {
@@ -370,7 +385,7 @@ export async function action({ request }: ActionFunctionArgs) {
         }
 
         // Parse event data if provided
-        let eventData = properties || {};
+        eventData = properties || {};
         if (customEvent?.eventData) {
           try {
             const parsedEventData = JSON.parse(customEvent.eventData);
@@ -400,7 +415,6 @@ export async function action({ request }: ActionFunctionArgs) {
 
         // Fetch catalog information for e-commerce events
         // This links the event to Facebook Catalog for better ad optimization
-        let catalogId: string | undefined;
         const isEcommerceEvent = ['ViewContent', 'AddToCart', 'InitiateCheckout', 'Purchase', 'AddPaymentInfo'].includes(metaEventName);
         
         // Extract products from event data
@@ -446,7 +460,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
         catalogId = processedEvent.catalogId;
         eventData = processedEvent.customData;
-        const eventId = processedEvent.eventId;
+        eventId = processedEvent.eventId;
 
         console.log(`[Track] Preparing to send to Facebook CAPI:`, {
           originalEvent: eventName,
@@ -505,6 +519,7 @@ export async function action({ request }: ActionFunctionArgs) {
                 accessToken: newToken,
                 testEventCode: app.settings.metaTestEventCode || undefined,
                 catalogId,
+                eventId,
                 event: {
                   eventName: metaEventName,
                   eventTime: Math.floor(Date.now() / 1000),
@@ -662,8 +677,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
           });
         }
       }
-    } catch (e) {
-      console.error('[Track GET] Error processing image pixel:', e);
+    } catch (error: any) {
+      console.error('[Track GET] Error processing image pixel:', error);
     }
   }
 

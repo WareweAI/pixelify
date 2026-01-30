@@ -229,8 +229,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           appId: app.id,
           planName: internalPlanName,
           billingCycle,
-          shopifySubscriptionId,
-          price
+          shopifySubscriptionId
         });
 
         console.log(`✅ Subscription created: ${result.subscription.id}`);

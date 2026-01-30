@@ -36,8 +36,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       {
         method: 'GET',
         headers: {
-          'Accept': 'application/json',
-          'User-Agent': 'PixelifyApp/1.0'
+          'Accept': 'application/json'
         }
       }
     );

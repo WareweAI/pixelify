@@ -295,6 +295,46 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }
       });
 
+      // Verify catalog exists on Facebook before uploading
+      console.log(`[Create] Verifying catalog ${catalogId} exists on Facebook...`);
+      try {
+        const catalogCheckRes = await fetch(
+          `https://graph.facebook.com/v18.0/${catalogId}?fields=id,name&access_token=${accessToken}`
+        );
+        const catalogCheckData = await catalogCheckRes.json();
+
+        if (catalogCheckData.error) {
+          console.error(`[Create] ❌ Catalog verification failed:`, catalogCheckData.error);
+
+          if (catalogCheckData.error.code === 100) {
+            return Response.json({
+              error: "Catalog not found on Facebook. The catalog may have been deleted or you may not have access to it. Please try creating a new catalog.",
+              catalogError: true,
+              details: "Facebook returned error code 100: Object does not exist"
+            }, { status: 400 });
+          } else if (catalogCheckData.error.code === 200) {
+            return Response.json({
+              error: "No permission to access this catalog. Please check your Facebook Business account permissions.",
+              permissionError: true,
+              details: `Facebook error: ${catalogCheckData.error.message}`
+            }, { status: 403 });
+          } else {
+            return Response.json({
+              error: `Failed to verify catalog on Facebook: ${catalogCheckData.error.message}`,
+              details: `Error code: ${catalogCheckData.error.code}`
+            }, { status: 400 });
+          }
+        }
+
+        console.log(`[Create] ✅ Catalog verified: ${catalogCheckData.name} (${catalogCheckData.id})`);
+      } catch (verifyError: any) {
+        console.error(`[Create] ❌ Catalog verification network error:`, verifyError);
+        return Response.json({
+          error: "Failed to connect to Facebook to verify catalog. Please check your internet connection and try again.",
+          networkError: true
+        }, { status: 500 });
+      }
+
       // Upload products in batches
       let synced = 0;
       console.log(`[Create] Uploading ${fbProducts.length} products in batches of 1000...`);
@@ -395,9 +435,56 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     console.log(`[Sync] Shop: ${shop}`);
 
     try {
-      await prisma.facebookCatalog.update({ 
-        where: { id }, 
-        data: { syncStatus: "syncing" } 
+      // Verify catalog exists on Facebook before attempting sync
+      console.log(`[Sync] Verifying catalog ${catalog.catalogId} exists on Facebook...`);
+      try {
+        const catalogCheckRes = await fetch(
+          `https://graph.facebook.com/v18.0/${catalog.catalogId}?fields=id,name&access_token=${accessToken}`
+        );
+        const catalogCheckData = await catalogCheckRes.json();
+
+        if (catalogCheckData.error) {
+          console.error(`[Sync] ❌ Catalog verification failed:`, catalogCheckData.error);
+
+          if (catalogCheckData.error.code === 100) {
+            return Response.json({
+              error: "Catalog not found on Facebook. The catalog may have been deleted from your Facebook Business account. Please create a new catalog or check your Facebook Business Manager.",
+              catalogError: true,
+              catalogDeleted: true,
+              details: "Facebook returned error code 100: Object does not exist"
+            }, { status: 400 });
+          } else if (catalogCheckData.error.code === 200) {
+            return Response.json({
+              error: "No permission to access this catalog. Your Facebook access token may have expired or you may no longer have admin access to this catalog.",
+              permissionError: true,
+              details: `Facebook error: ${catalogCheckData.error.message}`
+            }, { status: 403 });
+          } else if (catalogCheckData.error.code === 190 || catalogCheckData.error.error_subcode === 463) {
+            return Response.json({
+              error: "Your Facebook access token has expired. Please reconnect Facebook in Dashboard to continue syncing catalogs.",
+              tokenExpired: true,
+              details: `Facebook error: ${catalogCheckData.error.message}`
+            }, { status: 401 });
+          } else {
+            return Response.json({
+              error: `Failed to verify catalog on Facebook: ${catalogCheckData.error.message}`,
+              details: `Error code: ${catalogCheckData.error.code}`
+            }, { status: 400 });
+          }
+        }
+
+        console.log(`[Sync] ✅ Catalog verified: ${catalogCheckData.name} (${catalogCheckData.id})`);
+      } catch (verifyError: any) {
+        console.error(`[Sync] ❌ Catalog verification network error:`, verifyError);
+        return Response.json({
+          error: "Failed to connect to Facebook to verify catalog. Please check your internet connection and try again.",
+          networkError: true
+        }, { status: 500 });
+      }
+
+      await prisma.facebookCatalog.update({
+        where: { id },
+        data: { syncStatus: "syncing" }
       });
 
       // Fetch shop currency
@@ -877,48 +964,95 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   // Refresh product count from Facebook
   if (intent === "refresh-count") {
     const id = formData.get("id") as string;
-    
+
     if (!id) {
       return Response.json({ error: "Catalog ID required" }, { status: 400 });
     }
-    
+
     const catalog = await prisma.facebookCatalog.findUnique({ where: { id } });
     if (!catalog) {
       return Response.json({ error: "Catalog not found" }, { status: 404 });
     }
 
+    // Verify catalog exists on Facebook before refreshing count
+    console.log(`[Refresh Count] Verifying catalog ${catalog.catalogId} exists on Facebook...`);
+    try {
+      const catalogCheckRes = await fetch(
+        `https://graph.facebook.com/v18.0/${catalog.catalogId}?fields=id,name&access_token=${accessToken}`
+      );
+      const catalogCheckData = await catalogCheckRes.json();
+
+      if (catalogCheckData.error) {
+        console.error(`[Refresh Count] ❌ Catalog verification failed:`, catalogCheckData.error);
+
+        if (catalogCheckData.error.code === 100) {
+          return Response.json({
+            error: "Catalog not found on Facebook. The catalog may have been deleted from your Facebook Business account. Please create a new catalog or check your Facebook Business Manager.",
+            catalogError: true,
+            catalogDeleted: true,
+            details: "Facebook returned error code 100: Object does not exist"
+          }, { status: 400 });
+        } else if (catalogCheckData.error.code === 200) {
+          return Response.json({
+            error: "No permission to access this catalog. Your Facebook access token may have expired or you may no longer have admin access to this catalog.",
+            permissionError: true,
+            details: `Facebook error: ${catalogCheckData.error.message}`
+          }, { status: 403 });
+        } else if (catalogCheckData.error.code === 190 || catalogCheckData.error.error_subcode === 463) {
+          return Response.json({
+            error: "Your Facebook access token has expired. Please reconnect Facebook in Dashboard to continue managing catalogs.",
+            tokenExpired: true,
+            details: `Facebook error: ${catalogCheckData.error.message}`
+          }, { status: 401 });
+        } else {
+          return Response.json({
+            error: `Failed to verify catalog on Facebook: ${catalogCheckData.error.message}`,
+            details: `Error code: ${catalogCheckData.error.code}`
+          }, { status: 400 });
+        }
+      }
+
+      console.log(`[Refresh Count] ✅ Catalog verified: ${catalogCheckData.name} (${catalogCheckData.id})`);
+    } catch (verifyError: any) {
+      console.error(`[Refresh Count] ❌ Catalog verification network error:`, verifyError);
+      return Response.json({
+        error: "Failed to connect to Facebook to verify catalog. Please check your internet connection and try again.",
+        networkError: true
+      }, { status: 500 });
+    }
+
     try {
       console.log(`[Refresh Count] Fetching actual product count from Facebook for catalog ${catalog.catalogId}...`);
-      
+
       // Fetch product count from Facebook Catalog API
       const countRes = await fetch(
         `https://graph.facebook.com/v18.0/${catalog.catalogId}/products?fields=id&limit=1&summary=true&access_token=${accessToken}`
       );
       const countData = await countRes.json();
-      
+
       if (countData.error) {
         console.error(`[Refresh Count] Facebook API error:`, countData.error);
         return Response.json({ error: countData.error.message }, { status: 400 });
       }
-      
+
       const actualCount = Math.max(0, Math.floor(countData.summary?.total_count || 0));
       console.log(`[Refresh Count] Facebook returned: ${actualCount} products`);
       console.log(`[Refresh Count] Database had: ${catalog.productCount} products`);
-      
+
       // Update database with actual count - force integer
       const updatedCatalog = await prisma.facebookCatalog.update({
         where: { id },
-        data: { 
+        data: {
           productCount: actualCount,
           lastSync: new Date(),
           syncStatus: "synced",
         },
       });
-      
+
       console.log(`[Refresh Count] ✅ Updated catalog productCount to: ${updatedCatalog.productCount} (type: ${typeof updatedCatalog.productCount})`);
-      
-      return Response.json({ 
-        success: true, 
+
+      return Response.json({
+        success: true,
         message: `Product count updated: ${actualCount} products`,
         catalog: {
           id: updatedCatalog.id,

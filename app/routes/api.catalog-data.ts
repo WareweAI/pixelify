@@ -34,7 +34,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const shop = session.shop;
   const url = new URL(request.url);
-  const bypassCache = url.searchParams.get('refresh') === 'true';
+  const bypassCache = url.searchParams.get('refresh') === 'true' || url.searchParams.get('force') === 'true';
 
   // Generate cache key for this shop
   const cacheKey = generateCacheKey('catalog-data', shop);
@@ -42,7 +42,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   // If bypassing cache, invalidate it first
   if (bypassCache) {
     cache.delete(cacheKey);
-    console.log(`[Catalog Data API] Cache bypassed for ${shop}`);
+    console.log(`[Catalog Data API] Cache bypassed for ${shop} (refresh=${url.searchParams.get('refresh')}, force=${url.searchParams.get('force')})`);
   }
 
   // Use cache with 5 minute TTL (300 seconds)
@@ -63,10 +63,38 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     
     console.log(`[Catalog Data API] Found ${apps.length} apps for user ${user.id}`);
     
-    const appWithToken = apps.find((app: any) => app.settings?.metaAccessToken);
+    // Find any app with a valid Facebook access token
+    const appWithToken = apps.find((app: any) => 
+      app.settings?.metaAccessToken && 
+      app.settings.metaAccessToken.length > 0
+    );
     const accessToken = appWithToken?.settings?.metaAccessToken || null;
     
     console.log(`[Catalog Data API] User: ${user.id}, Apps: ${apps.length}, Has token: ${!!accessToken}`);
+    
+    // Debug: Show detailed token information
+    if (accessToken) {
+      console.log(`[Catalog Data API] ✅ Found Facebook token in app: ${appWithToken.name}`);
+      console.log(`[Catalog Data API] Token preview: ${accessToken.substring(0, 20)}...`);
+      const expiresAt = appWithToken.settings.metaTokenExpiresAt;
+      if (expiresAt) {
+        const now = new Date();
+        const isExpired = now > new Date(expiresAt);
+        console.log(`[Catalog Data API] Token expires: ${expiresAt}, Is expired: ${isExpired}`);
+      } else {
+        console.log(`[Catalog Data API] Token has no expiry date`);
+      }
+    } else {
+      console.log(`[Catalog Data API] ❌ No Facebook token found in any app`);
+      apps.forEach((app: any, index: number) => {
+        const tokenLength = app.settings?.metaAccessToken?.length || 0;
+        const tokenPreview = app.settings?.metaAccessToken ? 
+          `${app.settings.metaAccessToken.substring(0, 10)}...` : 'none';
+        const expiresAt = app.settings?.metaTokenExpiresAt;
+        const isExpired = expiresAt ? new Date() > new Date(expiresAt) : 'unknown';
+        console.log(`[Catalog Data API] App ${index + 1}: "${app.name}", has settings: ${!!app.settings}, token length: ${tokenLength}, token: ${tokenPreview}, expires: ${expiresAt || 'never'}, expired: ${isExpired}`);
+      });
+    }
 
     const [productCountRes, facebookUser, dbCatalogs] = await Promise.all([
       admin.graphql(`query { products(first: 250, query: "status:active") { edges { node { id } } } }`)
@@ -75,11 +103,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         .catch(() => 0),
       
       accessToken
-        ? fetch(`https://graph.facebook.com/v18.0/me?fields=id,name,picture.type(large)&access_token=${accessToken}`)
+        ? fetch(`https://graph.facebook.com/v18.0/me?fields=id,name,picture.type(large)&access_token=${accessToken}`, {
+            method: 'GET',
+            headers: {
+              'Accept': 'application/json'
+            }
+          })
             .then(res => res.json())
             .then(data => {
               if (data.error) {
                 console.error(`[Catalog Data API] Facebook API error:`, data.error);
+                
+                // Check if it's a token expiry error
+                if (data.error.code === 190 || data.error.error_subcode === 463) {
+                  console.log(`[Catalog Data API] ⚠️ Facebook token expired - user needs to reconnect`);
+                  // Return special object to indicate token expired
+                  return { tokenExpired: true };
+                }
                 return null;
               }
               console.log(`[Catalog Data API] Facebook user: ${data.name}`);
@@ -153,17 +193,44 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     const syncedProductCount = catalogs.reduce((sum, c) => sum + c.productCount, 0);
     const hasToken = !!accessToken;
-    const isConnected = hasToken && !!facebookUser;
+    
+    // Check if Facebook user fetch failed due to expired token
+    const tokenExpired = facebookUser && facebookUser.tokenExpired === true;
+    const isConnected = hasToken && !!facebookUser && !tokenExpired;
+
+    // If token is expired, clean it up from database
+    if (tokenExpired && appWithToken?.settings) {
+      console.log(`[Catalog Data API] 🧹 Cleaning up expired token from app: ${appWithToken.name}`);
+      try {
+        await prisma.appSettings.update({
+          where: { id: appWithToken.settings.id },
+          data: { 
+            metaAccessToken: null,
+            metaTokenExpiresAt: null,
+          },
+        });
+        console.log(`[Catalog Data API] ✅ Expired token cleaned up successfully`);
+        
+        // Invalidate caches to reflect token removal
+        cache.invalidatePattern(`dashboard:${shop}:`);
+        cache.invalidatePattern(`catalog:${shop}:`);
+        console.log(`[Catalog Data API] 🗑️ Cleared caches due to expired token cleanup`);
+      } catch (err) {
+        console.error(`[Catalog Data API] ❌ Failed to clean up expired token:`, err);
+      }
+    }
 
     console.log(`[Catalog Data API] ✅ Final counts - productCount: ${productCount}, syncedProductCount: ${syncedProductCount}`);
+    console.log(`[Catalog Data API] Token status - hasToken: ${hasToken}, tokenExpired: ${tokenExpired}, isConnected: ${isConnected}`);
 
     return { 
       hasToken, 
+      tokenExpired,
       productCount, 
       syncedProductCount, 
       catalogs, 
       userId: user.id,
-      facebookUser,
+      facebookUser: tokenExpired ? null : facebookUser, // Don't return user info if token expired
       isConnected,
       cached: false,
       cacheTimestamp: new Date().toISOString(),

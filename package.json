@@ -20,6 +20,9 @@
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
     "typecheck": "react-router typegen && tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui",
     "test:db": "node scripts/test-db-connection.js"
   },
   "type": "module",
@@ -57,6 +60,7 @@
     "@types/react-dom": "^18.3.7",
     "@typescript-eslint/eslint-plugin": "^6.21.0",
     "@typescript-eslint/parser": "^6.21.0",
+    "@vitest/ui": "^4.0.18",
     "autoprefixer": "^10.4.20",
     "eslint": "^8.57.1",
     "eslint-import-resolver-typescript": "^3.10.1",
@@ -65,10 +69,13 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^4.6.2",
     "graphql-config": "^5.1.1",
+    "happy-dom": "^20.4.0",
+    "jsdom": "^27.4.0",
     "prettier": "^3.6.2",
     "tailwindcss": "^3.4.14",
     "typescript": "^5.9.3",
-    "vite": "^6.3.6"
+    "vite": "^6.3.6",
+    "vitest": "^4.0.18"
   },
   "workspaces": [
     "extensions/*"
